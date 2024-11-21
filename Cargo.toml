@@ -1,7 +1,6 @@
 [package]
-name = "mini-mark"
+name = "mark_mrk"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-pulldown-cmark = "0.12.2"

@@ -1,11 +1,38 @@
-use std::fmt::LowerHex;
+mod parse_mark;
+mod grammer;
+use std::string::ParseError;
 
-pub struct MiniMark;
+use parse_mark::parse_chunk;
 
-impl MiniMark {
+pub struct MarkMrk;
+
+impl MarkMrk {
     /// Parse .mark into the intermediate representation
-    pub fn parse_mark(input: &str) -> IntermediateRep {
-        todo!()
+    pub fn parse_mark(input: &str) -> Result<IntermediateRep, ParseError> {
+
+        let chunks: Vec<&str> = input.split('\n').collect();
+
+        let mut ir: IntermediateRep = IntermediateRep {
+            elements: Vec::new(),
+            size: 0,
+            count: 0,
+        };
+
+        for chk in chunks {
+            match parse_chunk(chk) {
+                Ok(tvec) => {
+                    ir.size += chk.len() as u64;  // Increment the size
+                    ir.count += tvec.len();  // Count elements
+                    ir.elements.extend(tvec);  // Append to the elements
+                }
+                Err(e) => {
+                    eprintln!("Error parsing chunk: {:?}", e);  // Example error handling
+                    return Err(e);  // Propagate the error back
+                }
+            }
+        }
+
+        return Ok(ir);
     }
     
     /// Serialize the IR into the `.mrk` format
@@ -31,12 +58,19 @@ pub enum CompressionLevel {
 }
 
 pub struct IntermediateRep {
-    pub elements: Vec<DocElm>,
+    pub size: u64,                       // Size of the document in bytes
+    pub elements: Vec<DocElm>,           // Document elements
+    pub count: usize,            // Number of elements
+    // pub last_modified: Option<u64>,      // Unix timestamp of last modification
+    // pub author: Option<String>,          // Document author
+    // pub title: Option<String>,           // Document title
+    // pub checksum: Option<String>,        // Checksum or hash for integrity
+    // pub category: Option<String>,        // Category of the document (optional)
 }
 
 // -------- For the IR -------- //
 
-enum DocElm {
+pub enum DocElm {
     Header(Header),
     Paragraph(Paragraph),
     List(List),
@@ -64,6 +98,65 @@ pub enum Color {
     //Rgb(u8, u8, u8),
 }
 
+
+pub struct Header {
+    pub level: u8,
+    pub text: Span,
+}
+
+impl Header {
+    pub fn new() -> Self {
+        Header {
+            level: 1,
+            text: Span::new(),
+        }
+    }
+
+    pub fn push(&mut self, c: char) {
+        self.text.push(c);
+    }
+
+    pub fn append(&mut self, str: String) {
+        self.text.append(str);
+    }
+}
+
+pub struct Paragraph {
+    pub text: Span,
+}
+
+pub struct List {
+    pub items: Vec<Span>,
+    pub checkboxes: Option<Vec<bool>>,
+}
+
+pub struct Span {
+    pub text: String,
+    pub styles: Vec<Style>,
+    pub hover: Option<String>,
+    pub checkbox: Option<bool>,
+}
+
+impl Span {
+    /// Creates a new `Span` with default values for styles, hover, and checkbox.
+    pub fn new() -> Self {
+        Span {
+            text: "".to_string(),
+            styles: Vec::new(),
+            hover: None,
+            checkbox: None,
+        }
+    }
+
+    pub fn push(&mut self, c: char) {
+        self.text.push(c);
+    }
+
+    pub fn append(&mut self, str: String) {
+        self.text.push_str(&str);
+    }
+}
+
 pub struct Image {
     pub title: String,
     pub source: String,
@@ -77,26 +170,6 @@ pub struct Table {
 }
 
 pub struct CodeBlock {
-    language: Option<String>,
-    code: String,
+    pub language: Option<String>,
+    pub code: String,
 }
-
-pub struct Header {
-    pub level: u8,
-    pub text: Span,
-}
-
-pub struct Paragraph {
-    pub text: Span,
-}
-
-pub struct List {
-    pub items: Vec<Span>,
-}
-
-pub struct Span {
-    pub text: String,
-    pub styles: Vec<Style>,
-    pub hover: Option<String>,
-}
-
