@@ -73,14 +73,16 @@ pub struct IntermediateRep {
 pub enum DocElm {
     Header(Header),
     Paragraph(Paragraph),
+    Citation(Citation),
     List(List),
     Image(Image),
     CodeBlock(CodeBlock),
     Table(Table),
+    Field(Field),
     Break,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Style {
     Italic,
     Bold,
@@ -122,7 +124,31 @@ impl Header {
 }
 
 pub struct Paragraph {
-    pub text: Span,
+    pub text: Vec<Span>,
+}
+
+impl Paragraph {
+    pub fn new() -> Self {
+        Paragraph {
+            text: Vec::new(),
+        }
+    }
+}
+
+pub struct Citation {
+    pub text: Vec<Span>,
+    pub src: Option<String>,
+    pub date: Option<String>,
+}
+
+impl Citation {
+    pub fn new() -> Self {
+        Citation {
+            text: Vec::new(),
+            src: None,
+            date: None,
+        }
+    }
 }
 
 pub struct List {
@@ -130,11 +156,18 @@ pub struct List {
     pub checkboxes: Option<Vec<bool>>,
 }
 
+
 pub struct Span {
     pub text: String,
     pub styles: Vec<Style>,
-    pub hover: Option<String>,
+    pub footnote: Option<String>,
     pub checkbox: Option<bool>,
+    pub field: Option<Field>,
+}
+
+pub enum Field { //blank input field, if span has a Field, the text content of the Span is instead a hint for what to input.
+    Inline {max_length: Option<usize>},
+    Multiline {max_lines: Option<usize>},
 }
 
 impl Span {
@@ -143,8 +176,9 @@ impl Span {
         Span {
             text: "".to_string(),
             styles: Vec::new(),
-            hover: None,
+            footnote: None,
             checkbox: None,
+            field: None,
         }
     }
 

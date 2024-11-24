@@ -26,6 +26,7 @@ mod tests {
 
         match result {
             Ok(ir) => {
+                assert_eq!(ir.size, 0);
                 assert_eq!(ir.elements.len(), 0);  // No elements should be parsed from empty input
                 assert_eq!(ir.count, 0);    // No elements in total
             }
@@ -61,4 +62,6 @@ mod tests {
             }
         }
     }
+
+
 }
