@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Color","CompressionLevel","DocElm","Field","Style"],"struct":["Citation","CodeBlock","Header","Image","IntermediateRep","List","MarkMrk","Paragraph","Span","Table"]};
