@@ -87,17 +87,9 @@ pub enum Style {
     Italic,
     Bold,
     Code,
-    Color(Color),
     Link { href: String },
     Strikethrough,
     Highlight,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Color {
-    Hex(String),
-    //Named(String),
-    //Rgb(u8, u8, u8),
 }
 
 
