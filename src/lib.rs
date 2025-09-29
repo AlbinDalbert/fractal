@@ -1,10 +1,5 @@
-mod parse_mark;
 mod grammer;
 use std::string::ParseError;
-
-use parse_mark::parse_chunk;
-
-pub struct MarkMrk;
 
 pub struct IntermediateRep {
     pub size: u64,                       // Size of the document in bytes
