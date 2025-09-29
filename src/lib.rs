@@ -6,57 +6,6 @@ use parse_mark::parse_chunk;
 
 pub struct MarkMrk;
 
-impl MarkMrk {
-    /// Parse .mark into the intermediate representation
-    pub fn parse_mark(input: &str) -> Result<IntermediateRep, ParseError> {
-
-        let chunks: Vec<&str> = input.split('\n').collect();
-
-        let mut ir: IntermediateRep = IntermediateRep {
-            elements: Vec::new(),
-            size: 0,
-            count: 0,
-        };
-
-        for chk in chunks {
-            match parse_chunk(chk) {
-                Ok(tvec) => {
-                    ir.size += chk.len() as u64;  // Increment the size
-                    ir.count += tvec.len();  // Count elements
-                    ir.elements.extend(tvec);  // Append to the elements
-                }
-                Err(e) => {
-                    eprintln!("Error parsing chunk: {:?}", e);  // Example error handling
-                    return Err(e);  // Propagate the error back
-                }
-            }
-        }
-
-        return Ok(ir);
-    }
-    
-    /// Serialize the IR into the `.mrk` format
-    pub fn serialize(ir: &IntermediateRep, compression: CompressionLevel) -> Vec<u8> {
-        todo!()
-    }
-    
-    /// Deserialize the `.mrk` format back into the IR
-    pub fn deserialize(data: &[u8]) -> IntermediateRep {
-        todo!()
-    }
-    
-    /// Export the IR back to .mark
-    pub fn export_mark(ir: &IntermediateRep) -> String {
-        todo!()
-    }
-}
-
-pub enum CompressionLevel {
-    Hamill,
-    Wahlberg,
-    Ruffalo,
-}
-
 pub struct IntermediateRep {
     pub size: u64,                       // Size of the document in bytes
     pub elements: Vec<DocElm>,           // Document elements
