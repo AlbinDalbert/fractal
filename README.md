@@ -27,7 +27,7 @@ Footnotes can be made when marking any word/string, this will *link* to a intern
 - No clutter — footnotes are isolated, but convertible.
 
 # tech
-frontend: .NET avalonia
+frontend: .NET avalonia (Amanite)
 communication: MessagePack
 backend: Rust
 
