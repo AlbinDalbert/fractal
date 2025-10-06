@@ -37,3 +37,13 @@ communication and formats:
 - frac
 - fractal
 - markdown
+
+# TODO
+
+## Phase One: IR -> .frac Bytes
+
+
+
+## Phase Two: .frac Bytes -> IR 
+
+## Phase Three: Markdown -> IR 

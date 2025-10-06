@@ -1,3 +1,5 @@
+mod errors;
+mod format;
 mod frac;
 mod fractal;
 mod utils;
@@ -31,3 +33,4 @@ fn md_to_frac(md_path: String) {
 fn generate_new_fractal(path: String) {
     todo!()
 }
+
