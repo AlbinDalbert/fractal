@@ -1,0 +1,14 @@
+[Header] (fixed size, e.g. 32 bytes)
+  - Magic bytes: "FRAC"
+  - checksum
+  - Version: u8
+  - Body offset: u32
+  - Footnotes offset: u32
+  - Reserved: [u8; 20]
+
+[Body Section]
+  - Raw or structured binary (e.g. paragraphs, spans)
+
+[Footnotes Section]
+  - footnote index table (with byte position refrences)
+  - List of footnotes with IDs and metadata

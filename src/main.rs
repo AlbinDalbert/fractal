@@ -1,5 +1,6 @@
 mod frac;
 mod fractal;
+mod utils;
 
 fn main() {
     println!("Fractal CLI running!");
@@ -17,4 +18,16 @@ fn main() {
     };
 
     println!("Loaded empty document: {:?}", doc.title);
+}
+
+fn frac_to_md(frac: frac::IntermediateRep) {
+    todo!()
+}
+
+fn md_to_frac(md_path: String) {
+    todo!()
+}
+
+fn generate_new_fractal(path: String) {
+    todo!()
 }

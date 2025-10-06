@@ -1,0 +1,1 @@
+// structs and stuff to help with formating the binaries. like footnote index tables and such.

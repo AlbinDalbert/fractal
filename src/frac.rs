@@ -4,7 +4,7 @@ pub struct IntermediateRep {
     pub count: usize,                       // Number of elements
     pub last_modified: Option<u64>,         // Unix timestamp of last modification
     pub author: Option<String>,             // Document author
-    pub title: String,              // Document title
+    pub title: String,                      // Document title
     pub checksum: Option<String>,           // Checksum or hash for integrity
     pub tags: Option<Vec<String>>,          // Category of the document
     pub footnotes: Option<Vec<Footnote>>    // Footnotes (internal links)
