@@ -42,6 +42,16 @@ communication and formats:
 
 ## Phase One: IR -> .frac Bytes
 
+1. Serializing the DocElm Body
+  This is the most complex part. You have a Vec<DocElm>, and DocElm is an enum. You need a clear strategy for writing this to disk.
+
+   * Recommendation: Use a "tag-length-value" (TLV) or similar encoding scheme for each element in your Vec<DocElm>.
+       * Tag: A single byte to identify the DocElm variant (e.g., 0x01 for Header, 0x02 for Paragraph).
+       * Length: The size in bytes of the following value. This allows you to skip over elements you don't need to parse.
+       * Value: The serialized data for that DocElm.
+
+  For example, a Header element might be serialized as:
+  [TAG_HEADER] [LENGTH] [LEVEL_BYTE] [SERIALIZED_SPAN]
 
 
 ## Phase Two: .frac Bytes -> IR 

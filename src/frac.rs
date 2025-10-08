@@ -1,3 +1,4 @@
+#[derive(PartialEq, Debug)]
 pub struct IntermediateRep {
     pub size: u64,                          // Size of the document in bytes
     pub body: Vec<DocElm>,                  // Document elements
@@ -12,11 +13,13 @@ pub struct IntermediateRep {
 
 // -------- For the IR -------- //
 
+#[derive(PartialEq, Debug)]
 pub struct Footnote {
     pub title: String,
-    pub body: Vec<DocElm>
+    pub body: Vec<DocElm>,
 }
 
+#[derive(PartialEq, Debug)]
 pub enum DocElm {
     Header(Header),
     Paragraph(Paragraph),
@@ -38,31 +41,31 @@ pub enum Style {
     Highlight,
 }
 
-
+#[derive(PartialEq, Debug)]
 pub struct Header {
     pub level: u8,
     pub text: Span,
 }
 
-
+#[derive(PartialEq, Debug)]
 pub struct Paragraph {
     pub text: Vec<Span>,
 }
 
-
+#[derive(PartialEq, Debug)]
 pub struct Citation {
     pub text: Vec<Span>,
     pub src: Option<String>,
     pub date: Option<String>,
 }
 
-
+#[derive(PartialEq, Debug)]
 pub struct List {
     pub items: Vec<Span>,
     pub checkboxes: Option<Vec<bool>>,
 }
 
-
+#[derive(PartialEq, Debug, Clone)]
 pub struct Span {
     pub text: String,
     pub styles: Vec<Style>,
@@ -70,19 +73,21 @@ pub struct Span {
     pub checkbox: Option<bool>
 }
 
-
+#[derive(PartialEq, Debug)]
 pub struct Image {
     pub title: String,
     pub source: String,
     pub decription: String,
 }
 
+#[derive(PartialEq, Debug)]
 pub struct Table {
     pub title: String,
     pub headers: Vec<Span>,
     pub rows: Vec<Vec<Span>>,
 }
 
+#[derive(PartialEq, Debug)]
 pub struct CodeBlock {
     pub language: Option<String>,
     pub code: String,

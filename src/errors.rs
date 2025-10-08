@@ -6,6 +6,7 @@ pub enum FracFormatError {
     InvalidData(String),
     Io(std::io::Error),
     MissingField(String),
+    InvalidHeader(String),
 }
 
 impl fmt::Display for FracFormatError {
@@ -14,6 +15,7 @@ impl fmt::Display for FracFormatError {
             FracFormatError::InvalidData(msg) => write!(f, "Invalid data for format: {}", msg),
             FracFormatError::Io(err) => write!(f, "Serialization I/O error: {}", err),
             FracFormatError::MissingField(field) => write!(f, "Required field is missing: {}", field),
+            FracFormatError::InvalidHeader(msg) => write!(f, "Invalid Header: {}", msg),
         }
     }
 }

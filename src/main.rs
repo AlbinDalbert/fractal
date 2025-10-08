@@ -1,13 +1,9 @@
-mod errors;
-mod format;
-mod frac;
-mod fractal;
-mod utils;
+use fractal::frac::IntermediateRep;
 
 fn main() {
     println!("Fractal CLI running!");
 
-    let doc = frac::IntermediateRep {
+    let doc = IntermediateRep {
         size: 0,
         body: vec![],
         count: 0,
@@ -22,7 +18,7 @@ fn main() {
     println!("Loaded empty document: {:?}", doc.title);
 }
 
-fn frac_to_md(frac: frac::IntermediateRep) {
+fn frac_to_md(frac: IntermediateRep) {
     todo!()
 }
 
@@ -33,4 +29,3 @@ fn md_to_frac(md_path: String) {
 fn generate_new_fractal(path: String) {
     todo!()
 }
-
