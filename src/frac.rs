@@ -1,14 +1,14 @@
 #[derive(PartialEq, Debug)]
 pub struct IntermediateRep {
-    pub size: u64,                          // Size of the document in bytes
-    pub body: Vec<DocElm>,                  // Document elements
-    pub count: usize,                       // Number of elements
-    pub last_modified: Option<u64>,         // Unix timestamp of last modification
-    pub author: Option<String>,             // Document author
-    pub title: String,                      // Document title
-    pub checksum: Option<String>,           // Checksum or hash for integrity
-    pub tags: Option<Vec<String>>,          // Category of the document
-    pub footnotes: Option<Vec<Footnote>>    // Footnotes (internal links)
+    pub size: u64,                        // Size of the document in bytes
+    pub body: Vec<DocElm>,                // Document elements
+    pub count: usize,                     // Number of elements
+    pub last_modified: Option<u64>,       // Unix timestamp of last modification
+    pub author: Option<String>,           // Document author
+    pub title: String,                    // Document title
+    pub checksum: Option<String>,         // Checksum or hash for integrity
+    pub tags: Option<Vec<String>>,        // Category of the document
+    pub footnotes: Option<Vec<Footnote>>, // Footnotes (internal links)
 }
 
 // -------- For the IR -------- //
@@ -70,7 +70,7 @@ pub struct Span {
     pub text: String,
     pub styles: Vec<Style>,
     pub footnote: Option<String>,
-    pub checkbox: Option<bool>
+    pub checkbox: Option<bool>,
 }
 
 #[derive(PartialEq, Debug)]
@@ -102,11 +102,11 @@ impl Header {
             text: Span::new(),
         }
     }
-    
+
     pub fn push(&mut self, c: char) {
         self.text.push(c);
     }
-    
+
     pub fn append(&mut self, str: String) {
         self.text.append(str);
     }
@@ -119,14 +119,14 @@ impl Span {
             text: "".to_string(),
             styles: Vec::new(),
             footnote: None,
-            checkbox: None
+            checkbox: None,
         }
     }
-    
+
     pub fn push(&mut self, c: char) {
         self.text.push(c);
     }
-    
+
     pub fn append(&mut self, str: String) {
         self.text.push_str(&str);
     }
@@ -134,9 +134,7 @@ impl Span {
 
 impl Paragraph {
     pub fn new() -> Self {
-        Paragraph {
-            text: Vec::new(),
-        }
+        Paragraph { text: Vec::new() }
     }
 }
 
