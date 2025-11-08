@@ -63,6 +63,15 @@ pub fn serialize_ir(ir: &IntermediateRep) -> Result<Vec<u8>, FracFormatError> {
 
 // --- Helpers ---
 
+enum StyleTag {
+    Italic = 1,
+    Bold = 2,
+    Code = 3,
+    Link = 4,
+    Strikethrough = 5,
+    Highlight = 6,
+}
+
 fn write_doc_elm(w: &mut impl Write, elm: &DocElm) -> Result<(), FracFormatError> {
     match elm {
         DocElm::Header(h) => {
