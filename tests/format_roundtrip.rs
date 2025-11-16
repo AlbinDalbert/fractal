@@ -28,6 +28,41 @@ fn test_serialization_roundtrip() {
                     },
                 ],
             }),
+            DocElm::Paragraph(Paragraph {
+                text: vec![
+                    Span {
+                        text: "This is a simple paragraph.".to_string(),
+                        ..Span::new()
+                    },
+                    Span {
+                        text: "This is ".to_string(),
+                        ..Span::new()
+                    },
+                    Span {
+                        text: "bold ".to_string(),
+                        styles: vec![fractal::Style::Bold],
+                        ..Span::new()
+                    },
+                    Span {
+                        text: "and ".to_string(),
+                        ..Span::new()
+                    },
+                    Span {
+                        text: "italic".to_string(),
+                        styles: vec![fractal::Style::Italic],
+                        ..Span::new()
+                    },
+                    Span {
+                        text: "and ".to_string(),
+                        ..Span::new()
+                    },
+                    Span {
+                        text: "both".to_string(),
+                        styles: vec![fractal::Style::Bold, fractal::Style::Italic],
+                        ..Span::new()
+                    },
+                ],
+            }),
         ],
         count: 2,
         last_modified: Some(1678886400),

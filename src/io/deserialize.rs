@@ -94,6 +94,15 @@ pub fn deserialize_ir(data: &[u8]) -> Result<IntermediateRep, FracFormatError> {
 
 // --- Helpers ---
 
+enum StyleTag {
+    Italic = 1,
+    Bold = 2,
+    Code = 3,
+    Link = 4,
+    Strikethrough = 5,
+    Highlight = 6,
+}
+
 fn read_doc_elm(r: &mut impl Read) -> Result<DocElm, FracFormatError> {
     let tag = r.read_u8()?;
     match tag {
@@ -112,7 +121,41 @@ fn read_doc_elm(r: &mut impl Read) -> Result<DocElm, FracFormatError> {
 
 fn read_span(r: &mut impl Read) -> Result<Span, FracFormatError> {
     let text = read_string(r)?;
-    Ok(Span { text, ..Span::new() })
+    let styles_count = r.read_u64::<LittleEndian>()?;
+    let mut styles = Vec::with_capacity(styles_count as usize);
+    for _ in 0..styles_count {
+        let style_tag = r.read_u8()?;
+        let style = match style_tag {
+            x if x == StyleTag::Italic as u8 => Style::Italic,
+            x if x == StyleTag::Bold as u8 => Style::Bold,
+            x if x == StyleTag::Code as u8 => Style::Code,
+            x if x == StyleTag::Strikethrough as u8 => Style::Strikethrough,
+            x if x == StyleTag::Highlight as u8 => Style::Highlight,
+            x if x == StyleTag::Link as u8 => {
+                let href = read_string(r)?;
+                Style::Link { href }
+            }
+            other => return Err(FracFormatError::InvalidData(format!("Unknown style tag {}", other))),
+        };
+        styles.push(style);
+    }
+
+    let has_footnote = r.read_u8()?;
+    let footnote = if has_footnote == 1 {
+        Some(read_string(r)?)
+    } else {
+        None
+    };
+
+    let has_checkbox = r.read_u8()?;
+
+    let checkbox = if has_checkbox == 1 {
+        Some(r.read_u8()? == 1)
+    } else {
+        None
+    };
+
+    Ok(Span { text, footnote, checkbox, styles})
 }
 
 fn read_span_vec(r: &mut impl Read) -> Result<Vec<Span>, FracFormatError> {

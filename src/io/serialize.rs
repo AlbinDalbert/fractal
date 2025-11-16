@@ -83,7 +83,7 @@ fn write_doc_elm(w: &mut impl Write, elm: &DocElm) -> Result<(), FracFormatError
             w.write_u8(DocElmTag::Paragraph as u8)?;
             write_span_vec(w, &p.text)?;
         }
-        _ => { /* Unimplemented */ }
+        _ => return Err(FracFormatError::UnsupportedFeature("This DocElm variant is not yet supported for serialization".into())),
     }
     Ok(())
 }
@@ -102,6 +102,36 @@ fn write_footnotes(w: &mut impl Write, footnotes: &[Footnote]) -> Result<(), Fra
 
 fn write_span(w: &mut impl Write, span: &Span) -> Result<(), FracFormatError> {
     write_string(w, &span.text)?;
+    w.write_u64::<LittleEndian>(span.styles.len() as u64)?;
+    
+    for style in &span.styles {
+        match style {
+            Style::Italic => w.write_u8(StyleTag::Italic as u8)?,
+            Style::Bold => w.write_u8(StyleTag::Bold as u8)?,
+            Style::Code => w.write_u8(StyleTag::Code as u8)?,
+            Style::Link { href } => {
+                w.write_u8(StyleTag::Link as u8)?;
+                write_string(w, href)?;
+            }
+            Style::Strikethrough => w.write_u8(StyleTag::Strikethrough as u8)?,
+            Style::Highlight => w.write_u8(StyleTag::Highlight as u8)?,
+        }
+    }
+
+    if span.footnote.is_some() {
+        w.write_u8(1)?;
+        write_string(w, span.footnote.as_ref().unwrap())?;
+    } else {
+        w.write_u8(0)?;
+    }
+
+    if span.checkbox.is_some() {
+        w.write_u8(1)?;
+        w.write_u8(if span.checkbox.unwrap() { 1 } else { 0 })?;
+    } else {
+        w.write_u8(0)?;
+    }
+
     Ok(())
 }
 
