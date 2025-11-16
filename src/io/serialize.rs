@@ -31,9 +31,8 @@ pub fn serialize_ir(ir: &IntermediateRep) -> Result<Vec<u8>, FracFormatError> {
     }
 
     let mut footnotes_buf = Vec::new();
-    if let Some(footnotes) = &ir.footnotes {
-        write_footnotes(&mut footnotes_buf, footnotes)?;
-    }
+    let footnotes = ir.footnotes.as_deref().unwrap_or(&[]);
+    write_footnotes(&mut footnotes_buf, footnotes)?;
 
     let body_offset = HEADER_SIZE as u32;
     let footnotes_offset = body_offset + body_buf.len() as u32;
