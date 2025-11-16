@@ -1,6 +1,6 @@
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use byteorder::{LittleEndian, ReadBytesExt};
-use crate::frac::*;
+use crate::formats::frac::*;
 use crate::errors::FracFormatError;
 
 // --- Constants ---

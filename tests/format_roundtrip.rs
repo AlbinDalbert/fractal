@@ -1,6 +1,7 @@
-use fractal::frac::{DocElm, Footnote, Header, IntermediateRep, Paragraph, Span};
-use fractal::serialize::serialize_ir;
-use fractal::deserialize::deserialize_ir;
+use fractal::{DocElm, Footnote, Header, IntermediateRep, Paragraph, Span};
+use fractal::serialize_ir;
+use fractal::deserialize_ir;
+
 
 #[test]
 fn test_serialization_roundtrip() {

@@ -1,6 +1,6 @@
 use std::io::{Write, Cursor};
 use byteorder::{LittleEndian, WriteBytesExt};
-use crate::frac::*;
+use crate::formats::frac::*;
 use crate::errors::FracFormatError;
 
 // --- Constants ---

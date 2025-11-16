@@ -1,4 +1,4 @@
-use fractal::frac::IntermediateRep;
+use fractal::IntermediateRep;
 
 fn main() {
     println!("Fractal CLI running!");
