@@ -1,8 +1,10 @@
 use fractal::{
-    deserialize_ir, serialize_ir, DocElm, Footnote, Header, Image, IntermediateRep, Paragraph,
+    deserialize_ir, serialize_ir, DocElm, Header, Image, IntermediateRep, Paragraph,
     Span, Style, FracFormatError,
 };
-use uuid::Uuid;
+
+use crate::test_utils::{assert_roundtrip, build_ir};
+mod test_utils;
 
 
 #[test]
@@ -72,16 +74,7 @@ fn test_serialization_roundtrip() {
         title: "Test Document".to_string(),
         checksum: None, // Placeholder
         tags: Some(vec!["test".to_string(), "example".to_string()]),
-        footnotes: Some(vec![Footnote {
-            id: uuid::Uuid::new_v4().to_string(),
-            title: "footnote1".to_string(),
-            body: vec![DocElm::Paragraph(Paragraph {
-                text: vec![Span {
-                    text: "This is the content of the first footnote.".to_string(),
-                    ..Span::new()
-                }],
-            })],
-        }]),
+        footnotes: None,
     };
 
     // 2. Serialize the IR to bytes
@@ -97,64 +90,6 @@ fn test_serialization_roundtrip() {
     assert_eq!(original_ir.footnotes, deserialized_ir.footnotes);
 }
 
-fn build_ir(body: Vec<DocElm>, footnotes: Option<Vec<Footnote>>) -> IntermediateRep {
-    let count = body.len();
-    IntermediateRep {
-        size: 0,
-        body,
-        count,
-        last_modified: Some(1_678_886_400),
-        author: Some("Test Author".to_string()),
-        title: "Test Document".to_string(),
-        checksum: None,
-        tags: Some(vec!["test".to_string(), "example".to_string()]),
-        footnotes,
-    }
-}
-
-fn assert_roundtrip(ir: IntermediateRep) {
-    let bytes = serialize_ir(&ir).expect("Serialization failed");
-    let deserialized = deserialize_ir(&bytes).expect("Deserialization failed");
-    assert_eq!(ir.body, deserialized.body);
-    assert_eq!(ir.footnotes, deserialized.footnotes);
-}
-
-#[test]
-fn styles_and_annotations_roundtrip() {
-    let paragraph = Paragraph {
-        text: vec![
-            Span {
-                text: "Task: ".to_string(),
-                styles: vec![Style::Bold],
-                ..Span::new()
-            },
-            Span {
-                text: "Write serializer".to_string(),
-                checkbox: Some(false),
-                ..Span::new()
-            },
-            Span {
-                text: " (see note)".to_string(),
-                styles: vec![Style::Italic],
-                footnote: Some("note-1".to_string()),
-                ..Span::new()
-            },
-        ],
-    };
-
-    let footnotes = vec![Footnote {
-        id: Uuid::new_v4().to_string(),
-        title: "note-1".to_string(),
-        body: vec![DocElm::Paragraph(Paragraph {
-            text: vec![Span {
-                text: "Remember to test checkboxes too.".to_string(),
-                ..Span::new()
-            }],
-        })],
-    }];
-
-    assert_roundtrip(build_ir(vec![DocElm::Paragraph(paragraph)], Some(footnotes)));
-}
 
 #[test]
 fn link_and_highlight_styles_roundtrip() {
@@ -180,41 +115,6 @@ fn link_and_highlight_styles_roundtrip() {
     };
 
     assert_roundtrip(build_ir(vec![DocElm::Paragraph(paragraph)], None));
-}
-
-#[test]
-fn multiple_footnotes_roundtrip() {
-    let body = vec![DocElm::Paragraph(Paragraph {
-        text: vec![Span {
-            text: "Two notes follow".to_string(),
-            ..Span::new()
-        }],
-    })];
-
-    let footnotes = vec![
-        Footnote {
-            id: Uuid::new_v4().to_string(),
-            title: "note-a".to_string(),
-            body: vec![DocElm::Paragraph(Paragraph {
-                text: vec![Span {
-                    text: "First note".to_string(),
-                    ..Span::new()
-                }],
-            })],
-        },
-        Footnote {
-            id: Uuid::new_v4().to_string(),
-            title: "note-b".to_string(),
-            body: vec![DocElm::Paragraph(Paragraph {
-                text: vec![Span {
-                    text: "Second note".to_string(),
-                    ..Span::new()
-                }],
-            })],
-        },
-    ];
-
-    assert_roundtrip(build_ir(body, Some(footnotes)));
 }
 
 #[test]

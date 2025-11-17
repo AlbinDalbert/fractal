@@ -114,7 +114,6 @@ impl Header {
 }
 
 impl Span {
-    /// Creates a new `Span` with default values for styles, hover, and checkbox.
     pub fn new() -> Self {
         Span {
             text: "".to_string(),

@@ -6,7 +6,6 @@ use crate::errors::FracFormatError;
 // --- Constants ---
 const MAGIC_BYTES: &[u8; 4] = b"FRAC";
 const FORMAT_VERSION: u8 = 1;
-const HEADER_SIZE: usize = 37;
 const HEADER_RESERVED_BYTES: usize = 20;
 
 // --- Tag Enums for DocElm Variants ---
