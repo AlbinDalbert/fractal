@@ -15,6 +15,7 @@ pub struct IntermediateRep {
 
 #[derive(PartialEq, Debug)]
 pub struct Footnote {
+    pub id: String, // uuid
     pub title: String,
     pub body: Vec<DocElm>,
 }

@@ -68,14 +68,18 @@ pub fn deserialize_ir(data: &[u8]) -> Result<IntermediateRep, FracFormatError> {
     let mut footnotes_vec = Vec::new();
     let num_footnotes = cursor.read_u64::<LittleEndian>()?;
     for _ in 0..num_footnotes {
+        let id = read_string(&mut cursor)?;
         let title = read_string(&mut cursor)?;
         let num_body_elms = cursor.read_u64::<LittleEndian>()?;
         let mut note_body = Vec::new();
+
         for _ in 0..num_body_elms {
             note_body.push(read_doc_elm(&mut cursor)?);
         }
-        footnotes_vec.push(Footnote { title, body: note_body });
+
+        footnotes_vec.push(Footnote {id, title, body: note_body });
     }
+    
     let footnotes = if num_footnotes == 0 {
         None
     } else {

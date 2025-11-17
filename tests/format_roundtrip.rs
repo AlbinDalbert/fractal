@@ -2,6 +2,7 @@ use fractal::{
     deserialize_ir, serialize_ir, DocElm, Footnote, Header, Image, IntermediateRep, Paragraph,
     Span, Style, FracFormatError,
 };
+use uuid::Uuid;
 
 
 #[test]
@@ -72,6 +73,7 @@ fn test_serialization_roundtrip() {
         checksum: None, // Placeholder
         tags: Some(vec!["test".to_string(), "example".to_string()]),
         footnotes: Some(vec![Footnote {
+            id: uuid::Uuid::new_v4().to_string(),
             title: "footnote1".to_string(),
             body: vec![DocElm::Paragraph(Paragraph {
                 text: vec![Span {
@@ -141,6 +143,7 @@ fn styles_and_annotations_roundtrip() {
     };
 
     let footnotes = vec![Footnote {
+        id: Uuid::new_v4().to_string(),
         title: "note-1".to_string(),
         body: vec![DocElm::Paragraph(Paragraph {
             text: vec![Span {
@@ -190,6 +193,7 @@ fn multiple_footnotes_roundtrip() {
 
     let footnotes = vec![
         Footnote {
+            id: Uuid::new_v4().to_string(),
             title: "note-a".to_string(),
             body: vec![DocElm::Paragraph(Paragraph {
                 text: vec![Span {
@@ -199,6 +203,7 @@ fn multiple_footnotes_roundtrip() {
             })],
         },
         Footnote {
+            id: Uuid::new_v4().to_string(),
             title: "note-b".to_string(),
             body: vec![DocElm::Paragraph(Paragraph {
                 text: vec![Span {

@@ -8,6 +8,7 @@ pub enum FracFormatError {
     MissingField(String),
     InvalidHeader(String),
     UnsupportedFeature(String),
+    DanglingReference(String),
 }
 
 impl fmt::Display for FracFormatError {
@@ -18,6 +19,7 @@ impl fmt::Display for FracFormatError {
             FracFormatError::MissingField(field) => write!(f, "Required field is missing: {}", field),
             FracFormatError::InvalidHeader(msg) => write!(f, "Invalid Header: {}", msg),
             FracFormatError::UnsupportedFeature(msg) => write!(f, "Unsupported feature: {}", msg),
+            FracFormatError::DanglingReference(msg) => write!(f, "Dangling reference: {}", msg),
         }
     }
 }

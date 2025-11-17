@@ -90,6 +90,7 @@ fn write_doc_elm(w: &mut impl Write, elm: &DocElm) -> Result<(), FracFormatError
 fn write_footnotes(w: &mut impl Write, footnotes: &[Footnote]) -> Result<(), FracFormatError> {
     w.write_u64::<LittleEndian>(footnotes.len() as u64)?;
     for note in footnotes {
+        write_string(w, &note.id)?;
         write_string(w, &note.title)?;
         w.write_u64::<LittleEndian>(note.body.len() as u64)?;
         for elm in &note.body {
