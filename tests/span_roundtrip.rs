@@ -118,16 +118,14 @@ fn link_and_highlight_styles_roundtrip() {
 }
 
 #[test]
-fn unsupported_doc_elm_fails_serialization() {
+fn image_roundtrip() {
     let ir = build_ir(
         vec![DocElm::Image(Image {
             title: "diagram".to_string(),
             source: "diagram.png".to_string(),
-            decription: "not yet supported".to_string(),
+            decription: "a helpful diagram".to_string(),
         })],
         None,
     );
-
-    let err = serialize_ir(&ir).expect_err("Image serialization should be rejected");
-    assert!(matches!(err, FracFormatError::UnsupportedFeature(_)));
+    assert_roundtrip(ir);
 }
