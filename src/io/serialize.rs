@@ -82,7 +82,49 @@ fn write_doc_elm(w: &mut impl Write, elm: &DocElm) -> Result<(), FracFormatError
             w.write_u8(DocElmTag::Paragraph as u8)?;
             write_span_vec(w, &p.text)?;
         }
-        _ => return Err(FracFormatError::UnsupportedFeature("This DocElm variant is not yet supported for serialization".into())),
+        DocElm::Citation(c) => {
+            w.write_u8(DocElmTag::Citation as u8)?;
+            write_span_vec(w, &c.text)?;
+            write_option_string(w, &c.src)?;
+            write_option_string(w, &c.date)?;
+        }
+        DocElm::List(l) => {
+            w.write_u8(DocElmTag::List as u8)?;
+            write_span_vec(w, &l.items)?;
+            match &l.checkboxes {
+                Some(checkboxes) => {
+                    w.write_u8(1)?;
+                    w.write_u64::<LittleEndian>(checkboxes.len() as u64)?;
+                    for checkbox in checkboxes {
+                        w.write_u8(if *checkbox { 1 } else { 0 })?;
+                    }
+                }
+                None => w.write_u8(0)?,
+            }
+        }
+        DocElm::Image(i) => {
+            w.write_u8(DocElmTag::Image as u8)?;
+            write_string(w, &i.title)?;
+            write_string(w, &i.source)?;
+            write_string(w, &i.decription)?;
+        }
+        DocElm::CodeBlock(cb) => {
+            w.write_u8(DocElmTag::CodeBlock as u8)?;
+            write_option_string(w, &cb.language)?;
+            write_string(w, &cb.code)?;
+        }
+        DocElm::Table(t) => {
+            w.write_u8(DocElmTag::Table as u8)?;
+            write_string(w, &t.title)?;
+            write_span_vec(w, &t.headers)?;
+            w.write_u64::<LittleEndian>(t.rows.len() as u64)?;
+            for row in &t.rows {
+                write_span_vec(w, row)?;
+            }
+        }
+        DocElm::Break => {
+            w.write_u8(DocElmTag::Break as u8)?;
+        }
     }
     Ok(())
 }
@@ -147,5 +189,16 @@ fn write_string(w: &mut impl Write, s: &str) -> Result<(), FracFormatError> {
     let bytes = s.as_bytes();
     w.write_u64::<LittleEndian>(bytes.len() as u64)?;
     w.write_all(bytes)?;
+    Ok(())
+}
+
+fn write_option_string(w: &mut impl Write, value: &Option<String>) -> Result<(), FracFormatError> {
+    match value {
+        Some(v) => {
+            w.write_u8(1)?;
+            write_string(w, v)?;
+        }
+        None => w.write_u8(0)?,
+    }
     Ok(())
 }

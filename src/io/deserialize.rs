@@ -123,6 +123,49 @@ fn read_doc_elm(r: &mut impl Read) -> Result<DocElm, FracFormatError> {
             let text = read_span_vec(r)?;
             Ok(DocElm::Paragraph(Paragraph { text }))
         }
+        tag if tag == DocElmTag::Citation as u8 => {
+            let text = read_span_vec(r)?;
+            let src = read_option_string(r)?;
+            let date = read_option_string(r)?;
+            Ok(DocElm::Citation(Citation { text, src, date }))
+        }
+        tag if tag == DocElmTag::List as u8 => {
+            let items = read_span_vec(r)?;
+            let has_checkboxes = r.read_u8()?;
+            let checkboxes = if has_checkboxes == 1 {
+                let count = r.read_u64::<LittleEndian>()?;
+                let mut values = Vec::with_capacity(count as usize);
+                for _ in 0..count {
+                    values.push(r.read_u8()? == 1);
+                }
+                Some(values)
+            } else {
+                None
+            };
+            Ok(DocElm::List(List { items, checkboxes }))
+        }
+        tag if tag == DocElmTag::Image as u8 => {
+            let title = read_string(r)?;
+            let source = read_string(r)?;
+            let decription = read_string(r)?;
+            Ok(DocElm::Image(Image { title, source, decription }))
+        }
+        tag if tag == DocElmTag::CodeBlock as u8 => {
+            let language = read_option_string(r)?;
+            let code = read_string(r)?;
+            Ok(DocElm::CodeBlock(CodeBlock { language, code }))
+        }
+        tag if tag == DocElmTag::Table as u8 => {
+            let title = read_string(r)?;
+            let headers = read_span_vec(r)?;
+            let rows_count = r.read_u64::<LittleEndian>()?;
+            let mut rows = Vec::with_capacity(rows_count as usize);
+            for _ in 0..rows_count {
+                rows.push(read_span_vec(r)?);
+            }
+            Ok(DocElm::Table(Table { title, headers, rows }))
+        }
+        tag if tag == DocElmTag::Break as u8 => Ok(DocElm::Break),
         _ => Err(FracFormatError::InvalidData(format!("Unknown DocElm tag: {}", tag)))
     }
 }
@@ -180,4 +223,13 @@ fn read_string(r: &mut impl Read) -> Result<String, FracFormatError> {
     let mut buf = vec![0; len];
     r.read_exact(&mut buf)?;
     String::from_utf8(buf).map_err(|e| FracFormatError::InvalidData(e.to_string()))
+}
+
+fn read_option_string(r: &mut impl Read) -> Result<Option<String>, FracFormatError> {
+    let flag = r.read_u8()?;
+    if flag == 1 {
+        Ok(Some(read_string(r)?))
+    } else {
+        Ok(None)
+    }
 }
