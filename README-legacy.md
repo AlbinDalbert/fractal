@@ -2,7 +2,7 @@
 A minimalist text file format with some additional capabilities.
 
 ## Why?
-Good question. simple answer, Linking oriented file and document tools like Obsidian still put the burden of managing the linking on the user. And I don't think the linking logic should exist as a cognetive overhead for the user. The knowledge graph should Emerge, not be deigned. 
+Good question. simple answer, both Obsidian and Notion are about 93% of what I want, and I've not been able to find something that does and is exactly what I want. So I am making my own.
 
 # Philosophy
 It's oppinionated with the usage and simplicity as long as you use it as designed.
@@ -28,33 +28,32 @@ The fractal file is a project file which by default includes all .frac file belo
 - No broken links when sharing — internal links carry context. (external links are still broken unless explicitly stated).
 - No clutter — footnotes are isolated, but convertible.
 
-# Tech and design
+# Tech
+backend: Rust
 
-The file format will be HTML at it's core. a few reasons. Rich, and almost everything can already render it. Why reinvent the wheel?
+communication and formats:
+- MessagePack
+- JSON
+- frac
+- fractal
+- markdown
 
-## tooling and abstraction layers
+# TODO
 
-1. Project folder
-   The actual Fractal document/workspace.
+## Phase One: IR -> .frac Bytes
 
-2. ~/.fractal
-   Tool state: preferences, libraries, indexes, caches, known roots.
+1. Serializing the DocElm Body
+  This is the most complex part. You have a Vec<DocElm>, and DocElm is an enum. You need a clear strategy for writing this to disk.
 
-3. Export package
-   Portable .fraction ZIP bundle for sharing/importing.
+   * Recommendation: Use a "tag-length-value" (TLV) or similar encoding scheme for each element in your Vec<DocElm>.
+       * Tag: A single byte to identify the DocElm variant (e.g., 0x01 for Header, 0x02 for Paragraph).
+       * Length: The size in bytes of the following value. This allows you to skip over elements you don't need to parse.
+       * Value: The serialized data for that DocElm.
 
----
+  For example, a Header element might be serialized as:
+  [TAG_HEADER] [LENGTH] [LEVEL_BYTE] [SERIALIZED_SPAN]
 
-~/.fractal/
-├── config.json
-├── libraries.json
-├── cache/
-├── indexes/
-└── logs/
 
-my-project/
-├── fractal.json
-├── pages/
-├── assets/
-└── .fractal-cache/
+## Phase Two: .frac Bytes -> IR 
 
+## Phase Three: Markdown -> IR 
