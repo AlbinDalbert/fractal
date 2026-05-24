@@ -1,15 +1,6 @@
-pub mod errors;
-pub mod formats;
-pub mod io;
-// pub mod services;
+pub mod cli;
+pub mod project;
 
-pub use formats::frac::*;
-pub use formats::fractal::*;
+use std::error::Error;
 
-pub use io::serialize::serialize_ir;
-pub use io::deserialize::deserialize_ir;
-
-// pub use services::link::*;
-// pub use services::export::*;
-
-pub use errors::FracFormatError;
+pub type Result<T> = std::result::Result<T, Box<dyn Error>>;

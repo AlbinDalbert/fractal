@@ -1,60 +1,46 @@
 # Fractal
-A minimalist text file format with some additional capabilities.
 
-## Why?
-Good question. simple answer, Linking oriented file and document tools like Obsidian still put the burden of managing the linking on the user. And I don't think the linking logic should exist as a cognetive overhead for the user. The knowledge graph should Emerge, not be deigned. 
+`fractal` is a reset-in-progress CLI for a file-backed knowledge base / graph engine.
 
-# Philosophy
-It's oppinionated with the usage and simplicity as long as you use it as designed.
-Seemless linking and isolation, shareable, exportable and importable.
-Linking with other files is done on file name basis, not path. It's also automatic. 
-Footnotes can be made when marking any word/string, this will *link* to a internal definition by default and can be exported to become external (it's own file).
+This repo is currently focused on one thing: locking down the first useful command surface and project layout before the deeper format and graph behavior are rebuilt.
 
-## Fractals
-The fractal file is a project file which by default includes all .frac file below it in the file system. It's what manages external linking between the different notes and other metadata and wider stuff.
+## Current CLI surface
 
-## Link-By-Default
-- Any mention of a file name (case-insensitive, normalized) becomes a link.
-- You can exclude files from auto-linking via an ignore list or metadata flag in the fractal.
+```text
+fractal init <project-name>
+fractal validate
+fractal import <path/to/file.md>
+fractal export <pages/page.html> <export/filename.md>
+```
 
-## Internal Links / Footnotes
-- Internal links are embedded directly in the file metadata.
-- When exporting, all one-depth linked content is bundled inside the file.
-- On import, internal links take precedence over external ones (solves name conflicts).
-- You can convert a footnote to an external link (making it it's own .frac file).
+## Project layout
 
-## UX Philosophy: Purposeful Simplicity
-- No manual linking required — just write.
-- No broken links when sharing — internal links carry context. (external links are still broken unless explicitly stated).
-- No clutter — footnotes are isolated, but convertible.
+`fractal init my-project` creates:
 
-# Tech and design
-
-The file format will be HTML at it's core. a few reasons. Rich, and almost everything can already render it. Why reinvent the wheel?
-
-## tooling and abstraction layers
-
-1. Project folder
-   The actual Fractal document/workspace.
-
-2. ~/.fractal
-   Tool state: preferences, libraries, indexes, caches, known roots.
-
-3. Export package
-   Portable .fraction ZIP bundle for sharing/importing.
-
----
-
-~/.fractal/
-├── config.json
-├── libraries.json
-├── cache/
-├── indexes/
-└── logs/
-
+```text
 my-project/
 ├── fractal.json
-├── pages/
-├── assets/
-└── .fractal-cache/
+└── pages/
+    └── index.html
+```
 
+`fractal.json` currently stores:
+
+- `project_name`
+- `version`
+- `default_page`
+
+## What works today
+
+- `init` creates the project folder, manifest, and starter page.
+- `validate` checks that the current directory looks like a Fractal project.
+- `import` reads a markdown file and wraps it in a minimal HTML page under `pages/`.
+- `export` currently copies an existing Fractal HTML page to the requested output path.
+
+The `import` and `export` flows are intentionally scaffolding-level right now. They establish the contract and file layout, but they are not yet the final format transformation pipeline.
+
+## Repo notes
+
+- The active rewrite lives in the root crate.
+- Older experimental Rust code has been moved into `protptype/` as reference only.
+- `README-legacy.md` can hold older ideas if you still want them around during the reset.
