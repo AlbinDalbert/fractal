@@ -1,0 +1,24 @@
+{
+  "pages": [
+    {
+      "path": "folder/subpage.html",
+      "meta": {
+        "fractal:summary": "Short page summary here.",
+        "fractal:tags": "rust, graphs, parsing",
+        "fractal:version": "0.1"
+      }
+    },
+    {
+      "path": "index.html",
+      "meta": {}
+    },
+    {
+      "path": "subpage.html",
+      "meta": {
+        "fractal:summary": "Short page summary here.",
+        "fractal:tags": "rust, graphs, parsing",
+        "fractal:version": "0.1"
+      }
+    }
+  ]
+}
