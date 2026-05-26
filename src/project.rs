@@ -326,12 +326,13 @@ pub fn import_markdown(root: impl AsRef<Path>, source: impl AsRef<Path>) -> Resu
         .and_then(|stem| stem.to_str())
         .ok_or("could not derive page name from source file")?;
     let destination = root.join(PAGES_DIR).join(format!("{stem}.html"));
+    let (title, body) = markdown_to_html(stem, &markdown);
 
     fs::write(
         &destination,
         render_page_document(
-            stem,
-            &format!("<pre>{}</pre>", escape_html(&markdown)),
+            &title,
+            &body,
             manifest.theme,
             stylesheet_href(Path::new(&format!("{stem}.html"))),
         ),
@@ -364,8 +365,8 @@ pub fn export_page(
         fs::create_dir_all(parent)?;
     }
 
-    // This is a scaffolding export step. Real format conversion comes later.
-    fs::copy(&page, output)?;
+    let html = fs::read_to_string(&page)?;
+    fs::write(output, html_to_markdown(&html))?;
     println!("exported {} -> {}", page.display(), output.display());
     Ok(())
 }
@@ -685,6 +686,149 @@ fn render_page_document(title: &str, body: &str, theme: Theme, stylesheet_href: 
     )
 }
 
+fn markdown_to_html(default_title: &str, markdown: &str) -> (String, String) {
+    let blocks = parse_markdown_blocks(markdown);
+    let title = match blocks.first() {
+        Some(MarkdownBlock::Heading { level: 1, text }) => text.clone(),
+        _ => default_title.to_string(),
+    };
+    let mut body = String::new();
+
+    for (index, block) in blocks.iter().enumerate() {
+        if index == 0 && matches!(block, MarkdownBlock::Heading { level: 1, .. }) {
+            continue;
+        }
+
+        if !body.is_empty() {
+            body.push('\n');
+            body.push_str("      ");
+        }
+
+        match block {
+            MarkdownBlock::Heading { level, text } => {
+                body.push_str(&format!("<h{level}>{}</h{level}>", escape_html(text)));
+            }
+            MarkdownBlock::Paragraph(text) => {
+                body.push_str(&format!("<p>{}</p>", escape_html(text)));
+            }
+        }
+    }
+
+    (title, body)
+}
+
+fn parse_markdown_blocks(markdown: &str) -> Vec<MarkdownBlock> {
+    let mut blocks = Vec::new();
+    let mut paragraph = Vec::new();
+
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            flush_paragraph(&mut blocks, &mut paragraph);
+            continue;
+        }
+
+        if let Some((level, text)) = parse_markdown_heading(trimmed) {
+            flush_paragraph(&mut blocks, &mut paragraph);
+            blocks.push(MarkdownBlock::Heading {
+                level,
+                text: text.to_string(),
+            });
+        } else {
+            paragraph.push(trimmed);
+        }
+    }
+
+    flush_paragraph(&mut blocks, &mut paragraph);
+    blocks
+}
+
+fn parse_markdown_heading(line: &str) -> Option<(usize, &str)> {
+    let level = line
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
+    if !(1..=6).contains(&level) {
+        return None;
+    }
+
+    let rest = &line[level..];
+    rest.strip_prefix(' ')
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| (level, text))
+}
+
+fn flush_paragraph(blocks: &mut Vec<MarkdownBlock>, paragraph: &mut Vec<&str>) {
+    if paragraph.is_empty() {
+        return;
+    }
+
+    blocks.push(MarkdownBlock::Paragraph(paragraph.join(" ")));
+    paragraph.clear();
+}
+
+fn html_to_markdown(html: &str) -> String {
+    let Some(main_start) = html.find("    <main>") else {
+        return String::new();
+    };
+    let content_start = main_start + "    <main>".len();
+    let main_end = html[content_start..]
+        .find("    </main>")
+        .map(|index| content_start + index)
+        .unwrap_or(html.len());
+
+    let mut markdown = String::new();
+    for line in html[content_start..main_end].lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some((level, text)) = parse_html_heading(trimmed) {
+            push_markdown_block(&mut markdown, &format!("{} {}", "#".repeat(level), text));
+        } else if let Some(text) = parse_html_paragraph(trimmed) {
+            push_markdown_block(&mut markdown, &text);
+        }
+    }
+
+    markdown
+}
+
+fn parse_html_heading(line: &str) -> Option<(usize, String)> {
+    for level in 1..=6 {
+        let opening = format!("<h{level}>");
+        let closing = format!("</h{level}>");
+        if let Some(text) = line
+            .strip_prefix(&opening)
+            .and_then(|rest| rest.strip_suffix(&closing))
+        {
+            return Some((level, unescape_html(text)));
+        }
+    }
+
+    None
+}
+
+fn parse_html_paragraph(line: &str) -> Option<String> {
+    line.strip_prefix("<p>")
+        .and_then(|rest| rest.strip_suffix("</p>"))
+        .map(unescape_html)
+}
+
+fn push_markdown_block(markdown: &mut String, block: &str) {
+    if !markdown.is_empty() {
+        markdown.push_str("\n\n");
+    }
+    markdown.push_str(block);
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum MarkdownBlock {
+    Heading { level: usize, text: String },
+    Paragraph(String),
+}
+
 fn stylesheet_href(page_path: &Path) -> String {
     let parent_depth = page_path
         .parent()
@@ -790,10 +934,10 @@ fn unescape_html(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        add_note, collect_page_paths, escape_html, extract_fractal_meta_tags, new_page,
-        note_id_from_trigger, patch_note, remove_note, render_page_document,
-        resolve_page_destination, stylesheet_href, validate_page_metadata, validate_project,
-        PageEntry, ProjectIndex, ProjectManifest, Theme,
+        add_note, collect_page_paths, escape_html, export_page, extract_fractal_meta_tags,
+        html_to_markdown, import_markdown, markdown_to_html, new_page, note_id_from_trigger,
+        patch_note, remove_note, render_page_document, resolve_page_destination, stylesheet_href,
+        validate_page_metadata, validate_project, PageEntry, ProjectIndex, ProjectManifest, Theme,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -846,6 +990,80 @@ mod tests {
         assert!(html.contains("<link rel=\"stylesheet\" href=\"../.fractal/style.css\">"));
         assert!(html.contains("<body data-fractal-theme=\"dark\">"));
         assert!(html.contains("<section data-fractal-notes>"));
+    }
+
+    #[test]
+    fn markdown_import_converts_basic_blocks_to_html() {
+        let (title, body) = markdown_to_html(
+            "fallback",
+            "# Title\n\nIntro line\ncontinued line\n\n## Section\n\nBody & <more>",
+        );
+
+        assert_eq!(title, "Title");
+        assert_eq!(
+            body,
+            "<p>Intro line continued line</p>\n      <h2>Section</h2>\n      <p>Body &amp; &lt;more&gt;</p>"
+        );
+    }
+
+    #[test]
+    fn markdown_import_keeps_non_initial_h1_in_body() {
+        let (title, body) = markdown_to_html("fallback", "Intro\n\n# Later");
+
+        assert_eq!(title, "fallback");
+        assert_eq!(body, "<p>Intro</p>\n      <h1>Later</h1>");
+    }
+
+    #[test]
+    fn html_export_converts_basic_blocks_to_markdown() {
+        let html = render_page_document(
+            "Title",
+            "<p>Intro &amp; more</p>\n      <h2>Section</h2>\n      <p>Body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        );
+
+        assert_eq!(
+            html_to_markdown(&html),
+            "# Title\n\nIntro & more\n\n## Section\n\nBody"
+        );
+    }
+
+    #[test]
+    fn import_and_export_markdown_files() {
+        let root = temp_dir("markdown-io");
+        let pages_dir = root.join("pages");
+        let workspace_dir = root.join(".fractal");
+        fs::create_dir_all(&pages_dir).expect("create pages dir");
+        fs::create_dir_all(&workspace_dir).expect("create workspace dir");
+        fs::write(
+            root.join("fractal.json"),
+            serde_json::to_string_pretty(&ProjectManifest {
+                project_name: "test".to_string(),
+                version: 1,
+                default_page: "pages/index.html".to_string(),
+                theme: Theme::Dark,
+            })
+            .expect("serialize manifest"),
+        )
+        .expect("write manifest");
+        let source = root.join("source.md");
+        fs::write(&source, "# Source\n\nHello\n\n### Deep").expect("write markdown");
+
+        import_markdown(&root, &source).expect("import markdown");
+        let page = fs::read_to_string(pages_dir.join("source.html")).expect("read imported page");
+        assert!(page.contains("<h1>Source</h1>"));
+        assert!(page.contains("<p>Hello</p>"));
+        assert!(page.contains("<h3>Deep</h3>"));
+
+        let output = root.join("out.md");
+        export_page(&root, Path::new("pages/source.html"), &output).expect("export markdown");
+        assert_eq!(
+            fs::read_to_string(output).expect("read exported markdown"),
+            "# Source\n\nHello\n\n### Deep"
+        );
+
+        fs::remove_dir_all(&root).expect("cleanup temp dir");
     }
 
     #[test]

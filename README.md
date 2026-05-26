@@ -46,8 +46,8 @@ my-project/
 - `init` creates the project folder, manifest, starter stylesheet, and starter page.
 - `validate` checks the project structure, verifies the required Fractal meta tags exist in each page, and requires a `data-fractal-notes` section.
 - `validate --fix` adds missing Fractal-owned scaffold pieces before validating: `.fractal/`, `.fractal/style.css`, `pages/`, the configured default page, missing required page meta tags, the generated stylesheet link, the body theme marker, and the notes section.
-- `import` reads a markdown file and wraps it in a minimal HTML page under `pages/`.
-- `export` currently copies an existing Fractal HTML page to the requested output path.
+- `import` reads a markdown file and converts basic headings and paragraphs into a minimal HTML page under `pages/`.
+- `export` converts basic headings and paragraphs from an existing Fractal HTML page to markdown at the requested output path.
 - `index build` generates `.fractal/index.json` with page paths relative to `pages/` and all page meta tags whose names start with `fractal:`.
 - `page new` creates a new HTML page under `pages/`, adds `.html` automatically when omitted, and rebuilds `.fractal/index.json`.
 - `page <page/path> note add/remove/patch` mutates notes in the requested page and rebuilds `.fractal/index.json`.
@@ -81,7 +81,7 @@ The notes section itself is mandatory and generated for every new page, even whe
 
 Trigger text is normalized into the note id. For example, `Andromeda Galaxy` becomes `note-andromeda-galaxy`.
 
-The `import` and `export` flows are intentionally scaffolding-level right now. They establish the contract and file layout, but they are not yet the final format transformation pipeline.
+The `import` and `export` flows currently support only markdown headings (`#` through `######`) and plain paragraphs.
 
 ## Repo notes
 
