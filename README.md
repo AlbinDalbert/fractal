@@ -9,6 +9,7 @@ This repo is currently focused on one thing: locking down the first useful comma
 ```text
 fractal init <project-name>
 fractal validate
+fractal validate --fix
 fractal import <path/to/file.md>
 fractal export <pages/page.html> <export/filename.md>
 fractal index build
@@ -25,23 +26,26 @@ fractal page <page/path> note patch <trigger> "<content>"
 ```text
 my-project/
 ├── .fractal/
+│   └── style.css
 ├── fractal.json
 └── pages/
     └── index.html
 ```
 
-`.fractal/` starts empty. Generated project data such as indexes lives there.
+`.fractal/` stores project-owned generated/support files. `style.css` is created during `init`; generated project data such as indexes also lives there.
 
 `fractal.json` currently stores:
 
 - `project_name`
 - `version`
 - `default_page`
+- `theme` (`dark` or `light`)
 
 ## What works today
 
-- `init` creates the project folder, manifest, and starter page.
+- `init` creates the project folder, manifest, starter stylesheet, and starter page.
 - `validate` checks the project structure, verifies the required Fractal meta tags exist in each page, and requires a `data-fractal-notes` section.
+- `validate --fix` adds missing Fractal-owned scaffold pieces before validating: `.fractal/`, `.fractal/style.css`, `pages/`, the configured default page, missing required page meta tags, the generated stylesheet link, the body theme marker, and the notes section.
 - `import` reads a markdown file and wraps it in a minimal HTML page under `pages/`.
 - `export` currently copies an existing Fractal HTML page to the requested output path.
 - `index build` generates `.fractal/index.json` with page paths relative to `pages/` and all page meta tags whose names start with `fractal:`.
@@ -54,6 +58,13 @@ All generated pages currently include these required meta tags:
 <meta name="fractal:version" content="0.1" />
 <meta name="fractal:summary" content="Short page summary here." />
 <meta name="fractal:tags" content="rust, graphs, parsing" />
+```
+
+Generated pages also link to `.fractal/style.css` and set the manifest theme on the body:
+
+```html
+<link rel="stylesheet" href="../.fractal/style.css">
+<body data-fractal-theme="dark">
 ```
 
 Notes currently live under a dedicated section in the requested page:
@@ -77,3 +88,4 @@ The `import` and `export` flows are intentionally scaffolding-level right now. T
 - The active rewrite lives in the root crate.
 - Older experimental Rust code has been moved into `protptype/` as reference only.
 - `README-legacy.md` can hold older ideas if you still want them around during the reset.
+- `cargo run --manifest-path ../Cargo.toml --`

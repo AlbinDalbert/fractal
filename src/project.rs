@@ -7,6 +7,7 @@ use std::path::{Component, Path, PathBuf};
 const WORKSPACE_DIR: &str = ".fractal";
 const MANIFEST_FILE: &str = "fractal.json";
 const INDEX_FILE: &str = "index.json";
+const STYLE_FILE: &str = "style.css";
 const PAGES_DIR: &str = "pages";
 const INDEX_PAGE: &str = "index.html";
 const DEFAULT_VERSION: &str = "0.1";
@@ -18,6 +19,30 @@ pub struct ProjectManifest {
     pub project_name: String,
     pub version: u32,
     pub default_page: String,
+    #[serde(default)]
+    pub theme: Theme,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    Dark,
+    Light,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self::Dark
+    }
+}
+
+impl Theme {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,20 +74,31 @@ pub fn init_project(project_name: &str) -> Result<()> {
         project_name: project_name.to_string(),
         version: 1,
         default_page: format!("{PAGES_DIR}/{INDEX_PAGE}"),
+        theme: Theme::default(),
     };
 
     fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+    fs::write(workspace_dir.join(STYLE_FILE), default_stylesheet())?;
     fs::write(
         &index_page,
-        render_page_document(project_name, "<p>Fractal project scaffold.</p>"),
+        render_page_document(
+            project_name,
+            "<p>Fractal project scaffold.</p>",
+            Theme::default(),
+            stylesheet_href(Path::new(INDEX_PAGE)),
+        ),
     )?;
 
     println!("created {}", root.display());
     Ok(())
 }
 
-pub fn validate_project(root: impl AsRef<Path>) -> Result<()> {
+pub fn validate_project(root: impl AsRef<Path>, fix: bool) -> Result<()> {
     let root = root.as_ref();
+    if fix {
+        fix_project(root)?;
+    }
+
     let manifest_path = root.join(MANIFEST_FILE);
     let workspace_dir = root.join(WORKSPACE_DIR);
     let pages_dir = root.join(PAGES_DIR);
@@ -70,6 +106,11 @@ pub fn validate_project(root: impl AsRef<Path>) -> Result<()> {
 
     if !workspace_dir.is_dir() {
         return Err(format!("missing workspace directory: {}", workspace_dir.display()).into());
+    }
+
+    let stylesheet = workspace_dir.join(STYLE_FILE);
+    if !stylesheet.is_file() {
+        return Err(format!("missing stylesheet: {}", stylesheet.display()).into());
     }
 
     if !pages_dir.is_dir() {
@@ -95,6 +136,57 @@ pub fn validate_project(root: impl AsRef<Path>) -> Result<()> {
         manifest.project_name,
         manifest_path.display()
     );
+    Ok(())
+}
+
+fn fix_project(root: &Path) -> Result<()> {
+    let manifest = load_manifest(root)?;
+    let workspace_dir = root.join(WORKSPACE_DIR);
+    let pages_dir = root.join(PAGES_DIR);
+
+    fs::create_dir_all(&workspace_dir)?;
+    fs::create_dir_all(&pages_dir)?;
+
+    let stylesheet = workspace_dir.join(STYLE_FILE);
+    if !stylesheet.is_file() {
+        fs::write(&stylesheet, default_stylesheet())?;
+        println!("fixed {}", stylesheet.display());
+    }
+
+    let default_page = root.join(&manifest.default_page);
+    if !default_page.is_file() {
+        if let Some(parent) = default_page.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let title = default_page
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(&manifest.project_name);
+        let page_path = default_page
+            .strip_prefix(&pages_dir)
+            .unwrap_or_else(|_| Path::new(INDEX_PAGE));
+        fs::write(
+            &default_page,
+            render_page_document(
+                title,
+                "<p>Fractal project scaffold.</p>",
+                manifest.theme,
+                stylesheet_href(page_path),
+            ),
+        )?;
+        println!("fixed {}", default_page.display());
+    }
+
+    let mut page_paths = Vec::new();
+    collect_page_paths(&pages_dir, &pages_dir, &mut page_paths)?;
+    page_paths.sort();
+
+    for page_path in page_paths {
+        let page = pages_dir.join(&page_path);
+        fix_page(&page, &page_path, manifest.theme)?;
+    }
+
     Ok(())
 }
 
@@ -136,7 +228,7 @@ pub fn build_index(root: impl AsRef<Path>) -> Result<()> {
 
 pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<()> {
     let root = root.as_ref();
-    load_manifest(root)?;
+    let manifest = load_manifest(root)?;
 
     let destination = resolve_page_destination(root, page.as_ref())?;
     if destination.exists() {
@@ -152,9 +244,16 @@ pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<()> {
         .and_then(|stem| stem.to_str())
         .ok_or("could not derive page title from destination path")?;
 
+    let pages_dir = root.join(PAGES_DIR);
+    let relative_page = destination.strip_prefix(&pages_dir)?;
     fs::write(
         &destination,
-        render_page_document(title, "<p>New Fractal page.</p>"),
+        render_page_document(
+            title,
+            "<p>New Fractal page.</p>",
+            manifest.theme,
+            stylesheet_href(relative_page),
+        ),
     )?;
     build_index(root)?;
     println!("created {}", destination.display());
@@ -214,7 +313,7 @@ pub fn patch_note(
 
 pub fn import_markdown(root: impl AsRef<Path>, source: impl AsRef<Path>) -> Result<()> {
     let root = root.as_ref();
-    load_manifest(root)?;
+    let manifest = load_manifest(root)?;
 
     let source = source.as_ref();
     if source.extension().and_then(|ext| ext.to_str()) != Some("md") {
@@ -230,7 +329,12 @@ pub fn import_markdown(root: impl AsRef<Path>, source: impl AsRef<Path>) -> Resu
 
     fs::write(
         &destination,
-        render_page_document(stem, &format!("<pre>{}</pre>", escape_html(&markdown))),
+        render_page_document(
+            stem,
+            &format!("<pre>{}</pre>", escape_html(&markdown)),
+            manifest.theme,
+            stylesheet_href(Path::new(&format!("{stem}.html"))),
+        ),
     )?;
     println!("imported {} -> {}", source.display(), destination.display());
     Ok(())
@@ -444,6 +548,84 @@ fn validate_page_metadata(page: &Path) -> Result<()> {
     Ok(())
 }
 
+fn fix_page(page: &Path, page_path: &str, theme: Theme) -> Result<()> {
+    let mut html = fs::read_to_string(page)?;
+    let mut changed = false;
+    let meta = extract_fractal_meta_tags(page)?;
+
+    for (name, content) in required_meta_tags() {
+        if !meta.contains_key(name) {
+            html = insert_before_head_close(
+                &html,
+                &format!(
+                    "    <meta name=\"{name}\" content=\"{}\" />\n",
+                    escape_html(content)
+                ),
+            )?;
+            changed = true;
+        }
+    }
+
+    if !html.contains("rel=\"stylesheet\"") || !html.contains(".fractal/style.css") {
+        html = insert_before_head_close(
+            &html,
+            &format!(
+                "    <link rel=\"stylesheet\" href=\"{}\">\n",
+                escape_html(&stylesheet_href(Path::new(page_path)))
+            ),
+        )?;
+        changed = true;
+    }
+
+    let body_theme = format!("data-fractal-theme=\"{}\"", theme.as_str());
+    if !html.contains("data-fractal-theme=") {
+        if let Some(body_start) = html.find("<body>") {
+            html.replace_range(
+                body_start..body_start + "<body>".len(),
+                &format!("<body {body_theme}>"),
+            );
+            changed = true;
+        }
+    }
+
+    if find_notes_section_bounds(&html).is_none() {
+        html =
+            insert_before_body_close(&html, "    <section data-fractal-notes>\n    </section>\n")?;
+        changed = true;
+    }
+
+    if changed {
+        fs::write(page, html)?;
+        println!("fixed {}", page.display());
+    }
+
+    Ok(())
+}
+
+fn insert_before_head_close(html: &str, insertion: &str) -> Result<String> {
+    let Some(index) = html.find("  </head>") else {
+        return Err("missing head close tag in page".into());
+    };
+
+    let mut updated = String::new();
+    updated.push_str(&html[..index]);
+    updated.push_str(insertion);
+    updated.push_str(&html[index..]);
+    Ok(updated)
+}
+
+fn insert_before_body_close(html: &str, insertion: &str) -> Result<String> {
+    let Some(index) = html.find("  </body>") else {
+        return Err("missing body close tag in page".into());
+    };
+
+    let mut updated = String::new();
+    updated.push_str(&html[..index]);
+    updated.push_str(insertion);
+    updated.push_str(&html[index..]);
+    Ok(updated)
+}
+
 fn required_meta_tags() -> [(&'static str, &'static str); 3] {
     [
         ("fractal:version", DEFAULT_VERSION),
@@ -491,14 +673,104 @@ fn extract_meta_attribute(tag: &str, attribute: &str) -> Option<String> {
     Some(unescape_html(&rest[..end]))
 }
 
-fn render_page_document(title: &str, body: &str) -> String {
+fn render_page_document(title: &str, body: &str, theme: Theme, stylesheet_href: String) -> String {
     let escaped_title = escape_html(title);
     let escaped_summary = escape_html(DEFAULT_SUMMARY);
     let escaped_tags = escape_html(DEFAULT_TAGS);
+    let escaped_stylesheet_href = escape_html(&stylesheet_href);
+    let theme = theme.as_str();
 
     format!(
-        "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"utf-8\">\n    <title>{escaped_title}</title>\n    <meta name=\"fractal:version\" content=\"{DEFAULT_VERSION}\" />\n    <meta name=\"fractal:summary\" content=\"{escaped_summary}\" />\n    <meta name=\"fractal:tags\" content=\"{escaped_tags}\" />\n  </head>\n  <body>\n    <main>\n      <h1>{escaped_title}</h1>\n      {body}\n    </main>\n    <section data-fractal-notes>\n    </section>\n  </body>\n</html>\n"
+        "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"utf-8\">\n    <title>{escaped_title}</title>\n    <meta name=\"fractal:version\" content=\"{DEFAULT_VERSION}\" />\n    <meta name=\"fractal:summary\" content=\"{escaped_summary}\" />\n    <meta name=\"fractal:tags\" content=\"{escaped_tags}\" />\n    <link rel=\"stylesheet\" href=\"{escaped_stylesheet_href}\">\n  </head>\n  <body data-fractal-theme=\"{theme}\">\n    <main>\n      <h1>{escaped_title}</h1>\n      {body}\n    </main>\n    <section data-fractal-notes>\n    </section>\n  </body>\n</html>\n"
     )
+}
+
+fn stylesheet_href(page_path: &Path) -> String {
+    let parent_depth = page_path
+        .parent()
+        .map(|parent| parent.components().count())
+        .unwrap_or(0);
+    let mut href = String::new();
+    for _ in 0..=parent_depth {
+        href.push_str("../");
+    }
+    href.push_str(".fractal/style.css");
+    href
+}
+
+fn default_stylesheet() -> &'static str {
+    r#"body[data-fractal-theme="dark"] {
+  --fractal-background: #19110b;
+  --fractal-surface: #26180f;
+  --fractal-text: #f6cb5c;
+  --fractal-muted: #cca061;
+  --fractal-border: #402919;
+  --fractal-accent: #e4ae51;
+}
+
+body[data-fractal-theme="light"] {
+  --fractal-background: #f3eadb;
+  --fractal-surface: #fbf6ed;
+  --fractal-text: #3a2418;
+  --fractal-muted: #7f664c;
+  --fractal-border: #ddceb8;
+  --fractal-accent: #9a6b2f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--fractal-background);
+  color: var(--fractal-text);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.6;
+}
+
+main,
+section[data-fractal-notes] {
+  width: min(760px, calc(100% - 32px));
+  margin: 0 auto;
+}
+
+main {
+  padding: 56px 0 32px;
+}
+
+h1 {
+  margin: 0 0 24px;
+  font-size: 2.25rem;
+  line-height: 1.15;
+}
+
+a {
+  color: var(--fractal-accent);
+}
+
+pre,
+aside[data-fractal-note] {
+  border: 1px solid var(--fractal-border);
+  border-radius: 8px;
+  background: var(--fractal-surface);
+}
+
+pre {
+  overflow-x: auto;
+  padding: 16px;
+}
+
+section[data-fractal-notes] {
+  padding: 0 0 56px;
+}
+
+aside[data-fractal-note] {
+  margin: 16px 0 0;
+  padding: 12px 16px;
+  color: var(--fractal-muted);
+}
+"#
 }
 
 fn escape_html(input: &str) -> String {
@@ -520,7 +792,8 @@ mod tests {
     use super::{
         add_note, collect_page_paths, escape_html, extract_fractal_meta_tags, new_page,
         note_id_from_trigger, patch_note, remove_note, render_page_document,
-        resolve_page_destination, validate_page_metadata, PageEntry, ProjectIndex, ProjectManifest,
+        resolve_page_destination, stylesheet_href, validate_page_metadata, validate_project,
+        PageEntry, ProjectIndex, ProjectManifest, Theme,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -558,14 +831,33 @@ mod tests {
 
     #[test]
     fn page_renderer_includes_required_meta_tags() {
-        let html = render_page_document("hello", "<p>body</p>");
+        let html = render_page_document(
+            "hello",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        );
 
         assert!(html.contains("<meta name=\"fractal:version\" content=\"0.1\" />"));
         assert!(
             html.contains("<meta name=\"fractal:summary\" content=\"Short page summary here.\" />")
         );
         assert!(html.contains("<meta name=\"fractal:tags\" content=\"rust, graphs, parsing\" />"));
+        assert!(html.contains("<link rel=\"stylesheet\" href=\"../.fractal/style.css\">"));
+        assert!(html.contains("<body data-fractal-theme=\"dark\">"));
         assert!(html.contains("<section data-fractal-notes>"));
+    }
+
+    #[test]
+    fn stylesheet_href_reaches_workspace_from_nested_pages() {
+        assert_eq!(
+            stylesheet_href(Path::new("index.html")),
+            "../.fractal/style.css"
+        );
+        assert_eq!(
+            stylesheet_href(Path::new("folder/subpage.html")),
+            "../../.fractal/style.css"
+        );
     }
 
     #[test]
@@ -581,6 +873,40 @@ mod tests {
 
         let error = validate_page_metadata(&page).expect_err("missing notes section should fail");
         assert!(error.to_string().contains("missing notes section"));
+
+        fs::remove_dir_all(&root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn validate_fix_repairs_missing_project_scaffold_and_page_markers() {
+        let root = temp_dir("validate-fix");
+        let pages_dir = root.join("pages");
+        fs::create_dir_all(&pages_dir).expect("create pages dir");
+        fs::write(
+            root.join("fractal.json"),
+            serde_json::to_string_pretty(&ProjectManifest {
+                project_name: "test".to_string(),
+                version: 1,
+                default_page: "pages/index.html".to_string(),
+                theme: Theme::Dark,
+            })
+            .expect("serialize manifest"),
+        )
+        .expect("write manifest");
+        fs::write(
+            pages_dir.join("index.html"),
+            "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"utf-8\">\n    <title>index</title>\n  </head>\n  <body>\n    <main>\n      <h1>index</h1>\n      <p>body</p>\n    </main>\n  </body>\n</html>\n",
+        )
+        .expect("write page");
+
+        validate_project(&root, true).expect("fix and validate project");
+
+        assert!(root.join(".fractal/style.css").is_file());
+        let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
+        assert!(html.contains("<meta name=\"fractal:version\" content=\"0.1\" />"));
+        assert!(html.contains("<link rel=\"stylesheet\" href=\"../.fractal/style.css\">"));
+        assert!(html.contains("<body data-fractal-theme=\"dark\">"));
+        assert!(html.contains("<section data-fractal-notes>"));
 
         fs::remove_dir_all(&root).expect("cleanup temp dir");
     }
@@ -626,13 +952,19 @@ mod tests {
                 project_name: "test".to_string(),
                 version: 1,
                 default_page: "pages/index.html".to_string(),
+                theme: Theme::Dark,
             })
             .expect("serialize manifest"),
         )
         .expect("write manifest");
         fs::write(
             pages_dir.join("index.html"),
-            render_page_document("index", "<p>body</p>"),
+            render_page_document(
+                "index",
+                "<p>body</p>",
+                Theme::Dark,
+                "../.fractal/style.css".to_string(),
+            ),
         )
         .expect("write index page");
 
@@ -731,13 +1063,19 @@ mod tests {
                 project_name: "test".to_string(),
                 version: 1,
                 default_page: "pages/index.html".to_string(),
+                theme: Theme::Dark,
             })
             .expect("serialize manifest"),
         )
         .expect("write manifest");
         fs::write(
             pages_dir.join("index.html"),
-            render_page_document("index", "<p>body</p>"),
+            render_page_document(
+                "index",
+                "<p>body</p>",
+                Theme::Dark,
+                "../.fractal/style.css".to_string(),
+            ),
         )
         .expect("write index page");
 
@@ -764,6 +1102,7 @@ mod tests {
                 project_name: "test".to_string(),
                 version: 1,
                 default_page: "pages/index.html".to_string(),
+                theme: Theme::Dark,
             })
             .expect("serialize manifest"),
         )
@@ -773,6 +1112,8 @@ mod tests {
             render_page_document(
                 "index",
                 "<p>body</p>\n  <section data-fractal-notes>\n    <aside id=\"note-java\" data-fractal-note>\n      <p>old text</p>\n    </aside>\n  </section>",
+                Theme::Dark,
+                "../.fractal/style.css".to_string(),
             ),
         )
         .expect("write index page");
@@ -799,6 +1140,7 @@ mod tests {
                 project_name: "test".to_string(),
                 version: 1,
                 default_page: "pages/index.html".to_string(),
+                theme: Theme::Dark,
             })
             .expect("serialize manifest"),
         )
@@ -808,6 +1150,8 @@ mod tests {
             render_page_document(
                 "index",
                 "<p>body</p>\n  <section data-fractal-notes>\n    <aside id=\"note-java\" data-fractal-note>\n      <p>old text</p>\n    </aside>\n  </section>",
+                Theme::Dark,
+                "../.fractal/style.css".to_string(),
             ),
         )
         .expect("write index page");

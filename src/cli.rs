@@ -22,7 +22,11 @@ enum Command {
         project_name: String,
     },
     /// Validate the current Fractal project.
-    Validate,
+    Validate {
+        /// Add missing Fractal scaffold files and page markers before validating.
+        #[arg(long)]
+        fix: bool,
+    },
     /// Import a markdown file into the current project.
     Import {
         /// Path to a markdown file.
@@ -78,7 +82,7 @@ pub fn run() -> Result<()> {
 
     match cli.command {
         Command::Init { project_name } => init_project(&project_name),
-        Command::Validate => validate_project("."),
+        Command::Validate { fix } => validate_project(".", fix),
         Command::Import { path } => import_markdown(".", &path),
         Command::Export { page, output } => export_page(".", &page, &output),
         Command::Index { command } => match command {
