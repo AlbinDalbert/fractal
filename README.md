@@ -8,6 +8,8 @@ This repo is currently focused on one thing: locking down the first useful comma
 
 Fractal is meant to be better tooling, engine infrastructure, and user experience for linked pages than markdown-oriented knowledge tools such as Obsidian.
 
+Fractal is the engine, not an end-user interface. This crate should focus on the durable file format, project layout, indexing, graph construction, linking, metadata, import/export, search, and programmatic command surface that other tools can build on. A separate UI can consume Fractal data later, but this project should not take on interactive application UI concerns.
+
 The page format is HTML by design. Fractal can impose a strict project structure and strict page conventions, but the user's actual files should remain resilient: if the tool breaks or disappears, the pages are still inspectable, editable, and renderable by ordinary browsers on almost any device. HTML also avoids making Fractal responsible for a custom rendering engine, and gives the project a richer and more consistent rendering target than markdown.
 
 The core product idea is that users should not have to remember which pages to link to, when to link them, or how to maintain the graph by hand. Linking, discovery, metadata, indexing, and graph structure should increasingly be inferred and maintained by the tool.
@@ -22,7 +24,7 @@ Because of that, import and export are not side features. Converting other forma
 - Search and discovery: add keyword search, graph traversal, related pages, orphan page detection, and unresolved mention tracking.
 - Semantic/ontological tooling: support entity extraction, aliases, relationships, concept typing, summaries, and embeddings or other semantic index support.
 - Rich metadata model: make summaries and tags editable, replace placeholder defaults, support schema/version migration, and likely introduce stable page IDs or slugs.
-- Robust HTML handling: continue replacing string scanning with a proper HTML parser/serializer. Indexing and validation extraction now use an HTML parser, but generated link rewriting, note mutation, and import/export still need a parser-backed mutation/serialization path so ordinary inspectable HTML works without brittle formatting requirements.
+- Robust HTML handling: continue replacing string scanning with a proper HTML parser/serializer. Indexing, validation extraction, and note mutation now use an HTML parser, but generated link rewriting and import/export still need a parser-backed mutation/serialization path so ordinary inspectable HTML works without brittle formatting requirements.
 - Change tracking/genealogy: track how pages and graph relationships change over time. This may be a later or bonus feature, but it fits the long-term knowledge-engine direction.
 
 ## Current CLI surface
@@ -66,14 +68,14 @@ my-project/
 ## What works today
 
 - `init` creates the project folder, manifest, starter stylesheet, and starter page.
-- `validate` checks the project structure, verifies the required Fractal meta tags exist in each page, and requires a `data-fractal-notes` section. HTML extraction for validation is parser-backed, so it is not tied to Fractal's generated indentation or attribute quoting.
-- `validate --fix` adds missing Fractal-owned scaffold pieces before validating: `.fractal/`, `.fractal/style.css`, `pages/`, the configured default page, missing required page meta tags, the generated stylesheet link, the body theme marker, and the notes section.
+- `validate` checks the project structure, verifies the required Fractal meta tags exist in each page, requires exactly one `data-fractal-notes` section, and rejects malformed note ids. HTML extraction for validation is parser-backed, so it is not tied to Fractal's generated indentation or attribute quoting.
+- `validate --fix` adds missing Fractal-owned scaffold pieces before validating: `.fractal/`, `.fractal/style.css`, `pages/`, the configured default page, missing required page meta tags, the generated stylesheet link, the body theme marker, and the notes section. It also merges duplicate notes sections while preserving their child content.
 - `import` reads a markdown file, converts basic headings and paragraphs into a minimal HTML page under `pages/`, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
 - `export` converts basic headings and paragraphs from an existing Fractal HTML page to markdown at the requested output path.
 - `index build` generates `.fractal/index.json` with every file under `pages/`, page entries for HTML files, page titles, all page meta tags whose names start with `fractal:`, notes, and links. It also generates `.fractal/graph.json` with page/note nodes, graph edges, and per-page backlinks/outlinks.
 - `sync` rebuilds `.fractal/index.json` and `.fractal/graph.json`, updates each page's note links inside its own `<main>`, then links remaining matching page-title/page-stem text against the project index. It rebuilds both generated data files again after the page rewrites so generated links are reflected.
 - `page new` creates a new HTML page under `pages/`, adds `.html` automatically when omitted, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
-- `page <page/path> note add/remove/patch` mutates notes in the requested page and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
+- `page <page/path> note add/remove/patch` mutates notes in the requested page using parser-backed HTML operations and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
 
 All generated pages currently include these required meta tags:
 

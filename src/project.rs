@@ -1,5 +1,6 @@
 use crate::Result;
 use kuchiki::traits::*;
+use kuchiki::NodeRef;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -338,7 +339,8 @@ pub fn add_note(
     let note_id = note_id_from_trigger(trigger)?;
     let html = fs::read_to_string(&page)?;
 
-    if find_note_bounds(&html, &note_id).is_some() {
+    let document = PageDocument::parse(&html);
+    if document.note_node(&note_id).is_some() {
         return Err(format!("note already exists: {note_id}").into());
     }
 
@@ -532,9 +534,44 @@ impl PageDocument {
     }
 
     fn has_notes_section(&self) -> bool {
+        self.notes_section_count() > 0
+    }
+
+    fn notes_section_count(&self) -> usize {
+        self.notes_sections().len()
+    }
+
+    fn notes_sections(&self) -> Vec<NodeRef> {
         self.document
-            .select_first("section[data-fractal-notes]")
-            .is_ok()
+            .select("section[data-fractal-notes]")
+            .expect("static selector should parse")
+            .map(|element| element.as_node().clone())
+            .collect()
+    }
+
+    fn single_notes_section(&self) -> Result<NodeRef> {
+        let sections = self.notes_sections();
+        match sections.as_slice() {
+            [] => Err("missing notes section in page".into()),
+            [section] => Ok(section.clone()),
+            _ => Err(format!("multiple notes sections in page: {}", sections.len()).into()),
+        }
+    }
+
+    fn note_node(&self, note_id: &str) -> Option<NodeRef> {
+        self.document
+            .select("section[data-fractal-notes] aside[data-fractal-note]")
+            .expect("static selector should parse")
+            .find_map(|element| {
+                let attributes = element.attributes.borrow();
+                (attributes.get("id") == Some(note_id)).then(|| element.as_node().clone())
+            })
+    }
+
+    fn to_html(&self) -> Result<String> {
+        let mut serialized = Vec::new();
+        self.document.serialize(&mut serialized)?;
+        Ok(String::from_utf8(serialized)?)
     }
 
     fn title(&self) -> Option<String> {
@@ -930,47 +967,67 @@ fn note_id_from_trigger(trigger: &str) -> Result<String> {
     Ok(format!("note-{slug}"))
 }
 
+fn is_valid_note_id(note_id: &str) -> bool {
+    let Some(slug) = note_id.strip_prefix("note-") else {
+        return false;
+    };
+
+    !slug.is_empty()
+        && !slug.starts_with('-')
+        && !slug.ends_with('-')
+        && !slug.contains("--")
+        && slug.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
+}
+
 fn insert_note_into_document(html: &str, note: &str) -> Result<String> {
-    if let Some((_, section_close_start)) = find_notes_section_bounds(html) {
-        let mut updated = String::new();
-        updated.push_str(&html[..section_close_start]);
-        updated.push_str(note);
-        updated.push_str(&html[section_close_start..]);
-        return Ok(updated);
-    }
-    Err("missing notes section in page".into())
+    let document = PageDocument::parse(html);
+    let section = document.single_notes_section()?;
+    let note = parse_note_aside(note)?;
+
+    section.append(NodeRef::new_text("\n    "));
+    section.append(note);
+    section.append(NodeRef::new_text("\n  "));
+
+    document.to_html()
 }
 
 fn remove_note_from_document(html: &str, note_id: &str) -> Result<String> {
-    let (start, end) =
-        find_note_bounds(html, note_id).ok_or_else(|| format!("note does not exist: {note_id}"))?;
-    let mut updated = String::new();
-    updated.push_str(&html[..start]);
-    updated.push_str(&html[end..]);
-    Ok(updated)
+    let document = PageDocument::parse(html);
+    document.single_notes_section()?;
+    let note = document
+        .note_node(note_id)
+        .ok_or_else(|| format!("note does not exist: {note_id}"))?;
+    note.detach();
+
+    document.to_html()
 }
 
 fn patch_note_in_document(html: &str, note_id: &str, content: &str) -> Result<String> {
-    let (start, end) =
-        find_note_bounds(html, note_id).ok_or_else(|| format!("note does not exist: {note_id}"))?;
-    let mut updated = String::new();
-    updated.push_str(&html[..start]);
-    updated.push_str(&render_note_aside(note_id, content));
-    updated.push_str(&html[end..]);
-    Ok(updated)
+    let document = PageDocument::parse(html);
+    document.single_notes_section()?;
+    let note = document
+        .note_node(note_id)
+        .ok_or_else(|| format!("note does not exist: {note_id}"))?;
+    let replacement = parse_note_aside(&render_note_aside(note_id, content))?;
+
+    note.insert_before(replacement);
+    note.detach();
+
+    document.to_html()
 }
 
-fn find_notes_section_bounds(html: &str) -> Option<(usize, usize)> {
-    let section_start = html.find("  <section data-fractal-notes>")?;
-    let section_close_start = html[section_start..].find("  </section>")? + section_start;
-    Some((section_start, section_close_start))
-}
-
-fn find_note_bounds(html: &str, note_id: &str) -> Option<(usize, usize)> {
-    let marker = format!("    <aside id=\"{note_id}\" data-fractal-note>");
-    let start = html.find(&marker)?;
-    let end = html[start..].find("    </aside>\n")? + start + "    </aside>\n".len();
-    Some((start, end))
+fn parse_note_aside(note: &str) -> Result<NodeRef> {
+    let document = PageDocument::parse(note);
+    let aside = document
+        .document
+        .select_first("aside[data-fractal-note]")
+        .map_err(|_| "note markup must contain a data-fractal-note aside")?
+        .as_node()
+        .clone();
+    aside.detach();
+    Ok(aside)
 }
 
 fn render_note_aside(note_id: &str, content: &str) -> String {
@@ -1415,8 +1472,15 @@ struct LinkRange {
 
 fn validate_page_metadata(page: &Path) -> Result<()> {
     let document = PageDocument::from_path(page)?;
-    if !document.has_notes_section() {
-        return Err(format!("missing notes section in {}", page.display()).into());
+
+    match document.notes_section_count() {
+        0 => return Err(format!("missing notes section in {}", page.display()).into()),
+        1 => {}
+        count => {
+            return Err(
+                format!("duplicate notes section in {}: {count} sections", page.display()).into(),
+            )
+        }
     }
 
     let meta = document.fractal_meta();
@@ -1428,6 +1492,8 @@ fn validate_page_metadata(page: &Path) -> Result<()> {
             );
         }
     }
+
+    validate_note_ids(page, &document)?;
 
     Ok(())
 }
@@ -1469,10 +1535,19 @@ fn fix_page(page: &Path, page_path: &str, theme: Theme) -> Result<()> {
         }
     }
 
-    if !PageDocument::parse(&html).has_notes_section() {
-        html =
-            insert_before_body_close(&html, "    <section data-fractal-notes>\n    </section>\n")?;
-        changed = true;
+    match PageDocument::parse(&html).notes_section_count() {
+        0 => {
+            html = insert_before_body_close(
+                &html,
+                "    <section data-fractal-notes>\n    </section>\n",
+            )?;
+            changed = true;
+        }
+        1 => {}
+        _ => {
+            html = normalize_notes_sections(&html)?;
+            changed = true;
+        }
     }
 
     if changed {
@@ -1481,6 +1556,69 @@ fn fix_page(page: &Path, page_path: &str, theme: Theme) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn validate_note_ids(page: &Path, document: &PageDocument) -> Result<()> {
+    let mut seen = BTreeSet::new();
+
+    for element in document
+        .document
+        .select("section[data-fractal-notes] aside[data-fractal-note]")
+        .expect("static selector should parse")
+    {
+        let attributes = element.attributes.borrow();
+        let Some(id) = attributes.get("id") else {
+            return Err(format!("missing note id in {}", page.display()).into());
+        };
+
+        if !is_valid_note_id(id) {
+            return Err(format!("malformed note id in {}: {id}", page.display()).into());
+        }
+
+        if !seen.insert(id.to_string()) {
+            return Err(format!("duplicate note id in {}: {id}", page.display()).into());
+        }
+    }
+
+    Ok(())
+}
+
+fn normalize_notes_sections(html: &str) -> Result<String> {
+    let document = PageDocument::parse(html);
+    let sections = document.notes_sections();
+
+    if sections.is_empty() {
+        let body = document
+            .document
+            .select_first("body")
+            .map_err(|_| "missing body in page")?;
+        body.as_node().append(NodeRef::new_text("\n    "));
+        body.as_node().append(parse_notes_section()?);
+        body.as_node().append(NodeRef::new_text("\n  "));
+    } else {
+        let primary = sections[0].clone();
+        for duplicate in sections.iter().skip(1) {
+            let children = duplicate.children().collect::<Vec<_>>();
+            for child in children {
+                primary.append(child);
+            }
+            duplicate.detach();
+        }
+    }
+
+    document.to_html()
+}
+
+fn parse_notes_section() -> Result<NodeRef> {
+    let document = PageDocument::parse("<section data-fractal-notes></section>");
+    let section = document
+        .document
+        .select_first("section[data-fractal-notes]")
+        .map_err(|_| "notes section markup must contain a data-fractal-notes section")?
+        .as_node()
+        .clone();
+    section.detach();
+    Ok(section)
 }
 
 fn insert_before_head_close(html: &str, insertion: &str) -> Result<String> {
@@ -1823,6 +1961,20 @@ mod tests {
         .collect()
     }
 
+    fn write_test_manifest(root: &Path) {
+        fs::write(
+            root.join("fractal.json"),
+            serde_json::to_string_pretty(&ProjectManifest {
+                project_name: "test".to_string(),
+                version: 1,
+                default_page: "pages/index.html".to_string(),
+                theme: Theme::Dark,
+            })
+            .expect("serialize manifest"),
+        )
+        .expect("write manifest");
+    }
+
     #[test]
     fn escapes_html_sensitive_characters() {
         assert_eq!(escape_html("&<>"), "&amp;&lt;&gt;");
@@ -1968,6 +2120,62 @@ mod tests {
     }
 
     #[test]
+    fn validate_page_metadata_rejects_duplicate_notes_sections() {
+        let root = temp_dir("validate-duplicate-notes");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let page = root.join("page.html");
+        fs::write(
+            &page,
+            r#"<html>
+  <head>
+    <meta name="fractal:version" content="0.1">
+    <meta name="fractal:summary" content="Short page summary here.">
+    <meta name="fractal:tags" content="rust, graphs, parsing">
+  </head>
+  <body>
+    <section data-fractal-notes></section>
+    <section data-fractal-notes></section>
+  </body>
+</html>"#,
+        )
+        .expect("write page");
+
+        let error =
+            validate_page_metadata(&page).expect_err("duplicate notes sections should fail");
+        assert!(error.to_string().contains("duplicate notes section"));
+
+        fs::remove_dir_all(&root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn validate_page_metadata_rejects_malformed_note_ids() {
+        let root = temp_dir("validate-note-id");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let page = root.join("page.html");
+        fs::write(
+            &page,
+            r#"<html>
+  <head>
+    <meta name="fractal:version" content="0.1">
+    <meta name="fractal:summary" content="Short page summary here.">
+    <meta name="fractal:tags" content="rust, graphs, parsing">
+  </head>
+  <body>
+    <section data-fractal-notes>
+      <aside id="Rust" data-fractal-note></aside>
+    </section>
+  </body>
+</html>"#,
+        )
+        .expect("write page");
+
+        let error = validate_page_metadata(&page).expect_err("malformed note id should fail");
+        assert!(error.to_string().contains("malformed note id"));
+
+        fs::remove_dir_all(&root).expect("cleanup temp dir");
+    }
+
+    #[test]
     fn validate_fix_repairs_missing_project_scaffold_and_page_markers() {
         let root = temp_dir("validate-fix");
         let pages_dir = root.join("pages");
@@ -1997,6 +2205,59 @@ mod tests {
         assert!(html.contains("<link rel=\"stylesheet\" href=\"../.fractal/style.css\">"));
         assert!(html.contains("<body data-fractal-theme=\"dark\">"));
         assert!(html.contains("<section data-fractal-notes>"));
+
+        fs::remove_dir_all(&root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn validate_fix_merges_duplicate_notes_sections() {
+        let root = temp_dir("validate-fix-duplicate-notes");
+        let pages_dir = root.join("pages");
+        fs::create_dir_all(&pages_dir).expect("create pages dir");
+        write_test_manifest(&root);
+        fs::write(
+            pages_dir.join("index.html"),
+            r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>index</title>
+    <meta name="fractal:version" content="0.1">
+    <meta name="fractal:summary" content="Short page summary here.">
+    <meta name="fractal:tags" content="rust, graphs, parsing">
+  </head>
+  <body>
+    <main><h1>index</h1></main>
+    <section data-fractal-notes>
+      <aside id="note-alpha" data-fractal-note><p>alpha</p></aside>
+    </section>
+    <section data-fractal-notes>
+      <aside id="note-beta" data-fractal-note><p>beta</p></aside>
+    </section>
+  </body>
+</html>
+"#,
+        )
+        .expect("write page");
+
+        validate_project(&root, true).expect("fix and validate project");
+
+        let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
+        let document = PageDocument::parse(&html);
+        assert_eq!(document.notes_section_count(), 1);
+        assert_eq!(
+            document.notes(),
+            vec![
+                NoteEntry {
+                    id: "note-alpha".to_string(),
+                    label: "alpha".to_string(),
+                },
+                NoteEntry {
+                    id: "note-beta".to_string(),
+                    label: "beta".to_string(),
+                },
+            ]
+        );
 
         fs::remove_dir_all(&root).expect("cleanup temp dir");
     }
@@ -2254,8 +2515,15 @@ mod tests {
         add_note(&root, Path::new("index"), "java", "my note text").expect("add note");
 
         let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
-        assert!(html.contains("<section data-fractal-notes>"));
-        assert!(html.contains("<aside id=\"note-java\" data-fractal-note>"));
+        let document = PageDocument::parse(&html);
+        assert_eq!(document.notes_section_count(), 1);
+        assert_eq!(
+            document.notes(),
+            vec![NoteEntry {
+                id: "note-java".to_string(),
+                label: "java".to_string(),
+            }]
+        );
         assert!(html.contains("<p>my note text</p>"));
 
         fs::remove_dir_all(&root).expect("cleanup temp dir");
@@ -2279,16 +2547,17 @@ mod tests {
             .expect("serialize manifest"),
         )
         .expect("write manifest");
-        fs::write(
-            pages_dir.join("index.html"),
-            render_page_document(
+        let page = insert_note_into_document(
+            &render_page_document(
                 "index",
-                "<p>body</p>\n  <section data-fractal-notes>\n    <aside id=\"note-java\" data-fractal-note>\n      <p>old text</p>\n    </aside>\n  </section>",
+                "<p>body</p>",
                 Theme::Dark,
                 "../.fractal/style.css".to_string(),
             ),
+            &render_note_aside("note-java", "old text"),
         )
-        .expect("write index page");
+        .expect("insert note");
+        fs::write(pages_dir.join("index.html"), page).expect("write index page");
 
         patch_note(&root, Path::new("index"), "java", "new text").expect("patch note");
 
@@ -2317,22 +2586,73 @@ mod tests {
             .expect("serialize manifest"),
         )
         .expect("write manifest");
-        fs::write(
-            pages_dir.join("index.html"),
-            render_page_document(
+        let page = insert_note_into_document(
+            &render_page_document(
                 "index",
-                "<p>body</p>\n  <section data-fractal-notes>\n    <aside id=\"note-java\" data-fractal-note>\n      <p>old text</p>\n    </aside>\n  </section>",
+                "<p>body</p>",
                 Theme::Dark,
                 "../.fractal/style.css".to_string(),
             ),
+            &render_note_aside("note-java", "old text"),
         )
-        .expect("write index page");
+        .expect("insert note");
+        fs::write(pages_dir.join("index.html"), page).expect("write index page");
 
         remove_note(&root, Path::new("index"), "java").expect("remove note");
 
         let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
+        let document = PageDocument::parse(&html);
         assert!(!html.contains("note-java"));
-        assert!(html.contains("<section data-fractal-notes>"));
+        assert_eq!(document.notes_section_count(), 1);
+
+        fs::remove_dir_all(&root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn note_mutation_handles_ordinary_html_formatting() {
+        let root = temp_dir("messy-note-mutation");
+        let pages_dir = root.join("pages");
+        let workspace_dir = root.join(".fractal");
+        fs::create_dir_all(&pages_dir).expect("create pages dir");
+        fs::create_dir_all(&workspace_dir).expect("create workspace dir");
+        write_test_manifest(&root);
+        fs::write(
+            pages_dir.join("index.html"),
+            r#"<!doctype html>
+<HTML lang="en">
+  <HEAD>
+    <TITLE>Index</TITLE>
+    <meta content="0.1" name="fractal:version">
+    <meta content="Short page summary here." name="fractal:summary">
+    <meta content="rust, graphs, parsing" name="fractal:tags">
+  </HEAD>
+  <BODY>
+    <main><p>Java and Rust are both mentioned.</p></main>
+    <section data-fractal-notes>
+      <aside data-fractal-note id='note-rust'><p>old rust</p></aside>
+    </section>
+  </BODY>
+</HTML>
+"#,
+        )
+        .expect("write index page");
+
+        add_note(&root, Path::new("index"), "Java", "java & <note>").expect("add note");
+        patch_note(&root, Path::new("index"), "rust", "patched <rust>").expect("patch note");
+        remove_note(&root, Path::new("index"), "Java").expect("remove note");
+
+        let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
+        let document = PageDocument::parse(&html);
+        assert_eq!(document.notes_section_count(), 1);
+        assert_eq!(
+            document.notes(),
+            vec![NoteEntry {
+                id: "note-rust".to_string(),
+                label: "rust".to_string(),
+            }]
+        );
+        assert!(html.contains("patched &lt;rust&gt;"));
+        assert!(!html.contains("note-java"));
 
         fs::remove_dir_all(&root).expect("cleanup temp dir");
     }

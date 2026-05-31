@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "nodes": [
+    {
+      "id": "page:folder/subpage.html",
+      "kind": "page",
+      "label": "subpage",
+      "path": "folder/subpage.html"
+    },
+    {
+      "id": "page:index.html",
+      "kind": "page",
+      "label": "test_proj",
+      "path": "index.html"
+    },
+    {
+      "id": "page:subpage.html",
+      "kind": "page",
+      "label": "subpage",
+      "path": "subpage.html"
+    }
+  ],
+  "edges": [],
+  "pages": [
+    {
+      "path": "folder/subpage.html",
+      "outlinks": [],
+      "backlinks": []
+    },
+    {
+      "path": "index.html",
+      "outlinks": [],
+      "backlinks": []
+    },
+    {
+      "path": "subpage.html",
+      "outlinks": [],
+      "backlinks": []
+    }
+  ]
+}

@@ -1,24 +1,51 @@
 {
-  "pages": [
+  "files": [
     {
       "path": "folder/subpage.html",
-      "meta": {
-        "fractal:summary": "Short page summary here.",
-        "fractal:tags": "rust, graphs, parsing",
-        "fractal:version": "0.1"
-      }
+      "kind": "page"
     },
     {
       "path": "index.html",
-      "meta": {}
+      "kind": "page"
     },
     {
       "path": "subpage.html",
+      "kind": "page"
+    }
+  ],
+  "pages": [
+    {
+      "path": "folder/subpage.html",
+      "title": "subpage",
       "meta": {
         "fractal:summary": "Short page summary here.",
         "fractal:tags": "rust, graphs, parsing",
         "fractal:version": "0.1"
-      }
+      },
+      "notes": [],
+      "links": []
+    },
+    {
+      "path": "index.html",
+      "title": "test_proj",
+      "meta": {
+        "fractal:summary": "Short page summary here.",
+        "fractal:tags": "rust, graphs, parsing",
+        "fractal:version": "0.1"
+      },
+      "notes": [],
+      "links": []
+    },
+    {
+      "path": "subpage.html",
+      "title": "subpage",
+      "meta": {
+        "fractal:summary": "Short page summary here.",
+        "fractal:tags": "rust, graphs, parsing",
+        "fractal:version": "0.1"
+      },
+      "notes": [],
+      "links": []
     }
   ]
 }
