@@ -1,18 +1,21 @@
 use crate::Result;
+use kuchiki::traits::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 const WORKSPACE_DIR: &str = ".fractal";
 const MANIFEST_FILE: &str = "fractal.json";
 const INDEX_FILE: &str = "index.json";
+const GRAPH_FILE: &str = "graph.json";
 const STYLE_FILE: &str = "style.css";
 const PAGES_DIR: &str = "pages";
 const INDEX_PAGE: &str = "index.html";
 const DEFAULT_VERSION: &str = "0.1";
 const DEFAULT_SUMMARY: &str = "Short page summary here.";
 const DEFAULT_TAGS: &str = "rust, graphs, parsing";
+const GRAPH_VERSION: u32 = 1;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProjectManifest {
@@ -47,13 +50,74 @@ impl Theme {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProjectIndex {
+    pub files: Vec<FileEntry>,
     pub pages: Vec<PageEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileEntry {
+    pub path: String,
+    pub kind: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PageEntry {
     pub path: String,
+    pub title: String,
     pub meta: BTreeMap<String, String>,
+    pub notes: Vec<NoteEntry>,
+    pub links: Vec<LinkEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+pub struct NoteEntry {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LinkEntry {
+    pub href: String,
+    pub text: String,
+    pub scope: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectGraph {
+    pub version: u32,
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+    pub pages: Vec<PageGraphEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphNode {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphEdge {
+    pub from: String,
+    pub to: String,
+    pub kind: String,
+    pub text: Option<String>,
+    pub href: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageGraphEntry {
+    pub path: String,
+    pub outlinks: Vec<GraphPageLink>,
+    pub backlinks: Vec<GraphPageLink>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GraphPageLink {
+    pub page: String,
+    pub text: String,
 }
 
 pub fn init_project(project_name: &str) -> Result<()> {
@@ -127,6 +191,10 @@ pub fn validate_project(root: impl AsRef<Path>, fix: bool) -> Result<()> {
     page_paths.sort();
 
     for page_path in page_paths {
+        if !is_html_path(&page_path) {
+            continue;
+        }
+
         let page = pages_dir.join(&page_path);
         validate_page_metadata(&page)?;
     }
@@ -183,6 +251,10 @@ fn fix_project(root: &Path) -> Result<()> {
     page_paths.sort();
 
     for page_path in page_paths {
+        if !is_html_path(&page_path) {
+            continue;
+        }
+
         let page = pages_dir.join(&page_path);
         fix_page(&page, &page_path, manifest.theme)?;
     }
@@ -192,37 +264,32 @@ fn fix_project(root: &Path) -> Result<()> {
 
 pub fn build_index(root: impl AsRef<Path>) -> Result<()> {
     let root = root.as_ref();
-    load_manifest(root)?;
+    let index = build_project_index(root)?;
+    write_generated_project_data(root, &index)?;
+    Ok(())
+}
 
-    let workspace_dir = root.join(WORKSPACE_DIR);
+pub fn sync_project(root: impl AsRef<Path>) -> Result<()> {
+    let root = root.as_ref();
+    let initial_index = build_project_index(root)?;
+    write_generated_project_data(root, &initial_index)?;
+
     let pages_dir = root.join(PAGES_DIR);
-
-    if !workspace_dir.is_dir() {
-        return Err(format!("missing workspace directory: {}", workspace_dir.display()).into());
+    let mut synced = 0;
+    for page in &initial_index.pages {
+        let path = pages_dir.join(&page.path);
+        let html = fs::read_to_string(&path)?;
+        let updated = sync_page_links(&html, &page.path, &initial_index)?;
+        if updated != html {
+            fs::write(&path, updated)?;
+            synced += 1;
+            println!("synced {}", path.display());
+        }
     }
 
-    if !pages_dir.is_dir() {
-        return Err(format!("missing pages directory: {}", pages_dir.display()).into());
-    }
-
-    let mut page_paths = Vec::new();
-    collect_page_paths(&pages_dir, &pages_dir, &mut page_paths)?;
-    page_paths.sort();
-
-    let index = ProjectIndex {
-        pages: page_paths
-            .into_iter()
-            .map(|path| {
-                let meta = extract_fractal_meta_tags(&pages_dir.join(&path))?;
-                Ok(PageEntry { path, meta })
-            })
-            .collect::<Result<Vec<_>>>()?,
-    };
-
-    let index_path = workspace_dir.join(INDEX_FILE);
-    fs::write(&index_path, serde_json::to_string_pretty(&index)?)?;
-
-    println!("built {}", index_path.display());
+    let final_index = build_project_index(root)?;
+    write_generated_project_data(root, &final_index)?;
+    println!("sync complete: {synced} page(s) updated");
     Ok(())
 }
 
@@ -337,6 +404,7 @@ pub fn import_markdown(root: impl AsRef<Path>, source: impl AsRef<Path>) -> Resu
             stylesheet_href(Path::new(&format!("{stem}.html"))),
         ),
     )?;
+    build_index(root)?;
     println!("imported {} -> {}", source.display(), destination.display());
     Ok(())
 }
@@ -369,6 +437,388 @@ pub fn export_page(
     fs::write(output, html_to_markdown(&html))?;
     println!("exported {} -> {}", page.display(), output.display());
     Ok(())
+}
+
+fn build_project_index(root: &Path) -> Result<ProjectIndex> {
+    load_manifest(root)?;
+
+    let workspace_dir = root.join(WORKSPACE_DIR);
+    let pages_dir = root.join(PAGES_DIR);
+
+    if !workspace_dir.is_dir() {
+        return Err(format!("missing workspace directory: {}", workspace_dir.display()).into());
+    }
+
+    if !pages_dir.is_dir() {
+        return Err(format!("missing pages directory: {}", pages_dir.display()).into());
+    }
+
+    let mut paths = Vec::new();
+    collect_page_paths(&pages_dir, &pages_dir, &mut paths)?;
+    paths.sort();
+
+    let files = paths
+        .iter()
+        .map(|path| FileEntry {
+            path: path.clone(),
+            kind: file_kind(path).to_string(),
+        })
+        .collect();
+
+    let pages = paths
+        .into_iter()
+        .filter(|path| is_html_path(path))
+        .map(|path| build_page_entry(&pages_dir, path))
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(ProjectIndex { files, pages })
+}
+
+fn write_generated_project_data(root: &Path, index: &ProjectIndex) -> Result<()> {
+    write_project_index(root, index)?;
+    write_project_graph(root, &build_project_graph(index))?;
+    Ok(())
+}
+
+fn write_project_index(root: &Path, index: &ProjectIndex) -> Result<()> {
+    let index_path = root.join(WORKSPACE_DIR).join(INDEX_FILE);
+    fs::write(&index_path, serde_json::to_string_pretty(index)?)?;
+
+    println!("built {}", index_path.display());
+    Ok(())
+}
+
+fn write_project_graph(root: &Path, graph: &ProjectGraph) -> Result<()> {
+    let graph_path = root.join(WORKSPACE_DIR).join(GRAPH_FILE);
+    fs::write(&graph_path, serde_json::to_string_pretty(graph)?)?;
+
+    println!("built {}", graph_path.display());
+    Ok(())
+}
+
+fn build_page_entry(pages_dir: &Path, path: String) -> Result<PageEntry> {
+    let page = pages_dir.join(&path);
+    let html = fs::read_to_string(&page)?;
+    let document = PageDocument::parse(&html);
+    let meta = document.fractal_meta();
+    let title = document
+        .title()
+        .unwrap_or_else(|| page_label_from_path(&path));
+    let notes = document.notes();
+    let links = document.links();
+
+    Ok(PageEntry {
+        path,
+        title,
+        meta,
+        notes,
+        links,
+    })
+}
+
+struct PageDocument {
+    document: kuchiki::NodeRef,
+}
+
+impl PageDocument {
+    fn parse(html: &str) -> Self {
+        Self {
+            document: kuchiki::parse_html().one(html),
+        }
+    }
+
+    fn from_path(page: &Path) -> Result<Self> {
+        Ok(Self::parse(&fs::read_to_string(page)?))
+    }
+
+    fn has_notes_section(&self) -> bool {
+        self.document
+            .select_first("section[data-fractal-notes]")
+            .is_ok()
+    }
+
+    fn title(&self) -> Option<String> {
+        self.element_text("title")
+            .or_else(|| self.element_text("h1"))
+            .map(|title| normalize_link_label(&title))
+            .filter(|title| !title.is_empty())
+    }
+
+    fn fractal_meta(&self) -> BTreeMap<String, String> {
+        let mut meta = BTreeMap::new();
+
+        for element in self
+            .document
+            .select("meta[name][content]")
+            .expect("static selector should parse")
+        {
+            let attributes = element.attributes.borrow();
+            let Some(name) = attributes.get("name") else {
+                continue;
+            };
+            if !name.starts_with("fractal:") {
+                continue;
+            }
+            let Some(content) = attributes.get("content") else {
+                continue;
+            };
+
+            meta.insert(name.to_string(), content.to_string());
+        }
+
+        meta
+    }
+
+    fn notes(&self) -> Vec<NoteEntry> {
+        let selector = if self.has_notes_section() {
+            "section[data-fractal-notes] aside[data-fractal-note]"
+        } else {
+            "aside[data-fractal-note]"
+        };
+        let mut notes = Vec::new();
+
+        for element in self
+            .document
+            .select(selector)
+            .expect("static selector should parse")
+        {
+            let attributes = element.attributes.borrow();
+            let Some(id) = attributes.get("id") else {
+                continue;
+            };
+
+            let label = attributes
+                .get("data-fractal-trigger")
+                .map(str::to_string)
+                .unwrap_or_else(|| note_label_from_id(id));
+            let label = normalize_link_label(&label);
+            if label.is_empty() {
+                continue;
+            }
+
+            notes.push(NoteEntry {
+                id: id.to_string(),
+                label,
+            });
+        }
+
+        notes
+    }
+
+    fn links(&self) -> Vec<LinkEntry> {
+        let mut links = Vec::new();
+
+        for element in self
+            .document
+            .select("a[href]")
+            .expect("static selector should parse")
+        {
+            let attributes = element.attributes.borrow();
+            let Some(href) = attributes.get("href") else {
+                continue;
+            };
+
+            let text = normalize_link_label(&element.text_contents());
+            if text.is_empty() {
+                continue;
+            }
+
+            let scope = attributes
+                .get("data-fractal-link")
+                .map(str::to_string)
+                .unwrap_or_else(|| inferred_link_scope(href).to_string());
+
+            links.push(LinkEntry {
+                href: href.to_string(),
+                text,
+                scope,
+            });
+        }
+
+        links
+    }
+
+    fn element_text(&self, selector: &str) -> Option<String> {
+        self.document
+            .select_first(selector)
+            .ok()
+            .map(|element| element.text_contents())
+    }
+}
+
+fn build_project_graph(index: &ProjectIndex) -> ProjectGraph {
+    let page_paths = index
+        .pages
+        .iter()
+        .map(|page| page.path.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut note_ids = BTreeSet::new();
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+
+    for page in &index.pages {
+        nodes.push(GraphNode {
+            id: page_node_id(&page.path),
+            kind: "page".to_string(),
+            label: page.title.clone(),
+            path: Some(page.path.clone()),
+        });
+
+        for note in &page.notes {
+            let note_id = note_node_id(&page.path, &note.id);
+            note_ids.insert(note_id.clone());
+            nodes.push(GraphNode {
+                id: note_id.clone(),
+                kind: "note".to_string(),
+                label: note.label.clone(),
+                path: Some(page.path.clone()),
+            });
+            edges.push(GraphEdge {
+                from: page_node_id(&page.path),
+                to: note_id,
+                kind: "contains_note".to_string(),
+                text: Some(note.label.clone()),
+                href: Some(format!("#{}", note.id)),
+            });
+        }
+    }
+
+    for page in &index.pages {
+        for link in &page.links {
+            if let Some((target, kind)) =
+                graph_target_for_link(&page.path, link, &page_paths, &note_ids)
+            {
+                edges.push(GraphEdge {
+                    from: page_node_id(&page.path),
+                    to: target,
+                    kind: kind.to_string(),
+                    text: Some(link.text.clone()),
+                    href: Some(link.href.clone()),
+                });
+            }
+        }
+    }
+
+    nodes.sort_by(|left, right| left.id.cmp(&right.id));
+    edges.sort_by(|left, right| {
+        left.from
+            .cmp(&right.from)
+            .then_with(|| left.to.cmp(&right.to))
+            .then_with(|| left.kind.cmp(&right.kind))
+            .then_with(|| left.text.cmp(&right.text))
+            .then_with(|| left.href.cmp(&right.href))
+    });
+    edges.dedup_by(|left, right| {
+        left.from == right.from
+            && left.to == right.to
+            && left.kind == right.kind
+            && left.text == right.text
+            && left.href == right.href
+    });
+
+    let pages = build_page_graph_entries(index, &edges);
+
+    ProjectGraph {
+        version: GRAPH_VERSION,
+        nodes,
+        edges,
+        pages,
+    }
+}
+
+fn graph_target_for_link(
+    page_path: &str,
+    link: &LinkEntry,
+    page_paths: &BTreeSet<&str>,
+    note_ids: &BTreeSet<String>,
+) -> Option<(String, &'static str)> {
+    if link.scope == "note" && link.href.starts_with('#') {
+        let note_id = note_node_id(page_path, link.href.trim_start_matches('#'));
+        return note_ids
+            .contains(&note_id)
+            .then_some((note_id, "links_to_note"));
+    }
+
+    if link.scope == "external" || is_external_href(&link.href) {
+        return None;
+    }
+
+    let target_path = resolve_page_href(page_path, &link.href)?;
+    page_paths
+        .contains(target_path.as_str())
+        .then(|| (page_node_id(&target_path), "links_to_page"))
+}
+
+fn build_page_graph_entries(index: &ProjectIndex, edges: &[GraphEdge]) -> Vec<PageGraphEntry> {
+    let mut entries = index
+        .pages
+        .iter()
+        .map(|page| {
+            (
+                page.path.clone(),
+                PageGraphEntry {
+                    path: page.path.clone(),
+                    outlinks: Vec::new(),
+                    backlinks: Vec::new(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for edge in edges.iter().filter(|edge| edge.kind == "links_to_page") {
+        let Some(source) = edge.from.strip_prefix("page:") else {
+            continue;
+        };
+        let Some(target) = edge.to.strip_prefix("page:") else {
+            continue;
+        };
+        let text = edge.text.clone().unwrap_or_default();
+
+        if let Some(entry) = entries.get_mut(source) {
+            entry.outlinks.push(GraphPageLink {
+                page: target.to_string(),
+                text: text.clone(),
+            });
+        }
+
+        if let Some(entry) = entries.get_mut(target) {
+            entry.backlinks.push(GraphPageLink {
+                page: source.to_string(),
+                text,
+            });
+        }
+    }
+
+    entries
+        .into_values()
+        .map(|mut entry| {
+            entry.outlinks.sort();
+            entry.outlinks.dedup();
+            entry.backlinks.sort();
+            entry.backlinks.dedup();
+            entry
+        })
+        .collect()
+}
+
+fn page_node_id(path: &str) -> String {
+    format!("page:{path}")
+}
+
+fn note_node_id(page_path: &str, note_id: &str) -> String {
+    format!("note:{page_path}#{note_id}")
+}
+
+fn file_kind(path: &str) -> &'static str {
+    if is_html_path(path) {
+        "page"
+    } else {
+        "asset"
+    }
+}
+
+fn is_html_path(path: &str) -> bool {
+    Path::new(path).extension().and_then(|ext| ext.to_str()) == Some("html")
 }
 
 fn load_manifest(root: &Path) -> Result<ProjectManifest> {
@@ -530,13 +980,446 @@ fn render_note_aside(note_id: &str, content: &str) -> String {
     )
 }
 
+fn sync_page_links(html: &str, page_path: &str, index: &ProjectIndex) -> Result<String> {
+    let (main_start, main_end) =
+        find_element_inner_bounds(html, "main").ok_or("missing main section in page")?;
+
+    let main = unwrap_generated_links(&html[main_start..main_end]);
+    let note_candidates = note_link_candidates(html);
+    let project_candidates = project_link_candidates(index, page_path);
+    let main = link_candidates_in_html(&main, &note_candidates);
+    let main = link_candidates_in_html(&main, &project_candidates);
+
+    let mut updated = String::new();
+    updated.push_str(&html[..main_start]);
+    updated.push_str(&main);
+    updated.push_str(&html[main_end..]);
+    Ok(updated)
+}
+
+fn note_link_candidates(html: &str) -> Vec<LinkCandidate> {
+    let document = PageDocument::parse(html);
+    let mut candidates = document
+        .notes()
+        .into_iter()
+        .filter(|note| is_linkable_label(&note.label))
+        .map(|note| LinkCandidate {
+            match_text: escape_html(&note.label),
+            href: format!("#{}", note.id),
+            scope: "note",
+        })
+        .collect::<Vec<_>>();
+
+    sort_link_candidates(&mut candidates);
+    candidates
+}
+
+fn project_link_candidates(index: &ProjectIndex, current_page: &str) -> Vec<LinkCandidate> {
+    let mut seen = BTreeSet::new();
+    let mut candidates = Vec::new();
+
+    for page in &index.pages {
+        if page.path == current_page {
+            continue;
+        }
+
+        for label in [page.title.clone(), page_label_from_path(&page.path)] {
+            let label = normalize_link_label(&label);
+            if !is_linkable_label(&label) {
+                continue;
+            }
+
+            let key = label.to_ascii_lowercase();
+            if seen.insert(key) {
+                candidates.push(LinkCandidate {
+                    match_text: escape_html(&label),
+                    href: relative_href(current_page, &page.path),
+                    scope: "page",
+                });
+            }
+        }
+    }
+
+    sort_link_candidates(&mut candidates);
+    candidates
+}
+
+fn sort_link_candidates(candidates: &mut [LinkCandidate]) {
+    candidates.sort_by(|left, right| {
+        right
+            .match_text
+            .len()
+            .cmp(&left.match_text.len())
+            .then_with(|| left.match_text.cmp(&right.match_text))
+    });
+}
+
+fn inferred_link_scope(href: &str) -> &'static str {
+    if href.starts_with('#') {
+        "note"
+    } else if is_external_href(href) {
+        "external"
+    } else {
+        "page"
+    }
+}
+
+fn unwrap_generated_links(html: &str) -> String {
+    let mut output = String::new();
+    let mut offset = 0;
+
+    while let Some(start) = html[offset..].find("<a") {
+        let start = offset + start;
+        output.push_str(&html[offset..start]);
+
+        let Some(tag_end) = html[start..].find('>') else {
+            output.push_str(&html[start..]);
+            return output;
+        };
+        let tag_end = start + tag_end + 1;
+        let tag = &html[start..tag_end];
+
+        if html_tag_name(tag).as_deref() == Some("a") && tag.contains("data-fractal-link=\"") {
+            if let Some(close_start) = html[tag_end..].find("</a>") {
+                let close_start = tag_end + close_start;
+                output.push_str(&html[tag_end..close_start]);
+                offset = close_start + "</a>".len();
+                continue;
+            }
+        }
+
+        output.push_str(tag);
+        offset = tag_end;
+    }
+
+    output.push_str(&html[offset..]);
+    output
+}
+
+fn link_candidates_in_html(html: &str, candidates: &[LinkCandidate]) -> String {
+    if candidates.is_empty() {
+        return html.to_string();
+    }
+
+    let mut output = String::new();
+    let mut offset = 0;
+    let mut skip_depth = 0usize;
+
+    while let Some(tag_start) = html[offset..].find('<') {
+        let tag_start = offset + tag_start;
+        let text = &html[offset..tag_start];
+        if skip_depth == 0 {
+            output.push_str(&link_text_segment(text, candidates));
+        } else {
+            output.push_str(text);
+        }
+
+        let Some(tag_end) = html[tag_start..].find('>') else {
+            output.push_str(&html[tag_start..]);
+            return output;
+        };
+        let tag_end = tag_start + tag_end + 1;
+        let tag = &html[tag_start..tag_end];
+        output.push_str(tag);
+        update_link_skip_depth(tag, &mut skip_depth);
+        offset = tag_end;
+    }
+
+    let text = &html[offset..];
+    if skip_depth == 0 {
+        output.push_str(&link_text_segment(text, candidates));
+    } else {
+        output.push_str(text);
+    }
+
+    output
+}
+
+fn link_text_segment(text: &str, candidates: &[LinkCandidate]) -> String {
+    let mut ranges = Vec::new();
+
+    for candidate in candidates {
+        let mut search_start = 0;
+        while let Some(start) = find_case_insensitive(text, &candidate.match_text, search_start) {
+            let end = start + candidate.match_text.len();
+            if is_phrase_boundary(text, start, end)
+                && !ranges_overlap(&ranges, start, end)
+                && !is_inside_html_entity(text, start, end)
+            {
+                ranges.push(LinkRange {
+                    start,
+                    end,
+                    candidate: candidate.clone(),
+                });
+                search_start = end;
+            } else {
+                search_start = start + 1;
+            }
+        }
+    }
+
+    if ranges.is_empty() {
+        return text.to_string();
+    }
+
+    ranges.sort_by_key(|range| range.start);
+
+    let mut output = String::new();
+    let mut offset = 0;
+    for range in ranges {
+        output.push_str(&text[offset..range.start]);
+        output.push_str(&format!(
+            "<a href=\"{}\" data-fractal-link=\"{}\">{}</a>",
+            escape_html(&range.candidate.href),
+            escape_html(range.candidate.scope),
+            &text[range.start..range.end]
+        ));
+        offset = range.end;
+    }
+    output.push_str(&text[offset..]);
+    output
+}
+
+fn find_case_insensitive(haystack: &str, needle: &str, start: usize) -> Option<usize> {
+    if needle.is_empty() || start > haystack.len() || needle.len() > haystack.len() {
+        return None;
+    }
+
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    for index in start..=haystack.len() - needle.len() {
+        let end = index + needle.len();
+        if !haystack.is_char_boundary(index) || !haystack.is_char_boundary(end) {
+            continue;
+        }
+
+        if haystack_bytes[index..end].eq_ignore_ascii_case(needle_bytes) {
+            return Some(index);
+        }
+    }
+
+    None
+}
+
+fn ranges_overlap(ranges: &[LinkRange], start: usize, end: usize) -> bool {
+    ranges
+        .iter()
+        .any(|range| start < range.end && end > range.start)
+}
+
+fn is_phrase_boundary(text: &str, start: usize, end: usize) -> bool {
+    let previous = text[..start].chars().next_back();
+    let next = text[end..].chars().next();
+
+    !previous.map(is_link_word_character).unwrap_or(false)
+        && !next.map(is_link_word_character).unwrap_or(false)
+}
+
+fn is_link_word_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '_'
+}
+
+fn is_inside_html_entity(text: &str, start: usize, end: usize) -> bool {
+    let Some(entity_start) = text[..start].rfind('&') else {
+        return false;
+    };
+    if text[..start]
+        .rfind(';')
+        .map(|semicolon| semicolon > entity_start)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    text[end..]
+        .find(';')
+        .map(|semicolon| {
+            let entity = &text[entity_start..end + semicolon + 1];
+            !entity.contains(char::is_whitespace)
+        })
+        .unwrap_or(false)
+}
+
+fn update_link_skip_depth(tag: &str, skip_depth: &mut usize) {
+    let Some(name) = html_tag_name(tag) else {
+        return;
+    };
+    if !matches!(
+        name.as_str(),
+        "a" | "code" | "pre" | "script" | "style" | "textarea"
+    ) {
+        return;
+    }
+
+    if is_closing_tag(tag) {
+        *skip_depth = skip_depth.saturating_sub(1);
+    } else if !is_self_closing_tag(tag) {
+        *skip_depth += 1;
+    }
+}
+
+fn find_element_inner_bounds(html: &str, element: &str) -> Option<(usize, usize)> {
+    let open_pattern = format!("<{element}");
+    let open_start = html.find(&open_pattern)?;
+    let open_end = html[open_start..].find('>')? + open_start + 1;
+    let close_pattern = format!("</{element}>");
+    let close_start = html[open_end..].find(&close_pattern)? + open_end;
+
+    Some((open_end, close_start))
+}
+
+fn html_tag_name(tag: &str) -> Option<String> {
+    let inner = tag
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .trim()
+        .trim_end_matches('/')
+        .trim();
+    if inner.starts_with('!') || inner.starts_with('?') {
+        return None;
+    }
+
+    let inner = inner.strip_prefix('/').unwrap_or(inner).trim_start();
+    let name = inner
+        .chars()
+        .take_while(|character| character.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+fn is_closing_tag(tag: &str) -> bool {
+    tag.trim_start_matches('<').trim_start().starts_with('/')
+}
+
+fn is_self_closing_tag(tag: &str) -> bool {
+    tag.trim_end().ends_with("/>")
+}
+
+fn note_label_from_id(note_id: &str) -> String {
+    note_id
+        .strip_prefix("note-")
+        .unwrap_or(note_id)
+        .replace('-', " ")
+}
+
+fn page_label_from_path(path: &str) -> String {
+    Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| stem.replace('-', " ").replace('_', " "))
+        .map(|stem| normalize_link_label(&stem))
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| path.to_string())
+}
+
+fn normalize_link_label(label: &str) -> String {
+    label.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn is_linkable_label(label: &str) -> bool {
+    label
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .count()
+        >= 2
+}
+
+fn relative_href(from_page: &str, target_page: &str) -> String {
+    let mut from_parts = from_page.split('/').collect::<Vec<_>>();
+    if !from_parts.is_empty() {
+        from_parts.pop();
+    }
+
+    let target_parts = target_page.split('/').collect::<Vec<_>>();
+    let mut common = 0;
+    while common < from_parts.len()
+        && common < target_parts.len()
+        && from_parts[common] == target_parts[common]
+    {
+        common += 1;
+    }
+
+    let mut href_parts = Vec::new();
+    for _ in common..from_parts.len() {
+        href_parts.push("..");
+    }
+    href_parts.extend(target_parts[common..].iter().copied());
+
+    if href_parts.is_empty() {
+        target_page.to_string()
+    } else {
+        href_parts.join("/")
+    }
+}
+
+fn resolve_page_href(from_page: &str, href: &str) -> Option<String> {
+    if href.starts_with('#') {
+        return Some(from_page.to_string());
+    }
+    if is_external_href(href) || href.starts_with('/') {
+        return None;
+    }
+
+    let href_without_fragment = href.split('#').next().unwrap_or(href);
+    let href_path = href_without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(href_without_fragment);
+    if href_path.is_empty() {
+        return Some(from_page.to_string());
+    }
+
+    let base = Path::new(from_page).parent().unwrap_or_else(|| Path::new(""));
+    normalize_project_relative_path(&base.join(href_path))
+}
+
+fn normalize_project_relative_path(path: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_str()?.to_string()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+fn is_external_href(href: &str) -> bool {
+    href.contains("://") || href.starts_with("mailto:") || href.starts_with("tel:")
+}
+
+#[derive(Clone)]
+struct LinkCandidate {
+    match_text: String,
+    href: String,
+    scope: &'static str,
+}
+
+struct LinkRange {
+    start: usize,
+    end: usize,
+    candidate: LinkCandidate,
+}
+
 fn validate_page_metadata(page: &Path) -> Result<()> {
-    let html = fs::read_to_string(page)?;
-    if find_notes_section_bounds(&html).is_none() {
+    let document = PageDocument::from_path(page)?;
+    if !document.has_notes_section() {
         return Err(format!("missing notes section in {}", page.display()).into());
     }
 
-    let meta = extract_fractal_meta_tags(page)?;
+    let meta = document.fractal_meta();
 
     for (name, content) in required_meta_tags() {
         if meta.get(name).map(|value| value.as_str()) != Some(content) {
@@ -552,7 +1435,7 @@ fn validate_page_metadata(page: &Path) -> Result<()> {
 fn fix_page(page: &Path, page_path: &str, theme: Theme) -> Result<()> {
     let mut html = fs::read_to_string(page)?;
     let mut changed = false;
-    let meta = extract_fractal_meta_tags(page)?;
+    let meta = PageDocument::parse(&html).fractal_meta();
 
     for (name, content) in required_meta_tags() {
         if !meta.contains_key(name) {
@@ -580,16 +1463,13 @@ fn fix_page(page: &Path, page_path: &str, theme: Theme) -> Result<()> {
 
     let body_theme = format!("data-fractal-theme=\"{}\"", theme.as_str());
     if !html.contains("data-fractal-theme=") {
-        if let Some(body_start) = html.find("<body>") {
-            html.replace_range(
-                body_start..body_start + "<body>".len(),
-                &format!("<body {body_theme}>"),
-            );
+        if let Some(updated) = insert_body_attribute(&html, &body_theme) {
+            html = updated;
             changed = true;
         }
     }
 
-    if find_notes_section_bounds(&html).is_none() {
+    if !PageDocument::parse(&html).has_notes_section() {
         html =
             insert_before_body_close(&html, "    <section data-fractal-notes>\n    </section>\n")?;
         changed = true;
@@ -604,7 +1484,7 @@ fn fix_page(page: &Path, page_path: &str, theme: Theme) -> Result<()> {
 }
 
 fn insert_before_head_close(html: &str, insertion: &str) -> Result<String> {
-    let Some(index) = html.find("  </head>") else {
+    let Some(index) = find_case_insensitive(html, "</head>", 0) else {
         return Err("missing head close tag in page".into());
     };
 
@@ -616,7 +1496,7 @@ fn insert_before_head_close(html: &str, insertion: &str) -> Result<String> {
 }
 
 fn insert_before_body_close(html: &str, insertion: &str) -> Result<String> {
-    let Some(index) = html.find("  </body>") else {
+    let Some(index) = find_case_insensitive(html, "</body>", 0) else {
         return Err("missing body close tag in page".into());
     };
 
@@ -627,51 +1507,24 @@ fn insert_before_body_close(html: &str, insertion: &str) -> Result<String> {
     Ok(updated)
 }
 
+fn insert_body_attribute(html: &str, attribute: &str) -> Option<String> {
+    let body_start = find_case_insensitive(html, "<body", 0)?;
+    let body_end = html[body_start..].find('>')? + body_start;
+
+    let mut updated = String::new();
+    updated.push_str(&html[..body_end]);
+    updated.push(' ');
+    updated.push_str(attribute);
+    updated.push_str(&html[body_end..]);
+    Some(updated)
+}
+
 fn required_meta_tags() -> [(&'static str, &'static str); 3] {
     [
         ("fractal:version", DEFAULT_VERSION),
         ("fractal:summary", DEFAULT_SUMMARY),
         ("fractal:tags", DEFAULT_TAGS),
     ]
-}
-
-fn extract_fractal_meta_tags(page: &Path) -> Result<BTreeMap<String, String>> {
-    let html = fs::read_to_string(page)?;
-    let mut meta = BTreeMap::new();
-    let mut remaining = html.as_str();
-
-    while let Some(start) = remaining.find("<meta") {
-        remaining = &remaining[start..];
-        let Some(end) = remaining.find('>') else {
-            break;
-        };
-
-        let tag = &remaining[..=end];
-        remaining = &remaining[end + 1..];
-
-        let Some(name) = extract_meta_attribute(tag, "name") else {
-            continue;
-        };
-        if !name.starts_with("fractal:") {
-            continue;
-        }
-
-        let Some(content) = extract_meta_attribute(tag, "content") else {
-            continue;
-        };
-
-        meta.insert(name, content);
-    }
-
-    Ok(meta)
-}
-
-fn extract_meta_attribute(tag: &str, attribute: &str) -> Option<String> {
-    let pattern = format!("{attribute}=\"");
-    let start = tag.find(&pattern)? + pattern.len();
-    let rest = &tag[start..];
-    let end = rest.find('"')?;
-    Some(unescape_html(&rest[..end]))
 }
 
 fn render_page_document(title: &str, body: &str, theme: Theme, stylesheet_href: String) -> String {
@@ -934,11 +1787,14 @@ fn unescape_html(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        add_note, collect_page_paths, escape_html, export_page, extract_fractal_meta_tags,
-        html_to_markdown, import_markdown, markdown_to_html, new_page, note_id_from_trigger,
-        patch_note, remove_note, render_page_document, resolve_page_destination, stylesheet_href,
-        validate_page_metadata, validate_project, PageEntry, ProjectIndex, ProjectManifest, Theme,
+        add_note, collect_page_paths, escape_html, export_page, html_to_markdown,
+        import_markdown, insert_note_into_document, markdown_to_html, new_page,
+        note_id_from_trigger, patch_note, remove_note, render_note_aside, render_page_document,
+        resolve_page_destination, stylesheet_href, sync_project, validate_page_metadata,
+        validate_project, FileEntry, GraphPageLink, LinkEntry, NoteEntry, PageDocument,
+        PageEntry, ProjectGraph, ProjectIndex, ProjectManifest, Theme,
     };
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -949,6 +1805,22 @@ mod tests {
             .expect("time should move forward")
             .as_nanos();
         std::env::temp_dir().join(format!("fractal-{name}-{unique}"))
+    }
+
+    fn required_meta() -> BTreeMap<String, String> {
+        [
+            (
+                "fractal:summary".to_string(),
+                "Short page summary here.".to_string(),
+            ),
+            (
+                "fractal:tags".to_string(),
+                "rust, graphs, parsing".to_string(),
+            ),
+            ("fractal:version".to_string(), "0.1".to_string()),
+        ]
+        .into_iter()
+        .collect()
     }
 
     #[test]
@@ -1130,6 +2002,42 @@ mod tests {
     }
 
     #[test]
+    fn validate_ignores_non_html_files_under_pages() {
+        let root = temp_dir("validate-assets");
+        let pages_dir = root.join("pages");
+        let workspace_dir = root.join(".fractal");
+        fs::create_dir_all(&pages_dir).expect("create pages dir");
+        fs::create_dir_all(&workspace_dir).expect("create workspace dir");
+        fs::write(workspace_dir.join("style.css"), "").expect("write stylesheet");
+        fs::write(
+            root.join("fractal.json"),
+            serde_json::to_string_pretty(&ProjectManifest {
+                project_name: "test".to_string(),
+                version: 1,
+                default_page: "pages/index.html".to_string(),
+                theme: Theme::Dark,
+            })
+            .expect("serialize manifest"),
+        )
+        .expect("write manifest");
+        fs::write(
+            pages_dir.join("index.html"),
+            render_page_document(
+                "index",
+                "<p>body</p>",
+                Theme::Dark,
+                "../.fractal/style.css".to_string(),
+            ),
+        )
+        .expect("write index page");
+        fs::write(pages_dir.join("asset.txt"), "asset").expect("write asset");
+
+        validate_project(&root, false).expect("validate project");
+
+        fs::remove_dir_all(&root).expect("cleanup temp dir");
+    }
+
+    #[test]
     fn page_destination_is_relative_to_pages_root() {
         let destination = resolve_page_destination(Path::new("."), Path::new("nested/secondpage"))
             .expect("resolve destination");
@@ -1194,39 +2102,34 @@ mod tests {
         .expect("parse index");
 
         assert_eq!(
+            index.files,
+            vec![
+                FileEntry {
+                    path: "index.html".to_string(),
+                    kind: "page".to_string(),
+                },
+                FileEntry {
+                    path: "secondpage.html".to_string(),
+                    kind: "page".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
             index.pages,
             vec![
                 PageEntry {
                     path: "index.html".to_string(),
-                    meta: [
-                        (
-                            "fractal:summary".to_string(),
-                            "Short page summary here.".to_string()
-                        ),
-                        (
-                            "fractal:tags".to_string(),
-                            "rust, graphs, parsing".to_string()
-                        ),
-                        ("fractal:version".to_string(), "0.1".to_string()),
-                    ]
-                    .into_iter()
-                    .collect(),
+                    title: "index".to_string(),
+                    meta: required_meta(),
+                    notes: vec![],
+                    links: vec![],
                 },
                 PageEntry {
                     path: "secondpage.html".to_string(),
-                    meta: [
-                        (
-                            "fractal:summary".to_string(),
-                            "Short page summary here.".to_string()
-                        ),
-                        (
-                            "fractal:tags".to_string(),
-                            "rust, graphs, parsing".to_string()
-                        ),
-                        ("fractal:version".to_string(), "0.1".to_string()),
-                    ]
-                    .into_iter()
-                    .collect(),
+                    title: "secondpage".to_string(),
+                    meta: required_meta(),
+                    notes: vec![],
+                    links: vec![],
                 }
             ]
         );
@@ -1245,7 +2148,9 @@ mod tests {
         )
         .expect("write page");
 
-        let meta = extract_fractal_meta_tags(&page).expect("extract meta");
+        let meta = PageDocument::from_path(&page)
+            .expect("parse page")
+            .fractal_meta();
 
         assert_eq!(
             meta,
@@ -1266,6 +2171,55 @@ mod tests {
         );
 
         fs::remove_dir_all(&root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn page_document_extracts_from_ordinary_html_formatting() {
+        let document = PageDocument::parse(
+            r#"<!doctype html>
+<html>
+  <head>
+    <META NAME='fractal:version' CONTENT='0.1'>
+    <meta content='Summary &amp; detail' name='fractal:summary'>
+    <title>Flexible   Page</title>
+  </head>
+  <body>
+    <main>
+      <p><a HREF='topic.html'><strong>Topic</strong></a></p>
+    </main>
+    <section data-fractal-notes>
+      <aside data-fractal-note id='note-java' data-fractal-trigger='Java language'></aside>
+    </section>
+  </body>
+</html>"#,
+        );
+
+        assert!(document.has_notes_section());
+        assert_eq!(document.title(), Some("Flexible Page".to_string()));
+        assert_eq!(
+            document.fractal_meta(),
+            [
+                ("fractal:summary".to_string(), "Summary & detail".to_string()),
+                ("fractal:version".to_string(), "0.1".to_string()),
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert_eq!(
+            document.notes(),
+            vec![NoteEntry {
+                id: "note-java".to_string(),
+                label: "Java language".to_string(),
+            }]
+        );
+        assert_eq!(
+            document.links(),
+            vec![LinkEntry {
+                href: "topic.html".to_string(),
+                text: "Topic".to_string(),
+                scope: "page".to_string(),
+            }]
+        );
     }
 
     #[test]
@@ -1379,6 +2333,186 @@ mod tests {
         let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
         assert!(!html.contains("note-java"));
         assert!(html.contains("<section data-fractal-notes>"));
+
+        fs::remove_dir_all(&root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn sync_rebuilds_index_and_links_notes_before_project_pages() {
+        let root = temp_dir("sync-links");
+        let pages_dir = root.join("pages");
+        let workspace_dir = root.join(".fractal");
+        fs::create_dir_all(&pages_dir).expect("create pages dir");
+        fs::create_dir_all(&workspace_dir).expect("create workspace dir");
+        fs::write(
+            root.join("fractal.json"),
+            serde_json::to_string_pretty(&ProjectManifest {
+                project_name: "test".to_string(),
+                version: 1,
+                default_page: "pages/index.html".to_string(),
+                theme: Theme::Dark,
+            })
+            .expect("serialize manifest"),
+        )
+        .expect("write manifest");
+
+        let index = render_page_document(
+            "Home",
+            "<p>Java and Rust are mentioned here.</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        );
+        let index = insert_note_into_document(&index, &render_note_aside("note-java", "note body"))
+            .expect("insert note");
+        fs::write(pages_dir.join("index.html"), index).expect("write index page");
+        fs::write(
+            pages_dir.join("rust.html"),
+            render_page_document(
+                "Rust",
+                "<p>Home mentions Java.</p>",
+                Theme::Dark,
+                "../.fractal/style.css".to_string(),
+            ),
+        )
+        .expect("write rust page");
+        fs::write(pages_dir.join("asset.txt"), "asset").expect("write asset");
+
+        sync_project(&root).expect("sync project");
+        sync_project(&root).expect("sync project twice");
+
+        let html = fs::read_to_string(pages_dir.join("index.html")).expect("read index page");
+        assert_eq!(html.matches("data-fractal-link=\"note\"").count(), 1);
+        assert_eq!(html.matches("data-fractal-link=\"page\"").count(), 1);
+        assert!(html.contains("<a href=\"#note-java\" data-fractal-link=\"note\">Java</a>"));
+        assert!(html.contains("<a href=\"rust.html\" data-fractal-link=\"page\">Rust</a>"));
+
+        let index: ProjectIndex = serde_json::from_str(
+            &fs::read_to_string(workspace_dir.join("index.json")).expect("read index"),
+        )
+        .expect("parse index");
+        assert_eq!(
+            index.files,
+            vec![
+                FileEntry {
+                    path: "asset.txt".to_string(),
+                    kind: "asset".to_string(),
+                },
+                FileEntry {
+                    path: "index.html".to_string(),
+                    kind: "page".to_string(),
+                },
+                FileEntry {
+                    path: "rust.html".to_string(),
+                    kind: "page".to_string(),
+                },
+            ]
+        );
+        assert_eq!(
+            index.pages[0].notes,
+            vec![NoteEntry {
+                id: "note-java".to_string(),
+                label: "java".to_string(),
+            }]
+        );
+        assert_eq!(
+            index.pages[0].links,
+            vec![
+                LinkEntry {
+                    href: "#note-java".to_string(),
+                    text: "Java".to_string(),
+                    scope: "note".to_string(),
+                },
+                LinkEntry {
+                    href: "rust.html".to_string(),
+                    text: "Rust".to_string(),
+                    scope: "page".to_string(),
+                },
+            ]
+        );
+
+        let graph: ProjectGraph = serde_json::from_str(
+            &fs::read_to_string(workspace_dir.join("graph.json")).expect("read graph"),
+        )
+        .expect("parse graph");
+        assert!(graph.nodes.iter().any(|node| node.id == "page:index.html"));
+        assert!(graph.nodes.iter().any(|node| node.id == "page:rust.html"));
+        assert!(graph
+            .nodes
+            .iter()
+            .any(|node| node.id == "note:index.html#note-java"));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == "page:index.html"
+                && edge.to == "note:index.html#note-java"
+                && edge.kind == "links_to_note"
+        }));
+
+        let index_page_graph = graph
+            .pages
+            .iter()
+            .find(|page| page.path == "index.html")
+            .expect("index page graph");
+        assert_eq!(
+            index_page_graph.outlinks,
+            vec![GraphPageLink {
+                page: "rust.html".to_string(),
+                text: "Rust".to_string(),
+            }]
+        );
+        assert_eq!(
+            index_page_graph.backlinks,
+            vec![GraphPageLink {
+                page: "rust.html".to_string(),
+                text: "Home".to_string(),
+            }]
+        );
+
+        fs::remove_dir_all(&root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn sync_uses_relative_links_from_nested_pages() {
+        let root = temp_dir("sync-nested-links");
+        let pages_dir = root.join("pages");
+        let workspace_dir = root.join(".fractal");
+        fs::create_dir_all(pages_dir.join("folder")).expect("create pages dir");
+        fs::create_dir_all(&workspace_dir).expect("create workspace dir");
+        fs::write(
+            root.join("fractal.json"),
+            serde_json::to_string_pretty(&ProjectManifest {
+                project_name: "test".to_string(),
+                version: 1,
+                default_page: "pages/index.html".to_string(),
+                theme: Theme::Dark,
+            })
+            .expect("serialize manifest"),
+        )
+        .expect("write manifest");
+        fs::write(
+            pages_dir.join("index.html"),
+            render_page_document(
+                "Home",
+                "<p>Nested Topic lives elsewhere.</p>",
+                Theme::Dark,
+                "../.fractal/style.css".to_string(),
+            ),
+        )
+        .expect("write index page");
+        fs::write(
+            pages_dir.join("folder/topic.html"),
+            render_page_document(
+                "Nested Topic",
+                "<p>Home is the default page.</p>",
+                Theme::Dark,
+                "../../.fractal/style.css".to_string(),
+            ),
+        )
+        .expect("write nested page");
+
+        sync_project(&root).expect("sync project");
+
+        let nested =
+            fs::read_to_string(pages_dir.join("folder/topic.html")).expect("read nested page");
+        assert!(nested.contains("<a href=\"../index.html\" data-fractal-link=\"page\">Home</a>"));
 
         fs::remove_dir_all(&root).expect("cleanup temp dir");
     }

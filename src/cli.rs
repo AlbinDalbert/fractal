@@ -1,6 +1,6 @@
 use crate::project::{
     add_note, build_index, export_page, import_markdown, init_project, new_page, patch_note,
-    remove_note, validate_project,
+    remove_note, sync_project, validate_project,
 };
 use crate::Result;
 use clap::{Parser, Subcommand};
@@ -44,6 +44,8 @@ enum Command {
         #[command(subcommand)]
         command: IndexCommand,
     },
+    /// Rebuild the project index and sync inferred links across pages.
+    Sync,
     /// Manage pages in the project.
     Page {
         #[arg(required = true)]
@@ -88,6 +90,7 @@ pub fn run() -> Result<()> {
         Command::Index { command } => match command {
             IndexCommand::Build => build_index("."),
         },
+        Command::Sync => sync_project("."),
         Command::Page { args } => match parse_page_command(args)? {
             ParsedPageCommand::New { path } => new_page(".", &path),
             ParsedPageCommand::NoteAdd {
