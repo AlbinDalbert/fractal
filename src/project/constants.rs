@@ -8,4 +8,6 @@ pub(super) const INDEX_PAGE: &str = "index.html";
 pub(super) const DEFAULT_VERSION: &str = "0.1";
 pub(super) const DEFAULT_SUMMARY: &str = "Short page summary here.";
 pub(super) const DEFAULT_TAGS: &str = "rust, graphs, parsing";
+pub(super) const MANIFEST_VERSION: u32 = 1;
+pub(super) const INDEX_VERSION: u32 = 1;
 pub(super) const GRAPH_VERSION: u32 = 1;

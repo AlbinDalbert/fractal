@@ -1,3 +1,4 @@
+use super::constants::{GRAPH_VERSION, INDEX_VERSION, MANIFEST_VERSION};
 use super::document::PageDocument;
 use super::graph::{graph_orphans_report, graph_page_report};
 use super::html::escape_html;
@@ -45,7 +46,7 @@ fn write_test_manifest(root: &Path) {
         root.join("fractal.json"),
         serde_json::to_string_pretty(&ProjectManifest {
             project_name: "test".to_string(),
-            version: 1,
+            version: MANIFEST_VERSION,
             default_page: "pages/index.html".to_string(),
             theme: Theme::Dark,
         })
@@ -59,7 +60,7 @@ fn write_test_graph(root: &Path, pages: Vec<PageGraphEntry>) {
     fs::write(
         root.join(".fractal").join("graph.json"),
         serde_json::to_string_pretty(&ProjectGraph {
-            version: 1,
+            version: GRAPH_VERSION,
             nodes: Vec::new(),
             edges: Vec::new(),
             pages,
@@ -146,6 +147,34 @@ fn html_export_converts_basic_blocks_to_markdown() {
 }
 
 #[test]
+fn html_export_reads_ordinary_html_formatting() {
+    let html = r#"<!doctype html>
+<HTML>
+  <BODY>
+    <MAIN class="content">
+      <H1>Flexible <em>Title</em></H1>
+      <p>
+        Intro <a href="topic.html">link</a> &amp; more
+      </p>
+      <section>
+        <h2>Nested Section</h2>
+        <p><strong>Body</strong> text</p>
+      </section>
+    </MAIN>
+    <section data-fractal-notes>
+      <aside id="note-ignore" data-fractal-note><p>Ignore me</p></aside>
+    </section>
+  </BODY>
+</HTML>
+"#;
+
+    assert_eq!(
+        html_to_markdown(html),
+        "# Flexible Title\n\nIntro link & more\n\n## Nested Section\n\nBody text"
+    );
+}
+
+#[test]
 fn import_and_export_markdown_files() {
     let root = temp_dir("markdown-io");
     let pages_dir = root.join("pages");
@@ -156,7 +185,7 @@ fn import_and_export_markdown_files() {
         root.join("fractal.json"),
         serde_json::to_string_pretty(&ProjectManifest {
             project_name: "test".to_string(),
-            version: 1,
+            version: MANIFEST_VERSION,
             default_page: "pages/index.html".to_string(),
             theme: Theme::Dark,
         })
@@ -267,6 +296,28 @@ fn validate_page_metadata_rejects_malformed_note_ids() {
 }
 
 #[test]
+fn validate_rejects_unsupported_manifest_version() {
+    let root = temp_dir("manifest-version");
+    fs::create_dir_all(&root).expect("create temp dir");
+    fs::write(
+        root.join("fractal.json"),
+        serde_json::to_string_pretty(&ProjectManifest {
+            project_name: "test".to_string(),
+            version: MANIFEST_VERSION + 1,
+            default_page: "pages/index.html".to_string(),
+            theme: Theme::Dark,
+        })
+        .expect("serialize manifest"),
+    )
+    .expect("write manifest");
+
+    let error = validate_project(&root, false).expect_err("unsupported manifest should fail");
+    assert!(error.to_string().contains("unsupported manifest version"));
+
+    fs::remove_dir_all(&root).expect("cleanup temp dir");
+}
+
+#[test]
 fn validate_fix_repairs_missing_project_scaffold_and_page_markers() {
     let root = temp_dir("validate-fix");
     let pages_dir = root.join("pages");
@@ -275,7 +326,7 @@ fn validate_fix_repairs_missing_project_scaffold_and_page_markers() {
         root.join("fractal.json"),
         serde_json::to_string_pretty(&ProjectManifest {
             project_name: "test".to_string(),
-            version: 1,
+            version: MANIFEST_VERSION,
             default_page: "pages/index.html".to_string(),
             theme: Theme::Dark,
         })
@@ -292,10 +343,14 @@ fn validate_fix_repairs_missing_project_scaffold_and_page_markers() {
 
     assert!(root.join(".fractal/style.css").is_file());
     let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
-    assert!(html.contains("<meta name=\"fractal:version\" content=\"0.1\" />"));
-    assert!(html.contains("<link rel=\"stylesheet\" href=\"../.fractal/style.css\">"));
+    let document = PageDocument::parse(&html);
+    assert_eq!(document.fractal_meta(), required_meta());
+    assert!(document
+        .document
+        .select_first("link[rel=\"stylesheet\"][href=\"../.fractal/style.css\"]")
+        .is_ok());
     assert!(html.contains("<body data-fractal-theme=\"dark\">"));
-    assert!(html.contains("<section data-fractal-notes>"));
+    assert_eq!(document.notes_section_count(), 1);
 
     fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
@@ -365,7 +420,7 @@ fn validate_ignores_non_html_files_under_pages() {
         root.join("fractal.json"),
         serde_json::to_string_pretty(&ProjectManifest {
             project_name: "test".to_string(),
-            version: 1,
+            version: MANIFEST_VERSION,
             default_page: "pages/index.html".to_string(),
             theme: Theme::Dark,
         })
@@ -428,7 +483,7 @@ fn new_page_rebuilds_index() {
         root.join("fractal.json"),
         serde_json::to_string_pretty(&ProjectManifest {
             project_name: "test".to_string(),
-            version: 1,
+            version: MANIFEST_VERSION,
             default_page: "pages/index.html".to_string(),
             theme: Theme::Dark,
         })
@@ -453,6 +508,7 @@ fn new_page_rebuilds_index() {
     )
     .expect("parse index");
 
+    assert_eq!(index.version, INDEX_VERSION);
     assert_eq!(
         index.files,
         vec![
@@ -588,7 +644,7 @@ fn add_note_creates_notes_section_in_requested_page() {
         root.join("fractal.json"),
         serde_json::to_string_pretty(&ProjectManifest {
             project_name: "test".to_string(),
-            version: 1,
+            version: MANIFEST_VERSION,
             default_page: "pages/index.html".to_string(),
             theme: Theme::Dark,
         })
@@ -634,7 +690,7 @@ fn patch_note_updates_existing_note() {
         root.join("fractal.json"),
         serde_json::to_string_pretty(&ProjectManifest {
             project_name: "test".to_string(),
-            version: 1,
+            version: MANIFEST_VERSION,
             default_page: "pages/index.html".to_string(),
             theme: Theme::Dark,
         })
@@ -673,7 +729,7 @@ fn remove_note_keeps_empty_note_section() {
         root.join("fractal.json"),
         serde_json::to_string_pretty(&ProjectManifest {
             project_name: "test".to_string(),
-            version: 1,
+            version: MANIFEST_VERSION,
             default_page: "pages/index.html".to_string(),
             theme: Theme::Dark,
         })
@@ -762,7 +818,7 @@ fn sync_rebuilds_index_and_links_notes_before_project_pages() {
         root.join("fractal.json"),
         serde_json::to_string_pretty(&ProjectManifest {
             project_name: "test".to_string(),
-            version: 1,
+            version: MANIFEST_VERSION,
             default_page: "pages/index.html".to_string(),
             theme: Theme::Dark,
         })
@@ -797,13 +853,23 @@ fn sync_rebuilds_index_and_links_notes_before_project_pages() {
     let html = fs::read_to_string(pages_dir.join("index.html")).expect("read index page");
     assert_eq!(html.matches("data-fractal-link=\"note\"").count(), 1);
     assert_eq!(html.matches("data-fractal-link=\"page\"").count(), 1);
-    assert!(html.contains("<a href=\"#note-java\" data-fractal-link=\"note\">Java</a>"));
-    assert!(html.contains("<a href=\"rust.html\" data-fractal-link=\"page\">Rust</a>"));
+    let links = PageDocument::parse(&html).links();
+    assert!(links.contains(&LinkEntry {
+        href: "#note-java".to_string(),
+        text: "Java".to_string(),
+        scope: "note".to_string(),
+    }));
+    assert!(links.contains(&LinkEntry {
+        href: "rust.html".to_string(),
+        text: "Rust".to_string(),
+        scope: "page".to_string(),
+    }));
 
     let index: ProjectIndex = serde_json::from_str(
         &fs::read_to_string(workspace_dir.join("index.json")).expect("read index"),
     )
     .expect("parse index");
+    assert_eq!(index.version, INDEX_VERSION);
     assert_eq!(
         index.files,
         vec![
@@ -884,6 +950,75 @@ fn sync_rebuilds_index_and_links_notes_before_project_pages() {
 }
 
 #[test]
+fn sync_links_ordinary_html_without_touching_manual_or_code_links() {
+    let root = temp_dir("sync-ordinary-html");
+    let pages_dir = root.join("pages");
+    let workspace_dir = root.join(".fractal");
+    fs::create_dir_all(&pages_dir).expect("create pages dir");
+    fs::create_dir_all(&workspace_dir).expect("create workspace dir");
+    write_test_manifest(&root);
+    fs::write(
+        pages_dir.join("index.html"),
+        r#"<!doctype html>
+<HTML lang="en">
+  <HEAD>
+    <TITLE>Home</TITLE>
+    <meta content="0.1" name="fractal:version">
+    <meta content="Short page summary here." name="fractal:summary">
+    <meta content="rust, graphs, parsing" name="fractal:tags">
+  </HEAD>
+  <BODY>
+    <MAIN>
+      <p><a href="manual.html">Manual Rust</a> mentions Java, <code>Rust</code>, and <span>Rust</span>.</p>
+      <p><a href="old.html" data-fractal-link="page">Rust</a> was generated before.</p>
+    </MAIN>
+    <section data-fractal-notes>
+      <aside data-fractal-note id="note-java"><p>note body</p></aside>
+    </section>
+  </BODY>
+</HTML>
+"#,
+    )
+    .expect("write index page");
+    fs::write(
+        pages_dir.join("rust.html"),
+        render_page_document(
+            "Rust",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    )
+    .expect("write rust page");
+
+    sync_project(&root).expect("sync project");
+
+    let html = fs::read_to_string(pages_dir.join("index.html")).expect("read index page");
+    let links = PageDocument::parse(&html).links();
+    assert!(links.contains(&LinkEntry {
+        href: "manual.html".to_string(),
+        text: "Manual Rust".to_string(),
+        scope: "page".to_string(),
+    }));
+    assert!(links.contains(&LinkEntry {
+        href: "#note-java".to_string(),
+        text: "Java".to_string(),
+        scope: "note".to_string(),
+    }));
+    assert_eq!(
+        links
+            .iter()
+            .filter(|link| link.href == "rust.html" && link.text == "Rust")
+            .count(),
+        2
+    );
+    assert!(!links.iter().any(|link| link.href == "old.html"));
+    assert!(html.contains("<code>Rust</code>"));
+
+    fs::remove_dir_all(&root).expect("cleanup temp dir");
+}
+
+#[test]
 fn graph_page_report_shows_backlinks_and_outlinks() {
     let root = temp_dir("graph-page-report");
     fs::create_dir_all(&root).expect("create temp dir");
@@ -947,6 +1082,30 @@ fn graph_orphans_report_lists_pages_with_no_backlinks() {
 }
 
 #[test]
+fn graph_reports_reject_unsupported_graph_version() {
+    let root = temp_dir("graph-version");
+    fs::create_dir_all(&root).expect("create temp dir");
+    write_test_manifest(&root);
+    fs::create_dir_all(root.join(".fractal")).expect("create workspace dir");
+    fs::write(
+        root.join(".fractal").join("graph.json"),
+        serde_json::to_string_pretty(&ProjectGraph {
+            version: GRAPH_VERSION + 1,
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            pages: Vec::new(),
+        })
+        .expect("serialize graph"),
+    )
+    .expect("write graph");
+
+    let error = graph_orphans_report(&root).expect_err("unsupported graph should fail");
+    assert!(error.to_string().contains("unsupported graph version"));
+
+    fs::remove_dir_all(&root).expect("cleanup temp dir");
+}
+
+#[test]
 fn sync_uses_relative_links_from_nested_pages() {
     let root = temp_dir("sync-nested-links");
     let pages_dir = root.join("pages");
@@ -957,7 +1116,7 @@ fn sync_uses_relative_links_from_nested_pages() {
         root.join("fractal.json"),
         serde_json::to_string_pretty(&ProjectManifest {
             project_name: "test".to_string(),
-            version: 1,
+            version: MANIFEST_VERSION,
             default_page: "pages/index.html".to_string(),
             theme: Theme::Dark,
         })
@@ -988,7 +1147,11 @@ fn sync_uses_relative_links_from_nested_pages() {
     sync_project(&root).expect("sync project");
 
     let nested = fs::read_to_string(pages_dir.join("folder/topic.html")).expect("read nested page");
-    assert!(nested.contains("<a href=\"../index.html\" data-fractal-link=\"page\">Home</a>"));
+    assert!(PageDocument::parse(&nested).links().contains(&LinkEntry {
+        href: "../index.html".to_string(),
+        text: "Home".to_string(),
+        scope: "page".to_string(),
+    }));
 
     fs::remove_dir_all(&root).expect("cleanup temp dir");
 }

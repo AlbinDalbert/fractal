@@ -1,4 +1,6 @@
-use crate::project::html::{escape_html, unescape_html};
+use crate::project::document::PageDocument;
+use crate::project::html::escape_html;
+use kuchiki::NodeRef;
 
 pub(super) fn markdown_to_html(default_title: &str, markdown: &str) -> (String, String) {
     let blocks = parse_markdown_blocks(markdown);
@@ -83,51 +85,44 @@ fn flush_paragraph(blocks: &mut Vec<MarkdownBlock>, paragraph: &mut Vec<&str>) {
 }
 
 pub(super) fn html_to_markdown(html: &str) -> String {
-    let Some(main_start) = html.find("    <main>") else {
+    let document = PageDocument::parse(html);
+    let Ok(main) = document.document.select_first("main") else {
         return String::new();
     };
-    let content_start = main_start + "    <main>".len();
-    let main_end = html[content_start..]
-        .find("    </main>")
-        .map(|index| content_start + index)
-        .unwrap_or(html.len());
 
     let mut markdown = String::new();
-    for line in html[content_start..main_end].lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        if let Some((level, text)) = parse_html_heading(trimmed) {
-            push_markdown_block(&mut markdown, &format!("{} {}", "#".repeat(level), text));
-        } else if let Some(text) = parse_html_paragraph(trimmed) {
-            push_markdown_block(&mut markdown, &text);
+    for node in main.as_node().descendants() {
+        if let Some(block) = markdown_block_from_node(&node) {
+            push_markdown_block(&mut markdown, &block);
         }
     }
 
     markdown
 }
 
-fn parse_html_heading(line: &str) -> Option<(usize, String)> {
-    for level in 1..=6 {
-        let opening = format!("<h{level}>");
-        let closing = format!("</h{level}>");
-        if let Some(text) = line
-            .strip_prefix(&opening)
-            .and_then(|rest| rest.strip_suffix(&closing))
-        {
-            return Some((level, unescape_html(text)));
+fn markdown_block_from_node(node: &NodeRef) -> Option<String> {
+    let element = node.as_element()?;
+    let tag = element.name.local.to_string();
+    let text = node.text_contents();
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return None;
+    }
+
+    if tag == "p" {
+        return Some(text);
+    }
+
+    if let Some(level) = tag
+        .strip_prefix('h')
+        .and_then(|level| level.parse::<usize>().ok())
+    {
+        if (1..=6).contains(&level) {
+            return Some(format!("{} {}", "#".repeat(level), text));
         }
     }
 
     None
-}
-
-fn parse_html_paragraph(line: &str) -> Option<String> {
-    line.strip_prefix("<p>")
-        .and_then(|rest| rest.strip_suffix("</p>"))
-        .map(unescape_html)
 }
 
 fn push_markdown_block(markdown: &mut String, block: &str) {

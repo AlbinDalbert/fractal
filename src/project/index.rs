@@ -1,4 +1,4 @@
-use crate::project::constants::{GRAPH_FILE, INDEX_FILE, PAGES_DIR, WORKSPACE_DIR};
+use crate::project::constants::{GRAPH_FILE, INDEX_FILE, INDEX_VERSION, PAGES_DIR, WORKSPACE_DIR};
 use crate::project::document::PageDocument;
 use crate::project::graph::build_project_graph;
 use crate::project::links::page_label_from_path;
@@ -47,7 +47,11 @@ pub(super) fn build_project_index(root: &Path) -> Result<ProjectIndex> {
         .map(|path| build_page_entry(&pages_dir, path))
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(ProjectIndex { files, pages })
+    Ok(ProjectIndex {
+        version: INDEX_VERSION,
+        files,
+        pages,
+    })
 }
 
 pub(super) fn write_generated_project_data(root: &Path, index: &ProjectIndex) -> Result<()> {

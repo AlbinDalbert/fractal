@@ -1,4 +1,4 @@
-use crate::project::constants::{MANIFEST_FILE, PAGES_DIR};
+use crate::project::constants::{MANIFEST_FILE, MANIFEST_VERSION, PAGES_DIR};
 use crate::project::types::ProjectManifest;
 use crate::Result;
 use std::fs;
@@ -22,8 +22,18 @@ pub(super) fn load_manifest(root: &Path) -> Result<ProjectManifest> {
         return Err(format!("missing manifest: {}", manifest_path.display()).into());
     }
 
-    let manifest = fs::read_to_string(&manifest_path)?;
-    Ok(serde_json::from_str(&manifest)?)
+    let manifest: ProjectManifest = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+    if manifest.version != MANIFEST_VERSION {
+        return Err(format!(
+            "unsupported manifest version in {}: {} (expected {})",
+            manifest_path.display(),
+            manifest.version,
+            MANIFEST_VERSION
+        )
+        .into());
+    }
+
+    Ok(manifest)
 }
 
 pub(super) fn normalize_project_path(root: &Path, page: &Path) -> PathBuf {

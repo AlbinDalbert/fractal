@@ -34,6 +34,7 @@ impl Theme {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProjectIndex {
+    pub version: u32,
     pub files: Vec<FileEntry>,
     pub pages: Vec<PageEntry>,
 }

@@ -1,15 +1,13 @@
 use crate::project::constants::PAGES_DIR;
 use crate::project::document::PageDocument;
-use crate::project::html::{
-    escape_html, find_case_insensitive, find_element_inner_bounds, html_tag_name, is_closing_tag,
-    is_self_closing_tag,
-};
+use crate::project::html::{escape_html, escape_html_attribute, find_case_insensitive};
 use crate::project::index::{build_project_index, write_generated_project_data};
 use crate::project::links::{
     is_linkable_label, normalize_link_label, page_label_from_path, relative_href,
 };
 use crate::project::types::ProjectIndex;
 use crate::Result;
+use kuchiki::NodeRef;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
@@ -39,20 +37,21 @@ pub fn sync_project(root: impl AsRef<Path>) -> Result<()> {
 }
 
 pub(super) fn sync_page_links(html: &str, page_path: &str, index: &ProjectIndex) -> Result<String> {
-    let (main_start, main_end) =
-        find_element_inner_bounds(html, "main").ok_or("missing main section in page")?;
-
-    let main = unwrap_generated_links(&html[main_start..main_end]);
+    let document = PageDocument::parse(html);
+    let main = document
+        .document
+        .select_first("main")
+        .map_err(|_| "missing main section in page")?
+        .as_node()
+        .clone();
     let note_candidates = note_link_candidates(html);
     let project_candidates = project_link_candidates(index, page_path);
-    let main = link_candidates_in_html(&main, &note_candidates);
-    let main = link_candidates_in_html(&main, &project_candidates);
 
-    let mut updated = String::new();
-    updated.push_str(&html[..main_start]);
-    updated.push_str(&main);
-    updated.push_str(&html[main_end..]);
-    Ok(updated)
+    unwrap_generated_links(&main);
+    link_candidates_in_node(&main, &note_candidates);
+    link_candidates_in_node(&main, &project_candidates);
+
+    document.to_html()
 }
 
 fn note_link_candidates(html: &str) -> Vec<LinkCandidate> {
@@ -62,7 +61,7 @@ fn note_link_candidates(html: &str) -> Vec<LinkCandidate> {
         .into_iter()
         .filter(|note| is_linkable_label(&note.label))
         .map(|note| LinkCandidate {
-            match_text: escape_html(&note.label),
+            match_text: note.label,
             href: format!("#{}", note.id),
             scope: "note",
         })
@@ -90,7 +89,7 @@ fn project_link_candidates(index: &ProjectIndex, current_page: &str) -> Vec<Link
             let key = label.to_ascii_lowercase();
             if seen.insert(key) {
                 candidates.push(LinkCandidate {
-                    match_text: escape_html(&label),
+                    match_text: label,
                     href: relative_href(current_page, &page.path),
                     scope: "page",
                 });
@@ -112,88 +111,89 @@ fn sort_link_candidates(candidates: &mut [LinkCandidate]) {
     });
 }
 
-fn unwrap_generated_links(html: &str) -> String {
-    let mut output = String::new();
-    let mut offset = 0;
+fn unwrap_generated_links(root: &NodeRef) {
+    let links = root
+        .select("a[data-fractal-link]")
+        .expect("static selector should parse")
+        .map(|element| element.as_node().clone())
+        .collect::<Vec<_>>();
 
-    while let Some(start) = html[offset..].find("<a") {
-        let start = offset + start;
-        output.push_str(&html[offset..start]);
-
-        let Some(tag_end) = html[start..].find('>') else {
-            output.push_str(&html[start..]);
-            return output;
-        };
-        let tag_end = start + tag_end + 1;
-        let tag = &html[start..tag_end];
-
-        if html_tag_name(tag).as_deref() == Some("a") && tag.contains("data-fractal-link=\"") {
-            if let Some(close_start) = html[tag_end..].find("</a>") {
-                let close_start = tag_end + close_start;
-                output.push_str(&html[tag_end..close_start]);
-                offset = close_start + "</a>".len();
-                continue;
-            }
+    for link in links {
+        let children = link.children().collect::<Vec<_>>();
+        for child in children {
+            link.insert_before(child);
         }
-
-        output.push_str(tag);
-        offset = tag_end;
+        link.detach();
     }
-
-    output.push_str(&html[offset..]);
-    output
 }
 
-fn link_candidates_in_html(html: &str, candidates: &[LinkCandidate]) -> String {
+fn link_candidates_in_node(root: &NodeRef, candidates: &[LinkCandidate]) {
     if candidates.is_empty() {
-        return html.to_string();
+        return;
     }
 
-    let mut output = String::new();
-    let mut offset = 0;
-    let mut skip_depth = 0usize;
+    let text_nodes = root
+        .descendants()
+        .filter(|node| node.as_text().is_some() && !has_skipped_ancestor(node, root))
+        .collect::<Vec<_>>();
 
-    while let Some(tag_start) = html[offset..].find('<') {
-        let tag_start = offset + tag_start;
-        let text = &html[offset..tag_start];
-        if skip_depth == 0 {
-            output.push_str(&link_text_segment(text, candidates));
-        } else {
-            output.push_str(text);
-        }
-
-        let Some(tag_end) = html[tag_start..].find('>') else {
-            output.push_str(&html[tag_start..]);
-            return output;
-        };
-        let tag_end = tag_start + tag_end + 1;
-        let tag = &html[tag_start..tag_end];
-        output.push_str(tag);
-        update_link_skip_depth(tag, &mut skip_depth);
-        offset = tag_end;
+    for text_node in text_nodes {
+        link_text_node(&text_node, candidates);
     }
-
-    let text = &html[offset..];
-    if skip_depth == 0 {
-        output.push_str(&link_text_segment(text, candidates));
-    } else {
-        output.push_str(text);
-    }
-
-    output
 }
 
-fn link_text_segment(text: &str, candidates: &[LinkCandidate]) -> String {
+fn has_skipped_ancestor(node: &NodeRef, root: &NodeRef) -> bool {
+    node.ancestors()
+        .take_while(|ancestor| ancestor != root)
+        .any(|ancestor| {
+            let Some(element) = ancestor.as_element() else {
+                return false;
+            };
+            matches!(
+                element.name.local.to_string().as_str(),
+                "a" | "code" | "pre" | "script" | "style" | "textarea"
+            )
+        })
+}
+
+fn link_text_node(text_node: &NodeRef, candidates: &[LinkCandidate]) {
+    let Some(text) = text_node.as_text() else {
+        return;
+    };
+    let text = text.borrow().clone();
+    let ranges = link_ranges(&text, candidates);
+    if ranges.is_empty() {
+        return;
+    }
+
+    let mut offset = 0;
+    for range in ranges {
+        if range.start > offset {
+            text_node.insert_before(NodeRef::new_text(&text[offset..range.start]));
+        }
+
+        text_node.insert_before(render_link_node(
+            &range.candidate.href,
+            range.candidate.scope,
+            &text[range.start..range.end],
+        ));
+        offset = range.end;
+    }
+
+    if offset < text.len() {
+        text_node.insert_before(NodeRef::new_text(&text[offset..]));
+    }
+    text_node.detach();
+}
+
+fn link_ranges(text: &str, candidates: &[LinkCandidate]) -> Vec<LinkRange> {
     let mut ranges = Vec::new();
 
     for candidate in candidates {
         let mut search_start = 0;
         while let Some(start) = find_case_insensitive(text, &candidate.match_text, search_start) {
             let end = start + candidate.match_text.len();
-            if is_phrase_boundary(text, start, end)
-                && !ranges_overlap(&ranges, start, end)
-                && !is_inside_html_entity(text, start, end)
-            {
+            if is_phrase_boundary(text, start, end) && !ranges_overlap(&ranges, start, end) {
                 ranges.push(LinkRange {
                     start,
                     end,
@@ -206,26 +206,8 @@ fn link_text_segment(text: &str, candidates: &[LinkCandidate]) -> String {
         }
     }
 
-    if ranges.is_empty() {
-        return text.to_string();
-    }
-
     ranges.sort_by_key(|range| range.start);
-
-    let mut output = String::new();
-    let mut offset = 0;
-    for range in ranges {
-        output.push_str(&text[offset..range.start]);
-        output.push_str(&format!(
-            "<a href=\"{}\" data-fractal-link=\"{}\">{}</a>",
-            escape_html(&range.candidate.href),
-            escape_html(range.candidate.scope),
-            &text[range.start..range.end]
-        ));
-        offset = range.end;
-    }
-    output.push_str(&text[offset..]);
-    output
+    ranges
 }
 
 fn ranges_overlap(ranges: &[LinkRange], start: usize, end: usize) -> bool {
@@ -246,43 +228,21 @@ fn is_link_word_character(character: char) -> bool {
     character.is_ascii_alphanumeric() || character == '_'
 }
 
-fn is_inside_html_entity(text: &str, start: usize, end: usize) -> bool {
-    let Some(entity_start) = text[..start].rfind('&') else {
-        return false;
-    };
-    if text[..start]
-        .rfind(';')
-        .map(|semicolon| semicolon > entity_start)
-        .unwrap_or(false)
-    {
-        return false;
-    }
-
-    text[end..]
-        .find(';')
-        .map(|semicolon| {
-            let entity = &text[entity_start..end + semicolon + 1];
-            !entity.contains(char::is_whitespace)
-        })
-        .unwrap_or(false)
-}
-
-fn update_link_skip_depth(tag: &str, skip_depth: &mut usize) {
-    let Some(name) = html_tag_name(tag) else {
-        return;
-    };
-    if !matches!(
-        name.as_str(),
-        "a" | "code" | "pre" | "script" | "style" | "textarea"
-    ) {
-        return;
-    }
-
-    if is_closing_tag(tag) {
-        *skip_depth = skip_depth.saturating_sub(1);
-    } else if !is_self_closing_tag(tag) {
-        *skip_depth += 1;
-    }
+fn render_link_node(href: &str, scope: &str, text: &str) -> NodeRef {
+    let document = PageDocument::parse(&format!(
+        "<a href=\"{}\" data-fractal-link=\"{}\">{}</a>",
+        escape_html_attribute(href),
+        escape_html_attribute(scope),
+        escape_html(text)
+    ));
+    let link = document
+        .document
+        .select_first("a[data-fractal-link]")
+        .expect("generated link markup should parse")
+        .as_node()
+        .clone();
+    link.detach();
+    link
 }
 
 #[derive(Clone)]

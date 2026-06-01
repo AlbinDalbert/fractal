@@ -152,7 +152,18 @@ fn load_project_graph(root: &Path) -> Result<ProjectGraph> {
         .into());
     }
 
-    Ok(serde_json::from_str(&fs::read_to_string(graph_path)?)?)
+    let graph: ProjectGraph = serde_json::from_str(&fs::read_to_string(&graph_path)?)?;
+    if graph.version != GRAPH_VERSION {
+        return Err(format!(
+            "unsupported graph version in {}: {} (expected {})",
+            graph_path.display(),
+            graph.version,
+            GRAPH_VERSION
+        )
+        .into());
+    }
+
+    Ok(graph)
 }
 
 fn normalize_graph_page_path(root: &Path, page: &Path) -> Result<String> {

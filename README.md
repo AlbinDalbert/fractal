@@ -63,7 +63,7 @@ my-project/
 `fractal.json` currently stores:
 
 - `project_name`
-- `version`
+- `version` (manifest schema version, currently `1`)
 - `default_page`
 - `theme` (`dark` or `light`)
 
@@ -123,6 +123,8 @@ After note links are applied, `sync` uses the project index for project-scope li
 ```
 
 Generated links are marked with `data-fractal-link`, so rerunning `sync` can replace Fractal-managed links without changing manual links.
+
+`.fractal/index.json` and `.fractal/graph.json` are generated data and include schema versions. They can be regenerated with `fractal index build` or `fractal sync`; graph query commands reject unsupported graph versions rather than guessing.
 
 `.fractal/graph.json` is derived from the parser-backed index. It currently contains:
 

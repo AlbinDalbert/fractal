@@ -1,4 +1,6 @@
-use crate::project::constants::{INDEX_PAGE, MANIFEST_FILE, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR};
+use crate::project::constants::{
+    INDEX_PAGE, MANIFEST_FILE, MANIFEST_VERSION, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR,
+};
 use crate::project::index::build_index;
 use crate::project::markdown::{html_to_markdown, markdown_to_html};
 use crate::project::paths::{load_manifest, normalize_project_path, resolve_page_destination};
@@ -24,7 +26,7 @@ pub fn init_project(project_name: &str) -> Result<()> {
 
     let manifest = ProjectManifest {
         project_name: project_name.to_string(),
-        version: 1,
+        version: MANIFEST_VERSION,
         default_page: format!("{PAGES_DIR}/{INDEX_PAGE}"),
         theme: Theme::default(),
     };

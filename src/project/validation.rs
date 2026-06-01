@@ -1,8 +1,5 @@
 use crate::project::constants::{INDEX_PAGE, MANIFEST_FILE, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR};
 use crate::project::document::PageDocument;
-use crate::project::html::{
-    escape_html, insert_before_body_close, insert_before_head_close, insert_body_attribute,
-};
 use crate::project::notes::is_valid_note_id;
 use crate::project::paths::{collect_page_paths, is_html_path, load_manifest};
 use crate::project::render::{
@@ -10,7 +7,6 @@ use crate::project::render::{
 };
 use crate::project::types::Theme;
 use crate::Result;
-use kuchiki::NodeRef;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
@@ -151,59 +147,29 @@ pub(super) fn validate_page_metadata(page: &Path) -> Result<()> {
 }
 
 fn fix_page(page: &Path, page_path: &str, theme: Theme) -> Result<()> {
-    let mut html = fs::read_to_string(page)?;
+    let document = PageDocument::from_path(page)?;
     let mut changed = false;
-    let meta = PageDocument::parse(&html).fractal_meta();
 
     for (name, content) in required_meta_tags() {
-        if !meta.contains_key(name) {
-            html = insert_before_head_close(
-                &html,
-                &format!(
-                    "    <meta name=\"{name}\" content=\"{}\" />\n",
-                    escape_html(content)
-                ),
-            )?;
+        if document.ensure_meta_tag(name, content)? {
             changed = true;
         }
     }
 
-    if !html.contains("rel=\"stylesheet\"") || !html.contains(".fractal/style.css") {
-        html = insert_before_head_close(
-            &html,
-            &format!(
-                "    <link rel=\"stylesheet\" href=\"{}\">\n",
-                escape_html(&stylesheet_href(Path::new(page_path)))
-            ),
-        )?;
+    if document.ensure_stylesheet_link(&stylesheet_href(Path::new(page_path)))? {
         changed = true;
     }
 
-    let body_theme = format!("data-fractal-theme=\"{}\"", theme.as_str());
-    if !html.contains("data-fractal-theme=") {
-        if let Some(updated) = insert_body_attribute(&html, &body_theme) {
-            html = updated;
-            changed = true;
-        }
+    if document.ensure_body_theme(theme.as_str())? {
+        changed = true;
     }
 
-    match PageDocument::parse(&html).notes_section_count() {
-        0 => {
-            html = insert_before_body_close(
-                &html,
-                "    <section data-fractal-notes>\n    </section>\n",
-            )?;
-            changed = true;
-        }
-        1 => {}
-        _ => {
-            html = normalize_notes_sections(&html)?;
-            changed = true;
-        }
+    if document.ensure_single_notes_section()? {
+        changed = true;
     }
 
     if changed {
-        fs::write(page, html)?;
+        fs::write(page, document.to_html()?)?;
         println!("fixed {}", page.display());
     }
 
@@ -233,42 +199,4 @@ fn validate_note_ids(page: &Path, document: &PageDocument) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn normalize_notes_sections(html: &str) -> Result<String> {
-    let document = PageDocument::parse(html);
-    let sections = document.notes_sections();
-
-    if sections.is_empty() {
-        let body = document
-            .document
-            .select_first("body")
-            .map_err(|_| "missing body in page")?;
-        body.as_node().append(NodeRef::new_text("\n    "));
-        body.as_node().append(parse_notes_section()?);
-        body.as_node().append(NodeRef::new_text("\n  "));
-    } else {
-        let primary = sections[0].clone();
-        for duplicate in sections.iter().skip(1) {
-            let children = duplicate.children().collect::<Vec<_>>();
-            for child in children {
-                primary.append(child);
-            }
-            duplicate.detach();
-        }
-    }
-
-    document.to_html()
-}
-
-fn parse_notes_section() -> Result<NodeRef> {
-    let document = PageDocument::parse("<section data-fractal-notes></section>");
-    let section = document
-        .document
-        .select_first("section[data-fractal-notes]")
-        .map_err(|_| "notes section markup must contain a data-fractal-notes section")?
-        .as_node()
-        .clone();
-    section.detach();
-    Ok(section)
 }

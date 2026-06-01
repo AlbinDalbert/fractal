@@ -53,8 +53,10 @@ enum Command {
     Sync,
     /// Manage pages in the project.
     Page {
-        #[arg(required = true)]
-        args: Vec<String>,
+        /// Page path relative to pages/ for page-scoped commands.
+        path: Option<PathBuf>,
+        #[command(subcommand)]
+        command: PageCommand,
     },
 }
 
@@ -75,22 +77,39 @@ enum GraphCommand {
     Orphans,
 }
 
-enum ParsedPageCommand {
+#[derive(Debug, Subcommand)]
+enum PageCommand {
+    /// Create a new page.
     New {
+        /// Page path relative to pages/, with or without .html.
         path: PathBuf,
     },
-    NoteAdd {
-        path: PathBuf,
+    /// Manage notes in a page.
+    Note {
+        #[command(subcommand)]
+        command: NoteCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum NoteCommand {
+    /// Add a note whose id is derived from the trigger text.
+    Add {
+        /// Trigger text to normalize into the note id.
         trigger: String,
+        /// Note body text.
         content: String,
     },
-    NoteRemove {
-        path: PathBuf,
+    /// Remove a note whose id is derived from the trigger text.
+    Remove {
+        /// Trigger text to normalize into the note id.
         trigger: String,
     },
-    NotePatch {
-        path: PathBuf,
+    /// Replace a note body.
+    Patch {
+        /// Trigger text to normalize into the note id.
         trigger: String,
+        /// Replacement note body text.
         content: String,
     },
 }
@@ -111,51 +130,68 @@ pub fn run() -> Result<()> {
             GraphCommand::Orphans => show_graph_orphans("."),
         },
         Command::Sync => sync_project("."),
-        Command::Page { args } => match parse_page_command(args)? {
-            ParsedPageCommand::New { path } => new_page(".", &path),
-            ParsedPageCommand::NoteAdd {
-                path,
-                trigger,
-                content,
-            } => add_note(".", &path, &trigger, &content),
-            ParsedPageCommand::NoteRemove { path, trigger } => remove_note(".", &path, &trigger),
-            ParsedPageCommand::NotePatch {
-                path,
-                trigger,
-                content,
-            } => patch_note(".", &path, &trigger, &content),
+        Command::Page { path, command } => match command {
+            PageCommand::New { path } => new_page(".", &path),
+            PageCommand::Note { command } => {
+                let path = path.ok_or("missing page path for note command")?;
+                match command {
+                    NoteCommand::Add { trigger, content } => {
+                        add_note(".", &path, &trigger, &content)
+                    }
+                    NoteCommand::Remove { trigger } => remove_note(".", &path, &trigger),
+                    NoteCommand::Patch { trigger, content } => {
+                        patch_note(".", &path, &trigger, &content)
+                    }
+                }
+            }
         },
     }
 }
 
-fn parse_page_command(args: Vec<String>) -> Result<ParsedPageCommand> {
-    match args.as_slice() {
-        [command, path] if command == "new" => Ok(ParsedPageCommand::New {
-            path: PathBuf::from(path),
-        }),
-        [path, note, add, trigger, content] if note == "note" && add == "add" => {
-            Ok(ParsedPageCommand::NoteAdd {
-                path: PathBuf::from(path),
-                trigger: trigger.clone(),
-                content: content.clone(),
-            })
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_page_new_command() {
+        let cli = Cli::try_parse_from(["fractal", "page", "new", "folder/topic"])
+            .expect("parse page new");
+
+        match cli.command {
+            Command::Page {
+                path: None,
+                command: PageCommand::New { path },
+            } => assert_eq!(path, PathBuf::from("folder/topic")),
+            command => panic!("unexpected command: {command:?}"),
         }
-        [path, note, remove, trigger] if note == "note" && remove == "remove" => {
-            Ok(ParsedPageCommand::NoteRemove {
-                path: PathBuf::from(path),
-                trigger: trigger.clone(),
-            })
+    }
+
+    #[test]
+    fn parses_existing_page_note_command_shape() {
+        let cli = Cli::try_parse_from([
+            "fractal",
+            "page",
+            "index",
+            "note",
+            "add",
+            "java",
+            "note body",
+        ])
+        .expect("parse page note add");
+
+        match cli.command {
+            Command::Page {
+                path: Some(path),
+                command:
+                    PageCommand::Note {
+                        command: NoteCommand::Add { trigger, content },
+                    },
+            } => {
+                assert_eq!(path, PathBuf::from("index"));
+                assert_eq!(trigger, "java");
+                assert_eq!(content, "note body");
+            }
+            command => panic!("unexpected command: {command:?}"),
         }
-        [path, note, patch, trigger, content] if note == "note" && patch == "patch" => {
-            Ok(ParsedPageCommand::NotePatch {
-                path: PathBuf::from(path),
-                trigger: trigger.clone(),
-                content: content.clone(),
-            })
-        }
-        _ => Err(
-            "invalid `page` command. Use `fractal page new <page/path>` or `fractal page <page/path> note add|remove|patch ...`"
-                .into(),
-        ),
     }
 }
