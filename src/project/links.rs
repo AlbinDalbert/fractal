@@ -21,7 +21,7 @@ pub(super) fn page_label_from_path(path: &str) -> String {
     Path::new(path)
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .map(|stem| stem.replace('-', " ").replace('_', " "))
+        .map(|stem| stem.replace(['-', '_'], " "))
         .map(|stem| normalize_link_label(&stem))
         .filter(|stem| !stem.is_empty())
         .unwrap_or_else(|| path.to_string())
@@ -62,10 +62,7 @@ pub(super) fn relative_href(from_page: &str, target_page: &str) -> String {
         common += 1;
     }
 
-    let mut href_parts = Vec::new();
-    for _ in common..from_parts.len() {
-        href_parts.push("..");
-    }
+    let mut href_parts = vec![".."; from_parts.len() - common];
     href_parts.extend(target_parts[common..].iter().copied());
 
     if href_parts.is_empty() {
