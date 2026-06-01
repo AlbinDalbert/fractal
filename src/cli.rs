@@ -188,6 +188,9 @@ fn print_operation_report(report: &OperationReport) {
             OperationEvent::RemovedNote { page, note_id } => {
                 println!("removed note {} from {}", note_id, page.display());
             }
+            OperationEvent::SavedPage { path } => {
+                println!("saved {}", path.display());
+            }
             OperationEvent::Synced { path } => {
                 println!("synced {}", path.display());
             }

@@ -19,6 +19,32 @@ pub fn build_index(root: impl AsRef<Path>) -> Result<OperationReport> {
     write_generated_project_data(root, &index)
 }
 
+pub fn load_project_index(root: impl AsRef<Path>) -> Result<ProjectIndex> {
+    let root = root.as_ref();
+    load_manifest(root)?;
+    let index_path = root.join(WORKSPACE_DIR).join(INDEX_FILE);
+    if !index_path.is_file() {
+        return Err(format!(
+            "missing index file: {}. Run `fractal index build` or `fractal sync` first.",
+            index_path.display()
+        )
+        .into());
+    }
+
+    let index: ProjectIndex = serde_json::from_str(&fs::read_to_string(&index_path)?)?;
+    if index.version != INDEX_VERSION {
+        return Err(format!(
+            "unsupported index version in {}: {} (expected {})",
+            index_path.display(),
+            index.version,
+            INDEX_VERSION
+        )
+        .into());
+    }
+
+    Ok(index)
+}
+
 pub(super) fn build_project_index(root: &Path) -> Result<ProjectIndex> {
     load_manifest(root)?;
 

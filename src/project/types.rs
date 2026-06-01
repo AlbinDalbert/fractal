@@ -2,32 +2,33 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OperationReport {
     pub events: Vec<OperationEvent>,
 }
 
 impl OperationReport {
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
-    pub(super) fn from_event(event: OperationEvent) -> Self {
+    pub fn from_event(event: OperationEvent) -> Self {
         Self {
             events: vec![event],
         }
     }
 
-    pub(super) fn push(&mut self, event: OperationEvent) {
+    pub fn push(&mut self, event: OperationEvent) {
         self.events.push(event);
     }
 
-    pub(super) fn extend(&mut self, report: OperationReport) {
+    pub fn extend(&mut self, report: OperationReport) {
         self.events.extend(report.events);
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum OperationEvent {
     AddedNote {
         page: PathBuf,
@@ -58,6 +59,9 @@ pub enum OperationEvent {
         page: PathBuf,
         note_id: String,
     },
+    SavedPage {
+        path: PathBuf,
+    },
     Synced {
         path: PathBuf,
     },
@@ -70,7 +74,7 @@ pub enum OperationEvent {
     },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectManifest {
     pub project_name: String,
     pub version: u32,
@@ -96,20 +100,20 @@ impl Theme {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectIndex {
     pub version: u32,
     pub files: Vec<FileEntry>,
     pub pages: Vec<PageEntry>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileEntry {
     pub path: String,
     pub kind: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PageEntry {
     pub path: String,
     pub title: String,
@@ -124,14 +128,20 @@ pub struct NoteEntry {
     pub label: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LinkEntry {
     pub href: String,
     pub text: String,
     pub scope: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageSource {
+    pub path: String,
+    pub html: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectGraph {
     pub version: u32,
     pub nodes: Vec<GraphNode>,
@@ -139,7 +149,7 @@ pub struct ProjectGraph {
     pub pages: Vec<PageGraphEntry>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GraphNode {
     pub id: String,
     pub kind: String,
@@ -147,7 +157,7 @@ pub struct GraphNode {
     pub path: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GraphEdge {
     pub from: String,
     pub to: String,
@@ -156,7 +166,7 @@ pub struct GraphEdge {
     pub href: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PageGraphEntry {
     pub path: String,
     pub outlinks: Vec<GraphPageLink>,

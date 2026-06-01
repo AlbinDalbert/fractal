@@ -89,52 +89,8 @@ pub(super) fn build_project_graph(index: &ProjectIndex) -> ProjectGraph {
     }
 }
 
-pub fn graph_page_report(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<String> {
+pub fn load_project_graph(root: impl AsRef<Path>) -> Result<ProjectGraph> {
     let root = root.as_ref();
-    let page = page.as_ref();
-    let graph = load_project_graph(root)?;
-    let page_path = normalize_graph_page_path(root, page)?;
-    let entry = graph
-        .pages
-        .iter()
-        .find(|entry| entry.path == page_path)
-        .ok_or_else(|| format!("page not found in graph: {page_path}"))?;
-
-    let mut report = String::new();
-    report.push_str(&format!("{}\n", entry.path));
-    push_page_links(&mut report, "outlinks", &entry.outlinks);
-    push_page_links(&mut report, "backlinks", &entry.backlinks);
-    Ok(report)
-}
-
-pub fn graph_orphans_report(root: impl AsRef<Path>) -> Result<String> {
-    let root = root.as_ref();
-    let graph = load_project_graph(root)?;
-    let orphans = graph
-        .pages
-        .iter()
-        .filter(|entry| entry.backlinks.is_empty())
-        .collect::<Vec<_>>();
-
-    let mut report = String::new();
-    report.push_str("orphan pages\n");
-    if orphans.is_empty() {
-        report.push_str("  (none)\n");
-        return Ok(report);
-    }
-
-    for entry in orphans {
-        report.push_str(&format!(
-            "  - {} ({} outlink{})\n",
-            entry.path,
-            entry.outlinks.len(),
-            if entry.outlinks.len() == 1 { "" } else { "s" }
-        ));
-    }
-    Ok(report)
-}
-
-fn load_project_graph(root: &Path) -> Result<ProjectGraph> {
     load_manifest(root)?;
     let graph_path = root.join(WORKSPACE_DIR).join(GRAPH_FILE);
     if !graph_path.is_file() {
@@ -157,6 +113,55 @@ fn load_project_graph(root: &Path) -> Result<ProjectGraph> {
     }
 
     Ok(graph)
+}
+
+pub fn graph_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<PageGraphEntry> {
+    let root = root.as_ref();
+    let page_path = normalize_graph_page_path(root, page.as_ref())?;
+    load_project_graph(root)?
+        .pages
+        .into_iter()
+        .find(|entry| entry.path == page_path)
+        .ok_or_else(|| format!("page not found in graph: {page_path}").into())
+}
+
+pub fn orphan_pages(root: impl AsRef<Path>) -> Result<Vec<PageGraphEntry>> {
+    Ok(load_project_graph(root)?
+        .pages
+        .into_iter()
+        .filter(|entry| entry.backlinks.is_empty())
+        .collect())
+}
+
+pub fn graph_page_report(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<String> {
+    let entry = graph_page(root, page)?;
+
+    let mut report = String::new();
+    report.push_str(&format!("{}\n", entry.path));
+    push_page_links(&mut report, "outlinks", &entry.outlinks);
+    push_page_links(&mut report, "backlinks", &entry.backlinks);
+    Ok(report)
+}
+
+pub fn graph_orphans_report(root: impl AsRef<Path>) -> Result<String> {
+    let orphans = orphan_pages(root)?;
+
+    let mut report = String::new();
+    report.push_str("orphan pages\n");
+    if orphans.is_empty() {
+        report.push_str("  (none)\n");
+        return Ok(report);
+    }
+
+    for entry in orphans {
+        report.push_str(&format!(
+            "  - {} ({} outlink{})\n",
+            entry.path,
+            entry.outlinks.len(),
+            if entry.outlinks.len() == 1 { "" } else { "s" }
+        ));
+    }
+    Ok(report)
 }
 
 fn normalize_graph_page_path(root: &Path, page: &Path) -> Result<String> {

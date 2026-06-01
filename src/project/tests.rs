@@ -1,6 +1,6 @@
 use super::constants::{GRAPH_VERSION, INDEX_VERSION, MANIFEST_VERSION};
 use super::document::PageDocument;
-use super::graph::{graph_orphans_report, graph_page_report};
+use super::graph::{graph_orphans_report, graph_page, graph_page_report, orphan_pages};
 use super::html::escape_html;
 use super::markdown::{html_to_markdown, markdown_to_html};
 use super::notes::{insert_note_into_document, note_id_from_trigger, render_note_aside};
@@ -8,9 +8,10 @@ use super::paths::{collect_page_paths, resolve_page_destination};
 use super::render::{render_page_document, stylesheet_href};
 use super::validation::validate_page_metadata;
 use super::{
-    add_note, build_index, export_page, import_markdown, new_page, patch_note, remove_note,
-    sync_project, validate_project, FileEntry, GraphPageLink, LinkEntry, NoteEntry, OperationEvent,
-    PageEntry, PageGraphEntry, ProjectGraph, ProjectIndex, ProjectManifest, Theme,
+    add_note, build_index, export_page, import_markdown, init_project_at, load_project_index,
+    load_project_manifest, new_page, patch_note, read_page_source, remove_note, sync_project,
+    validate_project, write_page_source, FileEntry, GraphPageLink, LinkEntry, NoteEntry,
+    OperationEvent, PageEntry, PageGraphEntry, ProjectGraph, ProjectIndex, ProjectManifest, Theme,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -144,6 +145,27 @@ fn write_test_graph(root: &Path, pages: Vec<PageGraphEntry>) {
         .expect("serialize graph"),
     )
     .expect("write graph");
+}
+
+#[test]
+fn init_project_at_uses_explicit_destination_and_project_name() {
+    let parent = temp_dir("init-at");
+    let root = parent.join("custom-root");
+
+    let report = init_project_at(&root, "Display Name").expect("initialize project");
+
+    assert_eq!(
+        report.events,
+        vec![OperationEvent::Created { path: root.clone() }]
+    );
+    assert!(root.join("pages/index.html").is_file());
+    assert!(root.join(".fractal/style.css").is_file());
+    assert_eq!(
+        load_project_manifest(&root)
+            .expect("load manifest")
+            .project_name,
+        "Display Name"
+    );
 }
 
 #[test]
@@ -674,6 +696,43 @@ fn new_page_rebuilds_index() {
 }
 
 #[test]
+fn page_source_round_trip_rebuilds_index_and_serializes_report() {
+    let project = TestProject::new("page-source");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "index",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let source =
+        read_page_source(project.root(), Path::new("pages/index")).expect("read page source");
+    assert_eq!(source.path, "index.html");
+    assert!(source.html.contains("<p>body</p>"));
+
+    let updated = source.html.replace("<p>body</p>", "<p>updated</p>");
+    let report =
+        write_page_source(project.root(), Path::new("index"), updated).expect("write page source");
+
+    assert!(fs::read_to_string(project.pages_dir().join("index.html"))
+        .expect("read updated page")
+        .contains("<p>updated</p>"));
+    assert_eq!(
+        load_project_index(project.root())
+            .expect("load generated index")
+            .pages[0]
+            .title,
+        "index"
+    );
+
+    let report_json = serde_json::to_value(&report).expect("serialize report");
+    assert_eq!(report_json["events"][0]["type"], "saved_page");
+}
+
+#[test]
 fn extracts_all_fractal_meta_tags() {
     let root = temp_dir("extract-meta");
     fs::create_dir_all(root.path()).expect("create temp dir");
@@ -1183,6 +1242,15 @@ fn graph_page_report_shows_backlinks_and_outlinks() {
         graph_page_report(root.path(), Path::new("pages/index")).expect("page report"),
         "index.html\noutlinks:\n  - rust.html (Rust)\nbacklinks:\n  - folder/topic.html (Home)\n"
     );
+    assert_eq!(
+        graph_page(root.path(), Path::new("pages/index"))
+            .expect("structured page graph")
+            .outlinks,
+        vec![GraphPageLink {
+            page: "rust.html".to_string(),
+            text: "Rust".to_string(),
+        }]
+    );
 }
 
 #[test]
@@ -1215,6 +1283,17 @@ fn graph_orphans_report_lists_pages_with_no_backlinks() {
     assert_eq!(
         graph_orphans_report(root.path()).expect("orphans report"),
         "orphan pages\n  - index.html (1 outlink)\n"
+    );
+    assert_eq!(
+        orphan_pages(root.path()).expect("structured orphans"),
+        vec![PageGraphEntry {
+            path: "index.html".to_string(),
+            outlinks: vec![GraphPageLink {
+                page: "rust.html".to_string(),
+                text: "Rust".to_string(),
+            }],
+            backlinks: Vec::new(),
+        }]
     );
 }
 

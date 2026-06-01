@@ -7,13 +7,21 @@ use crate::project::paths::{
     load_manifest, page_relative_path, resolve_existing_page, resolve_page_destination,
 };
 use crate::project::render::{default_stylesheet, render_page_document, stylesheet_href};
-use crate::project::types::{OperationEvent, OperationReport, ProjectManifest, Theme};
+use crate::project::types::{OperationEvent, OperationReport, PageSource, ProjectManifest, Theme};
 use crate::Result;
 use std::fs;
 use std::path::Path;
 
 pub fn init_project(project_name: &str) -> Result<OperationReport> {
-    let root = Path::new(project_name);
+    init_project_at(project_name, project_name)
+}
+
+pub fn init_project_at(
+    root: impl AsRef<Path>,
+    project_name: impl AsRef<str>,
+) -> Result<OperationReport> {
+    let root = root.as_ref();
+    let project_name = project_name.as_ref();
     let workspace_dir = root.join(WORKSPACE_DIR);
     let pages_dir = root.join(PAGES_DIR);
     let index_page = pages_dir.join(INDEX_PAGE);
@@ -48,6 +56,10 @@ pub fn init_project(project_name: &str) -> Result<OperationReport> {
     Ok(OperationReport::from_event(OperationEvent::Created {
         path: root.to_path_buf(),
     }))
+}
+
+pub fn load_project_manifest(root: impl AsRef<Path>) -> Result<ProjectManifest> {
+    load_manifest(root.as_ref())
 }
 
 pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<OperationReport> {
@@ -161,4 +173,33 @@ pub fn export_page(
         page,
         output: output.to_path_buf(),
     }))
+}
+
+pub fn read_page_source(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<PageSource> {
+    let root = root.as_ref();
+    load_manifest(root)?;
+
+    let page = resolve_existing_page(root, page.as_ref())?;
+    let relative_page = page_relative_path(root, &page)?;
+    let path = relative_page.to_string_lossy().replace('\\', "/");
+    let html = fs::read_to_string(page)?;
+
+    Ok(PageSource { path, html })
+}
+
+pub fn write_page_source(
+    root: impl AsRef<Path>,
+    page: impl AsRef<Path>,
+    html: impl AsRef<str>,
+) -> Result<OperationReport> {
+    let root = root.as_ref();
+    load_manifest(root)?;
+
+    let page = resolve_existing_page(root, page.as_ref())?;
+    fs::write(&page, html.as_ref())?;
+
+    let generated = build_index(root)?;
+    let mut report = OperationReport::from_event(OperationEvent::SavedPage { path: page });
+    report.extend(generated);
+    Ok(report)
 }
