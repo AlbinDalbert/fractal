@@ -1,9 +1,23 @@
-use crate::project::constants::GRAPH_VERSION;
+use crate::project::constants::{GRAPH_FILE, GRAPH_VERSION, PAGES_DIR, WORKSPACE_DIR};
 use crate::project::links::{is_external_href, resolve_page_href};
+use crate::project::paths::load_manifest;
 use crate::project::types::{
     GraphEdge, GraphNode, GraphPageLink, LinkEntry, PageGraphEntry, ProjectGraph, ProjectIndex,
 };
+use crate::Result;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Component, Path};
+
+pub fn show_graph_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<()> {
+    print!("{}", graph_page_report(root.as_ref(), page.as_ref())?);
+    Ok(())
+}
+
+pub fn show_graph_orphans(root: impl AsRef<Path>) -> Result<()> {
+    print!("{}", graph_orphans_report(root.as_ref())?);
+    Ok(())
+}
 
 pub(super) fn build_project_graph(index: &ProjectIndex) -> ProjectGraph {
     let page_paths = index
@@ -82,6 +96,111 @@ pub(super) fn build_project_graph(index: &ProjectIndex) -> ProjectGraph {
         nodes,
         edges,
         pages,
+    }
+}
+
+pub(super) fn graph_page_report(root: &Path, page: &Path) -> Result<String> {
+    let graph = load_project_graph(root)?;
+    let page_path = normalize_graph_page_path(root, page)?;
+    let entry = graph
+        .pages
+        .iter()
+        .find(|entry| entry.path == page_path)
+        .ok_or_else(|| format!("page not found in graph: {page_path}"))?;
+
+    let mut report = String::new();
+    report.push_str(&format!("{}\n", entry.path));
+    push_page_links(&mut report, "outlinks", &entry.outlinks);
+    push_page_links(&mut report, "backlinks", &entry.backlinks);
+    Ok(report)
+}
+
+pub(super) fn graph_orphans_report(root: &Path) -> Result<String> {
+    let graph = load_project_graph(root)?;
+    let orphans = graph
+        .pages
+        .iter()
+        .filter(|entry| entry.backlinks.is_empty())
+        .collect::<Vec<_>>();
+
+    let mut report = String::new();
+    report.push_str("orphan pages\n");
+    if orphans.is_empty() {
+        report.push_str("  (none)\n");
+        return Ok(report);
+    }
+
+    for entry in orphans {
+        report.push_str(&format!(
+            "  - {} ({} outlink{})\n",
+            entry.path,
+            entry.outlinks.len(),
+            if entry.outlinks.len() == 1 { "" } else { "s" }
+        ));
+    }
+    Ok(report)
+}
+
+fn load_project_graph(root: &Path) -> Result<ProjectGraph> {
+    load_manifest(root)?;
+    let graph_path = root.join(WORKSPACE_DIR).join(GRAPH_FILE);
+    if !graph_path.is_file() {
+        return Err(format!(
+            "missing graph file: {}. Run `fractal index build` or `fractal sync` first.",
+            graph_path.display()
+        )
+        .into());
+    }
+
+    Ok(serde_json::from_str(&fs::read_to_string(graph_path)?)?)
+}
+
+fn normalize_graph_page_path(root: &Path, page: &Path) -> Result<String> {
+    let page = if page.is_absolute() {
+        page.strip_prefix(root.join(PAGES_DIR))
+            .map_err(|_| "page path must be inside pages/")?
+            .to_path_buf()
+    } else {
+        let mut components = page.components();
+        match components.next() {
+            Some(Component::Normal(prefix)) if prefix == PAGES_DIR => {
+                components.as_path().to_path_buf()
+            }
+            _ => page.to_path_buf(),
+        }
+    };
+
+    for component in page.components() {
+        match component {
+            Component::Normal(_) => {}
+            Component::CurDir => {}
+            Component::ParentDir => return Err("page path cannot contain `..`".into()),
+            Component::RootDir | Component::Prefix(_) => {
+                return Err("page path must be relative to pages/".into());
+            }
+        }
+    }
+
+    let mut page = page;
+    if page.extension().is_none() {
+        page.set_extension("html");
+    }
+    if page.extension().and_then(|extension| extension.to_str()) != Some("html") {
+        return Err("page path must end in .html or omit the extension".into());
+    }
+
+    Ok(page.to_string_lossy().replace('\\', "/"))
+}
+
+fn push_page_links(report: &mut String, label: &str, links: &[GraphPageLink]) {
+    report.push_str(&format!("{label}:\n"));
+    if links.is_empty() {
+        report.push_str("  (none)\n");
+        return;
+    }
+
+    for link in links {
+        report.push_str(&format!("  - {} ({})\n", link.page, link.text));
     }
 }
 

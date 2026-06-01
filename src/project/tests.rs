@@ -1,4 +1,5 @@
 use super::document::PageDocument;
+use super::graph::{graph_orphans_report, graph_page_report};
 use super::html::escape_html;
 use super::markdown::{html_to_markdown, markdown_to_html};
 use super::notes::{insert_note_into_document, note_id_from_trigger, render_note_aside};
@@ -7,8 +8,8 @@ use super::render::{render_page_document, stylesheet_href};
 use super::validation::validate_page_metadata;
 use super::{
     add_note, export_page, import_markdown, new_page, patch_note, remove_note, sync_project,
-    validate_project, FileEntry, GraphPageLink, LinkEntry, NoteEntry, PageEntry, ProjectGraph,
-    ProjectIndex, ProjectManifest, Theme,
+    validate_project, FileEntry, GraphPageLink, LinkEntry, NoteEntry, PageEntry, PageGraphEntry,
+    ProjectGraph, ProjectIndex, ProjectManifest, Theme,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -51,6 +52,21 @@ fn write_test_manifest(root: &Path) {
         .expect("serialize manifest"),
     )
     .expect("write manifest");
+}
+
+fn write_test_graph(root: &Path, pages: Vec<PageGraphEntry>) {
+    fs::create_dir_all(root.join(".fractal")).expect("create workspace dir");
+    fs::write(
+        root.join(".fractal").join("graph.json"),
+        serde_json::to_string_pretty(&ProjectGraph {
+            version: 1,
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            pages,
+        })
+        .expect("serialize graph"),
+    )
+    .expect("write graph");
 }
 
 #[test]
@@ -862,6 +878,69 @@ fn sync_rebuilds_index_and_links_notes_before_project_pages() {
             page: "rust.html".to_string(),
             text: "Home".to_string(),
         }]
+    );
+
+    fs::remove_dir_all(&root).expect("cleanup temp dir");
+}
+
+#[test]
+fn graph_page_report_shows_backlinks_and_outlinks() {
+    let root = temp_dir("graph-page-report");
+    fs::create_dir_all(&root).expect("create temp dir");
+    write_test_manifest(&root);
+    write_test_graph(
+        &root,
+        vec![PageGraphEntry {
+            path: "index.html".to_string(),
+            outlinks: vec![GraphPageLink {
+                page: "rust.html".to_string(),
+                text: "Rust".to_string(),
+            }],
+            backlinks: vec![GraphPageLink {
+                page: "folder/topic.html".to_string(),
+                text: "Home".to_string(),
+            }],
+        }],
+    );
+
+    assert_eq!(
+        graph_page_report(&root, Path::new("pages/index")).expect("page report"),
+        "index.html\noutlinks:\n  - rust.html (Rust)\nbacklinks:\n  - folder/topic.html (Home)\n"
+    );
+
+    fs::remove_dir_all(&root).expect("cleanup temp dir");
+}
+
+#[test]
+fn graph_orphans_report_lists_pages_with_no_backlinks() {
+    let root = temp_dir("graph-orphans-report");
+    fs::create_dir_all(&root).expect("create temp dir");
+    write_test_manifest(&root);
+    write_test_graph(
+        &root,
+        vec![
+            PageGraphEntry {
+                path: "index.html".to_string(),
+                outlinks: vec![GraphPageLink {
+                    page: "rust.html".to_string(),
+                    text: "Rust".to_string(),
+                }],
+                backlinks: Vec::new(),
+            },
+            PageGraphEntry {
+                path: "rust.html".to_string(),
+                outlinks: Vec::new(),
+                backlinks: vec![GraphPageLink {
+                    page: "index.html".to_string(),
+                    text: "Rust".to_string(),
+                }],
+            },
+        ],
+    );
+
+    assert_eq!(
+        graph_orphans_report(&root).expect("orphans report"),
+        "orphan pages\n  - index.html (1 outlink)\n"
     );
 
     fs::remove_dir_all(&root).expect("cleanup temp dir");

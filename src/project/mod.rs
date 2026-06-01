@@ -13,6 +13,7 @@ mod sync;
 mod types;
 mod validation;
 
+pub use graph::{show_graph_orphans, show_graph_page};
 pub use index::build_index;
 pub use notes::{add_note, patch_note, remove_note};
 pub use operations::{export_page, import_markdown, init_project, new_page};

@@ -36,6 +36,8 @@ fractal validate --fix
 fractal import <path/to/file.md>
 fractal export <pages/page.html> <export/filename.md>
 fractal index build
+fractal graph page <page/path>
+fractal graph orphans
 fractal sync
 fractal page new <page/path>
 fractal page <page/path> note add <trigger> "<content>"
@@ -73,6 +75,8 @@ my-project/
 - `import` reads a markdown file, converts basic headings and paragraphs into a minimal HTML page under `pages/`, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
 - `export` converts basic headings and paragraphs from an existing Fractal HTML page to markdown at the requested output path.
 - `index build` generates `.fractal/index.json` with every file under `pages/`, page entries for HTML files, page titles, all page meta tags whose names start with `fractal:`, notes, and links. It also generates `.fractal/graph.json` with page/note nodes, graph edges, and per-page backlinks/outlinks.
+- `graph page <page/path>` reads `.fractal/graph.json` and prints the page's backlinks and outlinks. The page path may be relative to `pages/`, include `pages/`, and omit `.html`.
+- `graph orphans` reads `.fractal/graph.json` and lists pages with no backlinks.
 - `sync` rebuilds `.fractal/index.json` and `.fractal/graph.json`, updates each page's note links inside its own `<main>`, then links remaining matching page-title/page-stem text against the project index. It rebuilds both generated data files again after the page rewrites so generated links are reflected.
 - `page new` creates a new HTML page under `pages/`, adds `.html` automatically when omitted, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
 - `page <page/path> note add/remove/patch` mutates notes in the requested page using parser-backed HTML operations and rebuilds `.fractal/index.json` and `.fractal/graph.json`.

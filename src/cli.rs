@@ -1,6 +1,6 @@
 use crate::project::{
     add_note, build_index, export_page, import_markdown, init_project, new_page, patch_note,
-    remove_note, sync_project, validate_project,
+    remove_note, show_graph_orphans, show_graph_page, sync_project, validate_project,
 };
 use crate::Result;
 use clap::{Parser, Subcommand};
@@ -44,6 +44,11 @@ enum Command {
         #[command(subcommand)]
         command: IndexCommand,
     },
+    /// Query the generated project graph.
+    Graph {
+        #[command(subcommand)]
+        command: GraphCommand,
+    },
     /// Rebuild the project index and sync inferred links across pages.
     Sync,
     /// Manage pages in the project.
@@ -57,6 +62,17 @@ enum Command {
 enum IndexCommand {
     /// Build the generated page index.
     Build,
+}
+
+#[derive(Debug, Subcommand)]
+enum GraphCommand {
+    /// Show backlinks and outlinks for a page.
+    Page {
+        /// Page path relative to pages/, with or without .html.
+        page: PathBuf,
+    },
+    /// List pages with no backlinks.
+    Orphans,
 }
 
 enum ParsedPageCommand {
@@ -89,6 +105,10 @@ pub fn run() -> Result<()> {
         Command::Export { page, output } => export_page(".", &page, &output),
         Command::Index { command } => match command {
             IndexCommand::Build => build_index("."),
+        },
+        Command::Graph { command } => match command {
+            GraphCommand::Page { page } => show_graph_page(".", &page),
+            GraphCommand::Orphans => show_graph_orphans("."),
         },
         Command::Sync => sync_project("."),
         Command::Page { args } => match parse_page_command(args)? {
