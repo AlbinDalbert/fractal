@@ -1,7 +1,7 @@
 use crate::project::constants::{
     INDEX_PAGE, MANIFEST_FILE, MANIFEST_VERSION, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR,
 };
-use crate::project::index::build_index;
+use crate::project::index::{build_index, ensure_page_labels_available};
 use crate::project::markdown::{html_to_markdown, markdown_to_html};
 use crate::project::paths::{
     load_manifest, page_relative_path, resolve_existing_page, resolve_page_destination,
@@ -59,10 +59,6 @@ pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Operat
         return Err(format!("page already exists: {}", destination.display()).into());
     }
 
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
     let title = destination
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -70,6 +66,13 @@ pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Operat
 
     let pages_dir = root.join(PAGES_DIR);
     let relative_page = destination.strip_prefix(&pages_dir)?;
+    let relative_page_string = relative_page.to_string_lossy().replace('\\', "/");
+    ensure_page_labels_available(root, &relative_page_string, title)?;
+
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
     fs::write(
         &destination,
         render_page_document(
@@ -106,11 +109,15 @@ pub fn import_markdown(
     if destination.exists() {
         return Err(format!("page already exists: {}", destination.display()).into());
     }
+
+    let (title, body) = markdown_to_html(stem, &markdown);
+    let relative_page = page_relative_path(root, &destination)?;
+    let relative_page_string = relative_page.to_string_lossy().replace('\\', "/");
+    ensure_page_labels_available(root, &relative_page_string, &title)?;
+
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
-    let relative_page = page_relative_path(root, &destination)?;
-    let (title, body) = markdown_to_html(stem, &markdown);
 
     fs::write(
         &destination,

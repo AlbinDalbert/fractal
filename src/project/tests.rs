@@ -8,9 +8,9 @@ use super::paths::{collect_page_paths, resolve_page_destination};
 use super::render::{render_page_document, stylesheet_href};
 use super::validation::validate_page_metadata;
 use super::{
-    add_note, export_page, import_markdown, new_page, patch_note, remove_note, sync_project,
-    validate_project, FileEntry, GraphPageLink, LinkEntry, NoteEntry, OperationEvent, PageEntry,
-    PageGraphEntry, ProjectGraph, ProjectIndex, ProjectManifest, Theme,
+    add_note, build_index, export_page, import_markdown, new_page, patch_note, remove_note,
+    sync_project, validate_project, FileEntry, GraphPageLink, LinkEntry, NoteEntry, OperationEvent,
+    PageEntry, PageGraphEntry, ProjectGraph, ProjectIndex, ProjectManifest, Theme,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -410,6 +410,29 @@ fn validate_page_metadata_rejects_malformed_note_ids() {
 
     let error = validate_page_metadata(&page).expect_err("malformed note id should fail");
     assert!(error.to_string().contains("malformed note id"));
+}
+
+#[test]
+fn validate_page_metadata_allows_custom_summary_and_tags() {
+    let root = temp_dir("validate-custom-meta");
+    fs::create_dir_all(root.path()).expect("create temp dir");
+    let page = root.join("page.html");
+    fs::write(
+        &page,
+        r#"<html>
+  <head>
+    <meta name="fractal:version" content="0.1">
+    <meta name="fractal:summary" content="A custom project summary.">
+    <meta name="fractal:tags" content="personal, custom">
+  </head>
+  <body>
+    <section data-fractal-notes></section>
+  </body>
+</html>"#,
+    )
+    .expect("write page");
+
+    validate_page_metadata(&page).expect("custom metadata should validate");
 }
 
 #[test]
@@ -983,6 +1006,64 @@ fn sync_rebuilds_index_and_links_notes_before_project_pages() {
 }
 
 #[test]
+fn index_rejects_duplicate_page_labels_case_insensitively() {
+    let project = TestProject::new("duplicate-page-labels");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "alpha.html",
+        render_page_document(
+            "Rust",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "beta.html",
+        render_page_document(
+            "rust",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let error = build_index(project.root()).expect_err("duplicate page labels should fail");
+    assert!(error.to_string().contains("duplicate page label"));
+
+    let error = validate_project(project.root(), false).expect_err("duplicate project should fail");
+    assert!(error.to_string().contains("duplicate page label"));
+}
+
+#[test]
+fn new_page_rejects_existing_page_label_before_writing() {
+    let project = TestProject::new("new-page-duplicate-label");
+    project.write_page(
+        "topic.html",
+        render_page_document(
+            "Rust",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let error =
+        new_page(project.root(), Path::new("rust")).expect_err("new page label should be rejected");
+
+    assert!(error.to_string().contains("duplicate page label"));
+    assert!(!project.pages_dir().join("rust.html").exists());
+}
+
+#[test]
 fn sync_links_ordinary_html_without_touching_manual_or_code_links() {
     let project = TestProject::new("sync-ordinary-html");
     project.write_page(
@@ -1040,6 +1121,42 @@ fn sync_links_ordinary_html_without_touching_manual_or_code_links() {
     );
     assert!(!links.iter().any(|link| link.href == "old.html"));
     assert!(html.contains("<code>Rust</code>"));
+}
+
+#[test]
+fn sync_prefers_page_local_notes_over_same_named_pages_case_insensitively() {
+    let project = TestProject::new("sync-note-priority");
+    let index = render_page_document(
+        "Home",
+        "<p>RUST appears here.</p>",
+        Theme::Dark,
+        "../.fractal/style.css".to_string(),
+    );
+    let index = insert_note_into_document(&index, &render_note_aside("note-rust", "note body"))
+        .expect("insert note");
+    project.write_page("index.html", index);
+    project.write_page(
+        "rust.html",
+        render_page_document(
+            "Rust",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    sync_project(project.root()).expect("sync project");
+
+    let html = fs::read_to_string(project.pages_dir().join("index.html")).expect("read index page");
+    let links = PageDocument::parse(&html).links();
+    assert!(links.contains(&LinkEntry {
+        href: "#note-rust".to_string(),
+        text: "RUST".to_string(),
+        scope: "note".to_string(),
+    }));
+    assert!(!links
+        .iter()
+        .any(|link| link.href == "rust.html" && link.text == "RUST" && link.scope == "page"));
 }
 
 #[test]

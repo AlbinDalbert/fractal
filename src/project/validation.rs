@@ -1,5 +1,6 @@
 use crate::project::constants::{INDEX_PAGE, MANIFEST_FILE, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR};
 use crate::project::document::PageDocument;
+use crate::project::index::build_project_index;
 use crate::project::notes::is_valid_note_id;
 use crate::project::paths::{collect_page_paths, is_html_path, load_manifest};
 use crate::project::render::{
@@ -53,6 +54,8 @@ pub fn validate_project(root: impl AsRef<Path>, fix: bool) -> Result<OperationRe
         let page = pages_dir.join(&page_path);
         validate_page_metadata(&page)?;
     }
+
+    build_project_index(root)?;
 
     report.push(OperationEvent::ValidProject {
         project_name: manifest.project_name,
@@ -138,11 +141,21 @@ pub(super) fn validate_page_metadata(page: &Path) -> Result<()> {
 
     let meta = document.fractal_meta();
 
-    for (name, content) in required_meta_tags() {
-        if meta.get(name).map(|value| value.as_str()) != Some(content) {
+    for (name, expected_content) in required_meta_tags() {
+        let Some(content) = meta.get(name) else {
             return Err(
                 format!("missing required meta tag in {}: {}", page.display(), name).into(),
             );
+        };
+
+        if name == "fractal:version" && content != expected_content {
+            return Err(format!(
+                "unsupported page format version in {}: {} (expected {})",
+                page.display(),
+                content,
+                expected_content
+            )
+            .into());
         }
     }
 

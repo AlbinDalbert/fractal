@@ -1,13 +1,13 @@
-use crate::project::constants::{GRAPH_FILE, GRAPH_VERSION, PAGES_DIR, WORKSPACE_DIR};
+use crate::project::constants::{GRAPH_FILE, GRAPH_VERSION, WORKSPACE_DIR};
 use crate::project::links::{is_external_href, resolve_page_href};
-use crate::project::paths::load_manifest;
+use crate::project::paths::{load_manifest, page_relative_path};
 use crate::project::types::{
     GraphEdge, GraphNode, GraphPageLink, LinkEntry, PageGraphEntry, ProjectGraph, ProjectIndex,
 };
 use crate::Result;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Component, Path};
+use std::path::Path;
 
 pub(super) fn build_project_graph(index: &ProjectIndex) -> ProjectGraph {
     let page_paths = index
@@ -160,40 +160,9 @@ fn load_project_graph(root: &Path) -> Result<ProjectGraph> {
 }
 
 fn normalize_graph_page_path(root: &Path, page: &Path) -> Result<String> {
-    let page = if page.is_absolute() {
-        page.strip_prefix(root.join(PAGES_DIR))
-            .map_err(|_| "page path must be inside pages/")?
-            .to_path_buf()
-    } else {
-        let mut components = page.components();
-        match components.next() {
-            Some(Component::Normal(prefix)) if prefix == PAGES_DIR => {
-                components.as_path().to_path_buf()
-            }
-            _ => page.to_path_buf(),
-        }
-    };
-
-    for component in page.components() {
-        match component {
-            Component::Normal(_) => {}
-            Component::CurDir => {}
-            Component::ParentDir => return Err("page path cannot contain `..`".into()),
-            Component::RootDir | Component::Prefix(_) => {
-                return Err("page path must be relative to pages/".into());
-            }
-        }
-    }
-
-    let mut page = page;
-    if page.extension().is_none() {
-        page.set_extension("html");
-    }
-    if page.extension().and_then(|extension| extension.to_str()) != Some("html") {
-        return Err("page path must end in .html or omit the extension".into());
-    }
-
-    Ok(page.to_string_lossy().replace('\\', "/"))
+    Ok(page_relative_path(root, page)?
+        .to_string_lossy()
+        .replace('\\', "/"))
 }
 
 fn push_page_links(report: &mut String, label: &str, links: &[GraphPageLink]) {

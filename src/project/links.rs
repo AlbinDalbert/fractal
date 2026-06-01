@@ -27,8 +27,16 @@ pub(super) fn page_label_from_path(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+pub(super) fn page_link_labels(path: &str, title: &str) -> [String; 2] {
+    [normalize_link_label(title), page_label_from_path(path)]
+}
+
 pub(super) fn normalize_link_label(label: &str) -> String {
     label.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub(super) fn link_label_key(label: &str) -> String {
+    normalize_link_label(label).to_lowercase()
 }
 
 pub(super) fn is_linkable_label(label: &str) -> bool {

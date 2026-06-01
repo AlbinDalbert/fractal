@@ -1,12 +1,15 @@
 use crate::project::constants::{GRAPH_FILE, INDEX_FILE, INDEX_VERSION, PAGES_DIR, WORKSPACE_DIR};
 use crate::project::document::PageDocument;
 use crate::project::graph::build_project_graph;
-use crate::project::links::page_label_from_path;
+use crate::project::links::{
+    link_label_key, normalize_link_label, page_label_from_path, page_link_labels,
+};
 use crate::project::paths::{collect_page_paths, file_kind, is_html_path, load_manifest};
 use crate::project::types::{
     FileEntry, OperationEvent, OperationReport, PageEntry, ProjectGraph, ProjectIndex,
 };
 use crate::Result;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -47,12 +50,27 @@ pub(super) fn build_project_index(root: &Path) -> Result<ProjectIndex> {
         .filter(|path| is_html_path(path))
         .map(|path| build_page_entry(&pages_dir, path))
         .collect::<Result<Vec<_>>>()?;
+    validate_unique_page_labels(&pages)?;
 
     Ok(ProjectIndex {
         version: INDEX_VERSION,
         files,
         pages,
     })
+}
+
+pub(super) fn ensure_page_labels_available(root: &Path, path: &str, title: &str) -> Result<()> {
+    let index = build_project_index(root)?;
+    let mut pages = index.pages;
+    pages.push(PageEntry {
+        path: path.to_string(),
+        title: normalize_link_label(title),
+        meta: BTreeMap::new(),
+        notes: Vec::new(),
+        links: Vec::new(),
+    });
+
+    validate_unique_page_labels(&pages)
 }
 
 pub(super) fn write_generated_project_data(
@@ -97,4 +115,33 @@ fn build_page_entry(pages_dir: &Path, path: String) -> Result<PageEntry> {
         notes,
         links,
     })
+}
+
+fn validate_unique_page_labels(pages: &[PageEntry]) -> Result<()> {
+    let mut owners = BTreeMap::<String, (String, String)>::new();
+
+    for page in pages {
+        for label in page_link_labels(&page.path, &page.title) {
+            let label = normalize_link_label(&label);
+            if label.is_empty() {
+                continue;
+            }
+
+            let key = link_label_key(&label);
+            if let Some((existing_label, existing_path)) = owners.get(&key) {
+                if existing_path != &page.path {
+                    return Err(format!(
+                        "duplicate page label `{}` for {} and {} (matches existing label `{}`)",
+                        label, existing_path, page.path, existing_label
+                    )
+                    .into());
+                }
+                continue;
+            }
+
+            owners.insert(key, (label, page.path.clone()));
+        }
+    }
+
+    Ok(())
 }

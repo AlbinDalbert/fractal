@@ -3,7 +3,7 @@ use crate::project::document::PageDocument;
 use crate::project::html::{escape_html, escape_html_attribute, find_case_insensitive};
 use crate::project::index::{build_project_index, write_generated_project_data};
 use crate::project::links::{
-    is_linkable_label, normalize_link_label, page_label_from_path, relative_href,
+    is_linkable_label, link_label_key, normalize_link_label, page_link_labels, relative_href,
 };
 use crate::project::types::{OperationEvent, OperationReport, ProjectIndex};
 use crate::Result;
@@ -83,13 +83,13 @@ fn project_link_candidates(index: &ProjectIndex, current_page: &str) -> Vec<Link
             continue;
         }
 
-        for label in [page.title.clone(), page_label_from_path(&page.path)] {
+        for label in page_link_labels(&page.path, &page.title) {
             let label = normalize_link_label(&label);
             if !is_linkable_label(&label) {
                 continue;
             }
 
-            let key = label.to_ascii_lowercase();
+            let key = link_label_key(&label);
             if seen.insert(key) {
                 candidates.push(LinkCandidate {
                     match_text: label,

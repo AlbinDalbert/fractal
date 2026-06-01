@@ -70,7 +70,7 @@ my-project/
 ## What works today
 
 - `init` creates the project folder, manifest, starter stylesheet, and starter page.
-- `validate` checks the project structure, verifies the required Fractal meta tags exist in each page, requires exactly one `data-fractal-notes` section, and rejects malformed note ids. HTML extraction for validation is parser-backed, so it is not tied to Fractal's generated indentation or attribute quoting.
+- `validate` checks the project structure, verifies the required Fractal meta tags exist in each page, requires the page format version to match, requires exactly one `data-fractal-notes` section, rejects malformed note ids, and rejects ambiguous duplicate page labels. HTML extraction for validation is parser-backed, so it is not tied to Fractal's generated indentation or attribute quoting.
 - `validate --fix` adds missing Fractal-owned scaffold pieces before validating: `.fractal/`, `.fractal/style.css`, `pages/`, the configured default page, missing required page meta tags, the generated stylesheet link, the body theme marker, and the notes section. It also merges duplicate notes sections while preserving their child content.
 - `import` reads a markdown file, converts basic headings and paragraphs into a minimal HTML page under `pages/`, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
 - `export` converts basic headings and paragraphs from an existing Fractal HTML page to markdown at the requested output path.
@@ -116,7 +116,7 @@ Trigger text is normalized into the note id. For example, `Andromeda Galaxy` bec
 <a href="#note-java" data-fractal-link="note">Java</a>
 ```
 
-After note links are applied, `sync` uses the project index for project-scope links between pages:
+After note links are applied, `sync` uses the project index for project-scope links between pages. Page title/stem labels are case-insensitive and must resolve to exactly one page; duplicate page labels are invalid for now.
 
 ```html
 <a href="subpage.html" data-fractal-link="page">Subpage</a>
