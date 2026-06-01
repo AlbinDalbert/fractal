@@ -1,0 +1,169 @@
+use crate::project::constants::GRAPH_VERSION;
+use crate::project::links::{is_external_href, resolve_page_href};
+use crate::project::types::{
+    GraphEdge, GraphNode, GraphPageLink, LinkEntry, PageGraphEntry, ProjectGraph, ProjectIndex,
+};
+use std::collections::{BTreeMap, BTreeSet};
+
+pub(super) fn build_project_graph(index: &ProjectIndex) -> ProjectGraph {
+    let page_paths = index
+        .pages
+        .iter()
+        .map(|page| page.path.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut note_ids = BTreeSet::new();
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+
+    for page in &index.pages {
+        nodes.push(GraphNode {
+            id: page_node_id(&page.path),
+            kind: "page".to_string(),
+            label: page.title.clone(),
+            path: Some(page.path.clone()),
+        });
+
+        for note in &page.notes {
+            let note_id = note_node_id(&page.path, &note.id);
+            note_ids.insert(note_id.clone());
+            nodes.push(GraphNode {
+                id: note_id.clone(),
+                kind: "note".to_string(),
+                label: note.label.clone(),
+                path: Some(page.path.clone()),
+            });
+            edges.push(GraphEdge {
+                from: page_node_id(&page.path),
+                to: note_id,
+                kind: "contains_note".to_string(),
+                text: Some(note.label.clone()),
+                href: Some(format!("#{}", note.id)),
+            });
+        }
+    }
+
+    for page in &index.pages {
+        for link in &page.links {
+            if let Some((target, kind)) =
+                graph_target_for_link(&page.path, link, &page_paths, &note_ids)
+            {
+                edges.push(GraphEdge {
+                    from: page_node_id(&page.path),
+                    to: target,
+                    kind: kind.to_string(),
+                    text: Some(link.text.clone()),
+                    href: Some(link.href.clone()),
+                });
+            }
+        }
+    }
+
+    nodes.sort_by(|left, right| left.id.cmp(&right.id));
+    edges.sort_by(|left, right| {
+        left.from
+            .cmp(&right.from)
+            .then_with(|| left.to.cmp(&right.to))
+            .then_with(|| left.kind.cmp(&right.kind))
+            .then_with(|| left.text.cmp(&right.text))
+            .then_with(|| left.href.cmp(&right.href))
+    });
+    edges.dedup_by(|left, right| {
+        left.from == right.from
+            && left.to == right.to
+            && left.kind == right.kind
+            && left.text == right.text
+            && left.href == right.href
+    });
+
+    let pages = build_page_graph_entries(index, &edges);
+
+    ProjectGraph {
+        version: GRAPH_VERSION,
+        nodes,
+        edges,
+        pages,
+    }
+}
+
+fn graph_target_for_link(
+    page_path: &str,
+    link: &LinkEntry,
+    page_paths: &BTreeSet<&str>,
+    note_ids: &BTreeSet<String>,
+) -> Option<(String, &'static str)> {
+    if link.scope == "note" && link.href.starts_with('#') {
+        let note_id = note_node_id(page_path, link.href.trim_start_matches('#'));
+        return note_ids
+            .contains(&note_id)
+            .then_some((note_id, "links_to_note"));
+    }
+
+    if link.scope == "external" || is_external_href(&link.href) {
+        return None;
+    }
+
+    let target_path = resolve_page_href(page_path, &link.href)?;
+    page_paths
+        .contains(target_path.as_str())
+        .then(|| (page_node_id(&target_path), "links_to_page"))
+}
+
+fn build_page_graph_entries(index: &ProjectIndex, edges: &[GraphEdge]) -> Vec<PageGraphEntry> {
+    let mut entries = index
+        .pages
+        .iter()
+        .map(|page| {
+            (
+                page.path.clone(),
+                PageGraphEntry {
+                    path: page.path.clone(),
+                    outlinks: Vec::new(),
+                    backlinks: Vec::new(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for edge in edges.iter().filter(|edge| edge.kind == "links_to_page") {
+        let Some(source) = edge.from.strip_prefix("page:") else {
+            continue;
+        };
+        let Some(target) = edge.to.strip_prefix("page:") else {
+            continue;
+        };
+        let text = edge.text.clone().unwrap_or_default();
+
+        if let Some(entry) = entries.get_mut(source) {
+            entry.outlinks.push(GraphPageLink {
+                page: target.to_string(),
+                text: text.clone(),
+            });
+        }
+
+        if let Some(entry) = entries.get_mut(target) {
+            entry.backlinks.push(GraphPageLink {
+                page: source.to_string(),
+                text,
+            });
+        }
+    }
+
+    entries
+        .into_values()
+        .map(|mut entry| {
+            entry.outlinks.sort();
+            entry.outlinks.dedup();
+            entry.backlinks.sort();
+            entry.backlinks.dedup();
+            entry
+        })
+        .collect()
+}
+
+fn page_node_id(path: &str) -> String {
+    format!("page:{path}")
+}
+
+pub(super) fn note_node_id(page_path: &str, note_id: &str) -> String {
+    format!("note:{page_path}#{note_id}")
+}
