@@ -178,3 +178,30 @@ pub struct GraphPageLink {
     pub page: String,
     pub text: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GraphNoteLink {
+    pub id: String,
+    pub label: String,
+    pub href: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GraphRelatedPage {
+    pub page: String,
+    pub text: String,
+    pub direction: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchResult {
+    pub path: String,
+    pub title: String,
+    pub matches: Vec<SearchMatch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SearchMatch {
+    pub field: String,
+    pub text: String,
+}

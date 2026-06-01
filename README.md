@@ -20,8 +20,9 @@ Because of that, import and export are not side features. Converting other forma
 
 ## Core next tasks
 
-- Backlinks/outlinks graph: expand the initial durable graph data beyond `.fractal/graph.json` v0. This is likely one of the most important engine pieces because runtime linking, discovery, traversal, and LLM-oriented lookup should not depend on repeatedly rescanning every page. The current graph stores page/note nodes, graph edges, and per-page backlinks/outlinks; the next step is to add commands and richer edge types on top of it.
-- Search and discovery: add keyword search, graph traversal, related pages, orphan page detection, and unresolved mention tracking.
+- Backlinks/outlinks graph: expand the initial durable graph data beyond `.fractal/graph.json` v0. This is likely one of the most important engine pieces because runtime linking, discovery, traversal, and LLM-oriented lookup should not depend on repeatedly rescanning every page. The current graph stores page/note nodes, graph edges, per-page backlinks/outlinks, and basic graph query commands. The next step is to add richer edge types on top of it.
+- Search and discovery: grow keyword search, graph traversal, related pages, and orphan page detection into a more complete discovery surface.
+- Unresolved mention tracking: keep this pinned until the sync feature's responsibilities are clearer. It likely belongs near inferred linking, but the design should decide whether unresolved mentions are a generated index concern, a graph edge concern, a sync report concern, or some combination of those.
 - Semantic/ontological tooling: support entity extraction, aliases, relationships, concept typing, summaries, and embeddings or other semantic index support.
 - Rich metadata model: make summaries and tags editable, replace placeholder defaults, support schema/version migration, and likely introduce stable page IDs or slugs.
 - Robust HTML handling: continue replacing string scanning with a proper HTML parser/serializer. Indexing, validation extraction, and note mutation now use an HTML parser, but generated link rewriting and import/export still need a parser-backed mutation/serialization path so ordinary inspectable HTML works without brittle formatting requirements.
@@ -36,7 +37,12 @@ fractal validate --fix
 fractal import <path/to/file.md>
 fractal export <pages/page.html> <export/filename.md>
 fractal index build
+fractal search <query>
 fractal graph page <page/path>
+fractal graph backlinks <page/path>
+fractal graph outlinks <page/path>
+fractal graph related <page/path>
+fractal graph notes <page/path>
 fractal graph orphans
 fractal sync
 fractal page new <page/path>
@@ -75,7 +81,11 @@ my-project/
 - `import` reads a markdown file, converts basic headings and paragraphs into a minimal HTML page under `pages/`, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
 - `export` converts basic headings and paragraphs from an existing Fractal HTML page to markdown at the requested output path.
 - `index build` generates `.fractal/index.json` with every file under `pages/`, page entries for HTML files, page titles, all page meta tags whose names start with `fractal:`, notes, and links. It also generates `.fractal/graph.json` with page/note nodes, graph edges, and per-page backlinks/outlinks.
+- `search <query>` reads `.fractal/index.json` and searches page titles, summaries, tags, note labels, and link text. Query words may match across different indexed fields on the same page.
 - `graph page <page/path>` reads `.fractal/graph.json` and prints the page's backlinks and outlinks. The page path may be relative to `pages/`, include `pages/`, and omit `.html`.
+- `graph backlinks <page/path>` and `graph outlinks <page/path>` print focused page-link views.
+- `graph related <page/path>` prints the union of the page's backlinks and outlinks with direction markers.
+- `graph notes <page/path>` prints notes contained by the page from the generated graph's `contains_note` edges.
 - `graph orphans` reads `.fractal/graph.json` and lists pages with no backlinks.
 - `sync` rebuilds `.fractal/index.json` and `.fractal/graph.json`, updates each page's note links inside its own `<main>`, then links remaining matching page-title/page-stem text against the project index. It rebuilds both generated data files again after the page rewrites so generated links are reflected.
 - `page new` creates a new HTML page under `pages/`, adds `.html` automatically when omitted, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.

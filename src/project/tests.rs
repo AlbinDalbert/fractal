@@ -8,10 +8,14 @@ use super::paths::{collect_page_paths, resolve_page_destination};
 use super::render::{render_page_document, stylesheet_href};
 use super::validation::validate_page_metadata;
 use super::{
-    add_note, build_index, export_page, import_markdown, init_project_at, load_project_index,
-    load_project_manifest, new_page, patch_note, read_page_source, remove_note, sync_project,
-    validate_project, write_page_source, FileEntry, GraphPageLink, LinkEntry, NoteEntry,
-    OperationEvent, PageEntry, PageGraphEntry, ProjectGraph, ProjectIndex, ProjectManifest, Theme,
+    add_note, build_index, export_page, graph_backlinks_report, graph_notes_report,
+    graph_outlinks_report, graph_related_report, import_markdown, init_project_at,
+    load_project_index, load_project_manifest, new_page, page_backlinks, page_notes, page_outlinks,
+    patch_note, read_page_source, related_pages, remove_note, search_project, search_report,
+    sync_project, validate_project, write_page_source, FileEntry, GraphEdge, GraphNode,
+    GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry, NoteEntry, OperationEvent,
+    PageEntry, PageGraphEntry, ProjectGraph, ProjectIndex, ProjectManifest, SearchMatch,
+    SearchResult, Theme,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -133,13 +137,22 @@ fn write_test_manifest(root: &Path) {
 }
 
 fn write_test_graph(root: &Path, pages: Vec<PageGraphEntry>) {
+    write_test_graph_data(root, Vec::new(), Vec::new(), pages);
+}
+
+fn write_test_graph_data(
+    root: &Path,
+    nodes: Vec<GraphNode>,
+    edges: Vec<GraphEdge>,
+    pages: Vec<PageGraphEntry>,
+) {
     fs::create_dir_all(root.join(".fractal")).expect("create workspace dir");
     fs::write(
         root.join(".fractal").join("graph.json"),
         serde_json::to_string_pretty(&ProjectGraph {
             version: GRAPH_VERSION,
-            nodes: Vec::new(),
-            edges: Vec::new(),
+            nodes,
+            edges,
             pages,
         })
         .expect("serialize graph"),
@@ -1219,6 +1232,56 @@ fn sync_prefers_page_local_notes_over_same_named_pages_case_insensitively() {
 }
 
 #[test]
+fn search_project_finds_indexed_page_fields() {
+    let project = TestProject::new("search");
+    project.write_page(
+        "index.html",
+        r#"<!doctype html>
+<html lang="en">
+  <head>
+    <title>Knowledge Base</title>
+    <meta name="fractal:version" content="0.1">
+    <meta name="fractal:summary" content="Andromeda graph notes.">
+    <meta name="fractal:tags" content="space, graph">
+  </head>
+  <body>
+    <main><p><a href="rust.html">Rust engine</a></p></main>
+    <section data-fractal-notes>
+      <aside id="note-andromeda-galaxy" data-fractal-note data-fractal-trigger="Andromeda Galaxy"></aside>
+    </section>
+  </body>
+</html>"#,
+    );
+    build_index(project.root()).expect("build index");
+
+    assert_eq!(
+        search_project(project.root(), "andromeda graph").expect("search project"),
+        vec![SearchResult {
+            path: "index.html".to_string(),
+            title: "Knowledge Base".to_string(),
+            matches: vec![
+                SearchMatch {
+                    field: "note".to_string(),
+                    text: "Andromeda Galaxy".to_string(),
+                },
+                SearchMatch {
+                    field: "summary".to_string(),
+                    text: "Andromeda graph notes.".to_string(),
+                },
+                SearchMatch {
+                    field: "tags".to_string(),
+                    text: "space, graph".to_string(),
+                },
+            ],
+        }]
+    );
+    assert_eq!(
+        search_report(project.root(), "rust").expect("search report"),
+        "search results for `rust`\n  - index.html (Knowledge Base)\n    link: Rust engine\n"
+    );
+}
+
+#[test]
 fn graph_page_report_shows_backlinks_and_outlinks() {
     let root = temp_dir("graph-page-report");
     fs::create_dir_all(root.path()).expect("create temp dir");
@@ -1250,6 +1313,103 @@ fn graph_page_report_shows_backlinks_and_outlinks() {
             page: "rust.html".to_string(),
             text: "Rust".to_string(),
         }]
+    );
+}
+
+#[test]
+fn graph_focused_reports_show_basic_page_views() {
+    let root = temp_dir("graph-focused-reports");
+    fs::create_dir_all(root.path()).expect("create temp dir");
+    write_test_manifest(root.path());
+    write_test_graph_data(
+        root.path(),
+        vec![
+            GraphNode {
+                id: "page:index.html".to_string(),
+                kind: "page".to_string(),
+                label: "Home".to_string(),
+                path: Some("index.html".to_string()),
+            },
+            GraphNode {
+                id: "note:index.html#note-rust".to_string(),
+                kind: "note".to_string(),
+                label: "Rust".to_string(),
+                path: Some("index.html".to_string()),
+            },
+        ],
+        vec![GraphEdge {
+            from: "page:index.html".to_string(),
+            to: "note:index.html#note-rust".to_string(),
+            kind: "contains_note".to_string(),
+            text: Some("Rust".to_string()),
+            href: Some("#note-rust".to_string()),
+        }],
+        vec![PageGraphEntry {
+            path: "index.html".to_string(),
+            outlinks: vec![GraphPageLink {
+                page: "rust.html".to_string(),
+                text: "Rust".to_string(),
+            }],
+            backlinks: vec![GraphPageLink {
+                page: "folder/topic.html".to_string(),
+                text: "Home".to_string(),
+            }],
+        }],
+    );
+
+    assert_eq!(
+        page_outlinks(root.path(), Path::new("index")).expect("outlinks"),
+        vec![GraphPageLink {
+            page: "rust.html".to_string(),
+            text: "Rust".to_string(),
+        }]
+    );
+    assert_eq!(
+        page_backlinks(root.path(), Path::new("index")).expect("backlinks"),
+        vec![GraphPageLink {
+            page: "folder/topic.html".to_string(),
+            text: "Home".to_string(),
+        }]
+    );
+    assert_eq!(
+        related_pages(root.path(), Path::new("index")).expect("related pages"),
+        vec![
+            GraphRelatedPage {
+                page: "folder/topic.html".to_string(),
+                text: "Home".to_string(),
+                direction: "backlink".to_string(),
+            },
+            GraphRelatedPage {
+                page: "rust.html".to_string(),
+                text: "Rust".to_string(),
+                direction: "outlink".to_string(),
+            },
+        ]
+    );
+    assert_eq!(
+        page_notes(root.path(), Path::new("index")).expect("page notes"),
+        vec![GraphNoteLink {
+            id: "note-rust".to_string(),
+            label: "Rust".to_string(),
+            href: "#note-rust".to_string(),
+        }]
+    );
+
+    assert_eq!(
+        graph_outlinks_report(root.path(), Path::new("pages/index")).expect("outlinks report"),
+        "index.html\noutlinks:\n  - rust.html (Rust)\n"
+    );
+    assert_eq!(
+        graph_backlinks_report(root.path(), Path::new("pages/index")).expect("backlinks report"),
+        "index.html\nbacklinks:\n  - folder/topic.html (Home)\n"
+    );
+    assert_eq!(
+        graph_related_report(root.path(), Path::new("pages/index")).expect("related report"),
+        "index.html\nrelated pages:\n  - folder/topic.html (backlink: Home)\n  - rust.html (outlink: Rust)\n"
+    );
+    assert_eq!(
+        graph_notes_report(root.path(), Path::new("pages/index")).expect("notes report"),
+        "index.html\nnotes:\n  - note-rust (Rust)\n"
     );
 }
 

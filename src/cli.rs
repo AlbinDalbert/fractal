@@ -1,7 +1,8 @@
 use crate::project::{
-    add_note, build_index, export_page, graph_orphans_report, graph_page_report, import_markdown,
-    init_project, new_page, patch_note, remove_note, sync_project, validate_project,
-    OperationEvent, OperationReport,
+    add_note, build_index, export_page, graph_backlinks_report, graph_notes_report,
+    graph_orphans_report, graph_outlinks_report, graph_page_report, graph_related_report,
+    import_markdown, init_project, new_page, patch_note, remove_note, search_report, sync_project,
+    validate_project, OperationEvent, OperationReport,
 };
 use crate::Result;
 use clap::{Parser, Subcommand};
@@ -50,6 +51,11 @@ enum Command {
         #[command(subcommand)]
         command: GraphCommand,
     },
+    /// Search the generated project index.
+    Search {
+        /// Keyword query to search for.
+        query: String,
+    },
     /// Rebuild the project index and sync inferred links across pages.
     Sync,
     /// Manage pages in the project.
@@ -71,6 +77,26 @@ enum IndexCommand {
 enum GraphCommand {
     /// Show backlinks and outlinks for a page.
     Page {
+        /// Page path relative to pages/, with or without .html.
+        page: PathBuf,
+    },
+    /// Show pages that link to a page.
+    Backlinks {
+        /// Page path relative to pages/, with or without .html.
+        page: PathBuf,
+    },
+    /// Show pages linked from a page.
+    Outlinks {
+        /// Page path relative to pages/, with or without .html.
+        page: PathBuf,
+    },
+    /// Show graph-adjacent pages.
+    Related {
+        /// Page path relative to pages/, with or without .html.
+        page: PathBuf,
+    },
+    /// Show notes contained by a page.
+    Notes {
         /// Page path relative to pages/, with or without .html.
         page: PathBuf,
     },
@@ -131,11 +157,31 @@ pub fn run() -> Result<()> {
                 print!("{}", graph_page_report(".", &page)?);
                 return Ok(());
             }
+            GraphCommand::Backlinks { page } => {
+                print!("{}", graph_backlinks_report(".", &page)?);
+                return Ok(());
+            }
+            GraphCommand::Outlinks { page } => {
+                print!("{}", graph_outlinks_report(".", &page)?);
+                return Ok(());
+            }
+            GraphCommand::Related { page } => {
+                print!("{}", graph_related_report(".", &page)?);
+                return Ok(());
+            }
+            GraphCommand::Notes { page } => {
+                print!("{}", graph_notes_report(".", &page)?);
+                return Ok(());
+            }
             GraphCommand::Orphans => {
                 print!("{}", graph_orphans_report(".")?);
                 return Ok(());
             }
         },
+        Command::Search { query } => {
+            print!("{}", search_report(".", &query)?);
+            return Ok(());
+        }
         Command::Sync => sync_project("."),
         Command::Page { path, command } => match command {
             PageCommand::New { path } => new_page(".", &path),
@@ -254,6 +300,29 @@ mod tests {
                 assert_eq!(trigger, "java");
                 assert_eq!(content, "note body");
             }
+            command => panic!("unexpected command: {command:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_search_command() {
+        let cli = Cli::try_parse_from(["fractal", "search", "rust graph"]).expect("parse search");
+
+        match cli.command {
+            Command::Search { query } => assert_eq!(query, "rust graph"),
+            command => panic!("unexpected command: {command:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_focused_graph_commands() {
+        let cli = Cli::try_parse_from(["fractal", "graph", "related", "index"])
+            .expect("parse graph related");
+
+        match cli.command {
+            Command::Graph {
+                command: GraphCommand::Related { page },
+            } => assert_eq!(page, PathBuf::from("index")),
             command => panic!("unexpected command: {command:?}"),
         }
     }

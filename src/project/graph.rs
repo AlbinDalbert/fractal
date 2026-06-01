@@ -2,7 +2,8 @@ use crate::project::constants::{GRAPH_FILE, GRAPH_VERSION, WORKSPACE_DIR};
 use crate::project::links::{is_external_href, resolve_page_href};
 use crate::project::paths::{load_manifest, page_relative_path};
 use crate::project::types::{
-    GraphEdge, GraphNode, GraphPageLink, LinkEntry, PageGraphEntry, ProjectGraph, ProjectIndex,
+    GraphEdge, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry,
+    PageGraphEntry, ProjectGraph, ProjectIndex,
 };
 use crate::Result;
 use std::collections::{BTreeMap, BTreeSet};
@@ -133,6 +134,73 @@ pub fn orphan_pages(root: impl AsRef<Path>) -> Result<Vec<PageGraphEntry>> {
         .collect())
 }
 
+pub fn page_backlinks(
+    root: impl AsRef<Path>,
+    page: impl AsRef<Path>,
+) -> Result<Vec<GraphPageLink>> {
+    Ok(graph_page(root, page)?.backlinks)
+}
+
+pub fn page_outlinks(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Vec<GraphPageLink>> {
+    Ok(graph_page(root, page)?.outlinks)
+}
+
+pub fn related_pages(
+    root: impl AsRef<Path>,
+    page: impl AsRef<Path>,
+) -> Result<Vec<GraphRelatedPage>> {
+    let entry = graph_page(root, page)?;
+    let mut related = Vec::new();
+
+    related.extend(entry.outlinks.into_iter().map(|link| GraphRelatedPage {
+        page: link.page,
+        text: link.text,
+        direction: "outlink".to_string(),
+    }));
+    related.extend(entry.backlinks.into_iter().map(|link| GraphRelatedPage {
+        page: link.page,
+        text: link.text,
+        direction: "backlink".to_string(),
+    }));
+
+    related.sort();
+    related.dedup();
+    Ok(related)
+}
+
+pub fn page_notes(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Vec<GraphNoteLink>> {
+    let root = root.as_ref();
+    let page_path = normalize_graph_page_path(root, page.as_ref())?;
+    let graph = load_project_graph(root)?;
+    let page_id = page_node_id(&page_path);
+    let labels = graph
+        .nodes
+        .iter()
+        .map(|node| (node.id.clone(), node.label.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut notes = graph
+        .edges
+        .into_iter()
+        .filter(|edge| edge.from == page_id && edge.kind == "contains_note")
+        .filter_map(|edge| {
+            let id = edge.to.split('#').next_back()?.to_string();
+            let href = edge.href.unwrap_or_else(|| format!("#{id}"));
+            let label = labels
+                .get(edge.to.as_str())
+                .cloned()
+                .or(edge.text)
+                .unwrap_or_else(|| id.clone());
+
+            Some(GraphNoteLink { id, label, href })
+        })
+        .collect::<Vec<_>>();
+
+    notes.sort();
+    notes.dedup();
+    Ok(notes)
+}
+
 pub fn graph_page_report(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<String> {
     let entry = graph_page(root, page)?;
 
@@ -140,6 +208,22 @@ pub fn graph_page_report(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Resu
     report.push_str(&format!("{}\n", entry.path));
     push_page_links(&mut report, "outlinks", &entry.outlinks);
     push_page_links(&mut report, "backlinks", &entry.backlinks);
+    Ok(report)
+}
+
+pub fn graph_backlinks_report(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<String> {
+    let entry = graph_page(root, page)?;
+    let mut report = String::new();
+    report.push_str(&format!("{}\n", entry.path));
+    push_page_links(&mut report, "backlinks", &entry.backlinks);
+    Ok(report)
+}
+
+pub fn graph_outlinks_report(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<String> {
+    let entry = graph_page(root, page)?;
+    let mut report = String::new();
+    report.push_str(&format!("{}\n", entry.path));
+    push_page_links(&mut report, "outlinks", &entry.outlinks);
     Ok(report)
 }
 
@@ -160,6 +244,45 @@ pub fn graph_orphans_report(root: impl AsRef<Path>) -> Result<String> {
             entry.outlinks.len(),
             if entry.outlinks.len() == 1 { "" } else { "s" }
         ));
+    }
+    Ok(report)
+}
+
+pub fn graph_related_report(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<String> {
+    let root = root.as_ref();
+    let page_path = normalize_graph_page_path(root, page.as_ref())?;
+    let related = related_pages(root, Path::new(&page_path))?;
+
+    let mut report = String::new();
+    report.push_str(&format!("{page_path}\nrelated pages:\n"));
+    if related.is_empty() {
+        report.push_str("  (none)\n");
+        return Ok(report);
+    }
+
+    for link in related {
+        report.push_str(&format!(
+            "  - {} ({}: {})\n",
+            link.page, link.direction, link.text
+        ));
+    }
+    Ok(report)
+}
+
+pub fn graph_notes_report(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<String> {
+    let root = root.as_ref();
+    let page_path = normalize_graph_page_path(root, page.as_ref())?;
+    let notes = page_notes(root, Path::new(&page_path))?;
+
+    let mut report = String::new();
+    report.push_str(&format!("{page_path}\nnotes:\n"));
+    if notes.is_empty() {
+        report.push_str("  (none)\n");
+        return Ok(report);
+    }
+
+    for note in notes {
+        report.push_str(&format!("  - {} ({})\n", note.id, note.label));
     }
     Ok(report)
 }
