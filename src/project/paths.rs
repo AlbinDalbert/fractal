@@ -36,22 +36,55 @@ pub(super) fn load_manifest(root: &Path) -> Result<ProjectManifest> {
     Ok(manifest)
 }
 
-pub(super) fn normalize_project_path(root: &Path, page: &Path) -> PathBuf {
-    if page.is_absolute() {
-        page.to_path_buf()
-    } else {
-        root.join(page)
-    }
+pub(super) fn resolve_page_destination(root: &Path, page: &Path) -> Result<PathBuf> {
+    let relative = normalize_page_relative_path(page)?;
+    Ok(root.join(PAGES_DIR).join(relative))
 }
 
-pub(super) fn resolve_page_destination(root: &Path, page: &Path) -> Result<PathBuf> {
+pub(super) fn resolve_existing_page(root: &Path, page: &Path) -> Result<PathBuf> {
+    let destination = resolve_page_reference(root, page)?;
+    if !destination.is_file() {
+        return Err(format!("page does not exist: {}", destination.display()).into());
+    }
+    Ok(destination)
+}
+
+pub(super) fn page_relative_path(root: &Path, page: &Path) -> Result<PathBuf> {
+    let resolved = resolve_page_reference(root, page)?;
+    Ok(resolved.strip_prefix(root.join(PAGES_DIR))?.to_path_buf())
+}
+
+fn resolve_page_reference(root: &Path, page: &Path) -> Result<PathBuf> {
+    let relative = if page.is_absolute() {
+        let stripped = page
+            .strip_prefix(root.join(PAGES_DIR))
+            .map_err(|_| "page path must be inside pages/")?
+            .to_path_buf();
+        normalize_page_relative_path(&stripped)?
+    } else {
+        normalize_page_relative_path(page)?
+    };
+
+    Ok(root.join(PAGES_DIR).join(relative))
+}
+
+fn normalize_page_relative_path(page: &Path) -> Result<PathBuf> {
     if page.is_absolute() {
         return Err("page path must be relative to pages/".into());
     }
 
-    for component in page.components() {
+    let mut components = page.components().peekable();
+    if matches!(
+        components.peek(),
+        Some(Component::Normal(prefix)) if prefix.to_str() == Some(PAGES_DIR)
+    ) {
+        components.next();
+    }
+
+    let mut relative = PathBuf::new();
+    for component in components {
         match component {
-            Component::Normal(_) => {}
+            Component::Normal(part) => relative.push(part),
             Component::CurDir => {}
             Component::ParentDir => {
                 return Err("page path cannot contain `..`".into());
@@ -62,7 +95,10 @@ pub(super) fn resolve_page_destination(root: &Path, page: &Path) -> Result<PathB
         }
     }
 
-    let mut relative = page.to_path_buf();
+    if relative.as_os_str().is_empty() {
+        return Err("page path cannot be empty".into());
+    }
+
     if relative.extension().is_none() {
         relative.set_extension("html");
     }
@@ -71,15 +107,7 @@ pub(super) fn resolve_page_destination(root: &Path, page: &Path) -> Result<PathB
         return Err("page path must end in .html or omit the extension".into());
     }
 
-    Ok(root.join(PAGES_DIR).join(relative))
-}
-
-pub(super) fn resolve_existing_page(root: &Path, page: &Path) -> Result<PathBuf> {
-    let destination = resolve_page_destination(root, page)?;
-    if !destination.is_file() {
-        return Err(format!("page does not exist: {}", destination.display()).into());
-    }
-    Ok(destination)
+    Ok(relative)
 }
 
 pub(super) fn collect_page_paths(

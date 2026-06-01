@@ -3,16 +3,17 @@ use crate::project::document::PageDocument;
 use crate::project::graph::build_project_graph;
 use crate::project::links::page_label_from_path;
 use crate::project::paths::{collect_page_paths, file_kind, is_html_path, load_manifest};
-use crate::project::types::{FileEntry, PageEntry, ProjectGraph, ProjectIndex};
+use crate::project::types::{
+    FileEntry, OperationEvent, OperationReport, PageEntry, ProjectGraph, ProjectIndex,
+};
 use crate::Result;
 use std::fs;
 use std::path::Path;
 
-pub fn build_index(root: impl AsRef<Path>) -> Result<()> {
+pub fn build_index(root: impl AsRef<Path>) -> Result<OperationReport> {
     let root = root.as_ref();
     let index = build_project_index(root)?;
-    write_generated_project_data(root, &index)?;
-    Ok(())
+    write_generated_project_data(root, &index)
 }
 
 pub(super) fn build_project_index(root: &Path) -> Result<ProjectIndex> {
@@ -54,26 +55,28 @@ pub(super) fn build_project_index(root: &Path) -> Result<ProjectIndex> {
     })
 }
 
-pub(super) fn write_generated_project_data(root: &Path, index: &ProjectIndex) -> Result<()> {
-    write_project_index(root, index)?;
-    write_project_graph(root, &build_project_graph(index))?;
-    Ok(())
+pub(super) fn write_generated_project_data(
+    root: &Path,
+    index: &ProjectIndex,
+) -> Result<OperationReport> {
+    let mut report = OperationReport::new();
+    report.push(write_project_index(root, index)?);
+    report.push(write_project_graph(root, &build_project_graph(index))?);
+    Ok(report)
 }
 
-fn write_project_index(root: &Path, index: &ProjectIndex) -> Result<()> {
+fn write_project_index(root: &Path, index: &ProjectIndex) -> Result<OperationEvent> {
     let index_path = root.join(WORKSPACE_DIR).join(INDEX_FILE);
     fs::write(&index_path, serde_json::to_string_pretty(index)?)?;
 
-    println!("built {}", index_path.display());
-    Ok(())
+    Ok(OperationEvent::Built { path: index_path })
 }
 
-fn write_project_graph(root: &Path, graph: &ProjectGraph) -> Result<()> {
+fn write_project_graph(root: &Path, graph: &ProjectGraph) -> Result<OperationEvent> {
     let graph_path = root.join(WORKSPACE_DIR).join(GRAPH_FILE);
     fs::write(&graph_path, serde_json::to_string_pretty(graph)?)?;
 
-    println!("built {}", graph_path.display());
-    Ok(())
+    Ok(OperationEvent::Built { path: graph_path })
 }
 
 fn build_page_entry(pages_dir: &Path, path: String) -> Result<PageEntry> {

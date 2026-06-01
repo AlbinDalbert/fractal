@@ -5,16 +5,17 @@ use crate::project::paths::{collect_page_paths, is_html_path, load_manifest};
 use crate::project::render::{
     default_stylesheet, render_page_document, required_meta_tags, stylesheet_href,
 };
-use crate::project::types::Theme;
+use crate::project::types::{OperationEvent, OperationReport, Theme};
 use crate::Result;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-pub fn validate_project(root: impl AsRef<Path>, fix: bool) -> Result<()> {
+pub fn validate_project(root: impl AsRef<Path>, fix: bool) -> Result<OperationReport> {
     let root = root.as_ref();
+    let mut report = OperationReport::new();
     if fix {
-        fix_project(root)?;
+        report.extend(fix_project(root)?);
     }
 
     let manifest_path = root.join(MANIFEST_FILE);
@@ -53,18 +54,18 @@ pub fn validate_project(root: impl AsRef<Path>, fix: bool) -> Result<()> {
         validate_page_metadata(&page)?;
     }
 
-    println!(
-        "valid Fractal project: {} ({})",
-        manifest.project_name,
-        manifest_path.display()
-    );
-    Ok(())
+    report.push(OperationEvent::ValidProject {
+        project_name: manifest.project_name,
+        manifest_path,
+    });
+    Ok(report)
 }
 
-fn fix_project(root: &Path) -> Result<()> {
+fn fix_project(root: &Path) -> Result<OperationReport> {
     let manifest = load_manifest(root)?;
     let workspace_dir = root.join(WORKSPACE_DIR);
     let pages_dir = root.join(PAGES_DIR);
+    let mut report = OperationReport::new();
 
     fs::create_dir_all(&workspace_dir)?;
     fs::create_dir_all(&pages_dir)?;
@@ -72,7 +73,7 @@ fn fix_project(root: &Path) -> Result<()> {
     let stylesheet = workspace_dir.join(STYLE_FILE);
     if !stylesheet.is_file() {
         fs::write(&stylesheet, default_stylesheet())?;
-        println!("fixed {}", stylesheet.display());
+        report.push(OperationEvent::Fixed { path: stylesheet });
     }
 
     let default_page = root.join(&manifest.default_page);
@@ -97,7 +98,9 @@ fn fix_project(root: &Path) -> Result<()> {
                 stylesheet_href(page_path),
             ),
         )?;
-        println!("fixed {}", default_page.display());
+        report.push(OperationEvent::Fixed {
+            path: default_page.clone(),
+        });
     }
 
     let mut page_paths = Vec::new();
@@ -110,10 +113,12 @@ fn fix_project(root: &Path) -> Result<()> {
         }
 
         let page = pages_dir.join(&page_path);
-        fix_page(&page, &page_path, manifest.theme)?;
+        if fix_page(&page, &page_path, manifest.theme)? {
+            report.push(OperationEvent::Fixed { path: page });
+        }
     }
 
-    Ok(())
+    Ok(report)
 }
 
 pub(super) fn validate_page_metadata(page: &Path) -> Result<()> {
@@ -146,7 +151,7 @@ pub(super) fn validate_page_metadata(page: &Path) -> Result<()> {
     Ok(())
 }
 
-fn fix_page(page: &Path, page_path: &str, theme: Theme) -> Result<()> {
+fn fix_page(page: &Path, page_path: &str, theme: Theme) -> Result<bool> {
     let document = PageDocument::from_path(page)?;
     let mut changed = false;
 
@@ -170,10 +175,9 @@ fn fix_page(page: &Path, page_path: &str, theme: Theme) -> Result<()> {
 
     if changed {
         fs::write(page, document.to_html()?)?;
-        println!("fixed {}", page.display());
     }
 
-    Ok(())
+    Ok(changed)
 }
 
 fn validate_note_ids(page: &Path, document: &PageDocument) -> Result<()> {

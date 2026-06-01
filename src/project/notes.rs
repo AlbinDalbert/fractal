@@ -2,6 +2,7 @@ use crate::project::document::PageDocument;
 use crate::project::html::escape_html;
 use crate::project::index::build_index;
 use crate::project::paths::resolve_existing_page;
+use crate::project::types::{OperationEvent, OperationReport};
 use crate::Result;
 use kuchiki::NodeRef;
 use std::fs;
@@ -12,7 +13,7 @@ pub fn add_note(
     page: impl AsRef<Path>,
     trigger: &str,
     content: &str,
-) -> Result<()> {
+) -> Result<OperationReport> {
     let root = root.as_ref();
     let page = resolve_existing_page(root, page.as_ref())?;
     let note_id = note_id_from_trigger(trigger)?;
@@ -25,21 +26,27 @@ pub fn add_note(
 
     let html = insert_note_into_document(&html, &render_note_aside(&note_id, content))?;
     fs::write(&page, html)?;
-    build_index(root)?;
-    println!("added note {} to {}", note_id, page.display());
-    Ok(())
+    let generated = build_index(root)?;
+    let mut report = OperationReport::from_event(OperationEvent::AddedNote { page, note_id });
+    report.extend(generated);
+    Ok(report)
 }
 
-pub fn remove_note(root: impl AsRef<Path>, page: impl AsRef<Path>, trigger: &str) -> Result<()> {
+pub fn remove_note(
+    root: impl AsRef<Path>,
+    page: impl AsRef<Path>,
+    trigger: &str,
+) -> Result<OperationReport> {
     let root = root.as_ref();
     let page = resolve_existing_page(root, page.as_ref())?;
     let note_id = note_id_from_trigger(trigger)?;
     let html = fs::read_to_string(&page)?;
     let html = remove_note_from_document(&html, &note_id)?;
     fs::write(&page, html)?;
-    build_index(root)?;
-    println!("removed note {} from {}", note_id, page.display());
-    Ok(())
+    let generated = build_index(root)?;
+    let mut report = OperationReport::from_event(OperationEvent::RemovedNote { page, note_id });
+    report.extend(generated);
+    Ok(report)
 }
 
 pub fn patch_note(
@@ -47,16 +54,17 @@ pub fn patch_note(
     page: impl AsRef<Path>,
     trigger: &str,
     content: &str,
-) -> Result<()> {
+) -> Result<OperationReport> {
     let root = root.as_ref();
     let page = resolve_existing_page(root, page.as_ref())?;
     let note_id = note_id_from_trigger(trigger)?;
     let html = fs::read_to_string(&page)?;
     let html = patch_note_in_document(&html, &note_id, content)?;
     fs::write(&page, html)?;
-    build_index(root)?;
-    println!("patched note {} in {}", note_id, page.display());
-    Ok(())
+    let generated = build_index(root)?;
+    let mut report = OperationReport::from_event(OperationEvent::PatchedNote { page, note_id });
+    report.extend(generated);
+    Ok(report)
 }
 
 pub(super) fn note_id_from_trigger(trigger: &str) -> Result<String> {

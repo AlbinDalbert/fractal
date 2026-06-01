@@ -9,16 +9,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path};
 
-pub fn show_graph_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<()> {
-    print!("{}", graph_page_report(root.as_ref(), page.as_ref())?);
-    Ok(())
-}
-
-pub fn show_graph_orphans(root: impl AsRef<Path>) -> Result<()> {
-    print!("{}", graph_orphans_report(root.as_ref())?);
-    Ok(())
-}
-
 pub(super) fn build_project_graph(index: &ProjectIndex) -> ProjectGraph {
     let page_paths = index
         .pages
@@ -99,7 +89,9 @@ pub(super) fn build_project_graph(index: &ProjectIndex) -> ProjectGraph {
     }
 }
 
-pub(super) fn graph_page_report(root: &Path, page: &Path) -> Result<String> {
+pub fn graph_page_report(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<String> {
+    let root = root.as_ref();
+    let page = page.as_ref();
     let graph = load_project_graph(root)?;
     let page_path = normalize_graph_page_path(root, page)?;
     let entry = graph
@@ -115,7 +107,8 @@ pub(super) fn graph_page_report(root: &Path, page: &Path) -> Result<String> {
     Ok(report)
 }
 
-pub(super) fn graph_orphans_report(root: &Path) -> Result<String> {
+pub fn graph_orphans_report(root: impl AsRef<Path>) -> Result<String> {
+    let root = root.as_ref();
     let graph = load_project_graph(root)?;
     let orphans = graph
         .pages

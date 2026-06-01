@@ -9,20 +9,96 @@ use super::render::{render_page_document, stylesheet_href};
 use super::validation::validate_page_metadata;
 use super::{
     add_note, export_page, import_markdown, new_page, patch_note, remove_note, sync_project,
-    validate_project, FileEntry, GraphPageLink, LinkEntry, NoteEntry, PageEntry, PageGraphEntry,
-    ProjectGraph, ProjectIndex, ProjectManifest, Theme,
+    validate_project, FileEntry, GraphPageLink, LinkEntry, NoteEntry, OperationEvent, PageEntry,
+    PageGraphEntry, ProjectGraph, ProjectIndex, ProjectManifest, Theme,
 };
 use std::collections::BTreeMap;
 use std::fs;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use tempfile::{Builder, TempDir};
 
-fn temp_dir(name: &str) -> PathBuf {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time should move forward")
-        .as_nanos();
-    std::env::temp_dir().join(format!("fractal-{name}-{unique}"))
+struct TestDir {
+    dir: TempDir,
+}
+
+impl TestDir {
+    fn path(&self) -> &Path {
+        self.dir.path()
+    }
+}
+
+impl AsRef<Path> for TestDir {
+    fn as_ref(&self) -> &Path {
+        self.path()
+    }
+}
+
+impl Deref for TestDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        self.path()
+    }
+}
+
+struct TestProject {
+    root: TestDir,
+}
+
+impl TestProject {
+    fn new(name: &str) -> Self {
+        let root = temp_dir(name);
+        fs::create_dir_all(root.pages_dir()).expect("create pages dir");
+        fs::create_dir_all(root.workspace_dir()).expect("create workspace dir");
+        fs::write(root.workspace_dir().join("style.css"), "").expect("write stylesheet");
+        write_test_manifest(root.path());
+        Self { root }
+    }
+
+    fn root(&self) -> &Path {
+        self.root.path()
+    }
+
+    fn pages_dir(&self) -> PathBuf {
+        self.root.pages_dir()
+    }
+
+    fn workspace_dir(&self) -> PathBuf {
+        self.root.workspace_dir()
+    }
+
+    fn write_page(&self, path: &str, html: impl AsRef<str>) {
+        let page = self.pages_dir().join(path);
+        if let Some(parent) = page.parent() {
+            fs::create_dir_all(parent).expect("create page parent dir");
+        }
+        fs::write(page, html.as_ref()).expect("write page");
+    }
+}
+
+trait TestRootExt {
+    fn pages_dir(&self) -> PathBuf;
+    fn workspace_dir(&self) -> PathBuf;
+}
+
+impl<T: AsRef<Path>> TestRootExt for T {
+    fn pages_dir(&self) -> PathBuf {
+        self.as_ref().join("pages")
+    }
+
+    fn workspace_dir(&self) -> PathBuf {
+        self.as_ref().join(".fractal")
+    }
+}
+
+fn temp_dir(name: &str) -> TestDir {
+    TestDir {
+        dir: Builder::new()
+            .prefix(&format!("fractal-{name}-"))
+            .tempdir()
+            .expect("create temp dir"),
+    }
 }
 
 fn required_meta() -> BTreeMap<String, String> {
@@ -84,12 +160,10 @@ fn collects_paths_relative_to_pages_root() {
     fs::write(nested.join("note.html"), "").expect("write nested note");
 
     let mut pages = Vec::new();
-    collect_page_paths(&root, &root, &mut pages).expect("collect page paths");
+    collect_page_paths(root.path(), root.path(), &mut pages).expect("collect page paths");
     pages.sort();
 
     assert_eq!(pages, vec!["index.html", "nested/note.html"]);
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
@@ -195,20 +269,69 @@ fn import_and_export_markdown_files() {
     let source = root.join("source.md");
     fs::write(&source, "# Source\n\nHello\n\n### Deep").expect("write markdown");
 
-    import_markdown(&root, &source).expect("import markdown");
+    import_markdown(root.path(), &source).expect("import markdown");
     let page = fs::read_to_string(pages_dir.join("source.html")).expect("read imported page");
     assert!(page.contains("<h1>Source</h1>"));
     assert!(page.contains("<p>Hello</p>"));
     assert!(page.contains("<h3>Deep</h3>"));
 
     let output = root.join("out.md");
-    export_page(&root, Path::new("pages/source.html"), &output).expect("export markdown");
+    export_page(root.path(), Path::new("pages/source.html"), &output).expect("export markdown");
     assert_eq!(
         fs::read_to_string(output).expect("read exported markdown"),
         "# Source\n\nHello\n\n### Deep"
     );
+}
 
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
+#[test]
+fn markdown_import_rejects_existing_destination() {
+    let project = TestProject::new("markdown-overwrite");
+    project.write_page(
+        "source.html",
+        render_page_document(
+            "source",
+            "<p>existing</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    let source = project.root().join("source.md");
+    fs::write(&source, "# Source").expect("write markdown");
+
+    let error = import_markdown(project.root(), &source).expect_err("overwrite should fail");
+
+    assert!(error.to_string().contains("page already exists"));
+    assert!(fs::read_to_string(project.pages_dir().join("source.html"))
+        .expect("read existing page")
+        .contains("existing"));
+}
+
+#[test]
+fn export_page_accepts_optional_pages_prefix() {
+    let project = TestProject::new("export-prefix");
+    project.write_page(
+        "source.html",
+        render_page_document(
+            "Source",
+            "<p>Hello</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    let output = project.root().join("out.md");
+
+    export_page(project.root(), Path::new("source"), &output).expect("export markdown");
+    assert_eq!(
+        fs::read_to_string(&output).expect("read export"),
+        "# Source\n\nHello"
+    );
+
+    export_page(project.root(), Path::new("pages/source.html"), &output)
+        .expect("export markdown with pages prefix");
+    assert_eq!(
+        fs::read_to_string(output).expect("read export"),
+        "# Source\n\nHello"
+    );
 }
 
 #[test]
@@ -226,7 +349,7 @@ fn stylesheet_href_reaches_workspace_from_nested_pages() {
 #[test]
 fn validate_page_metadata_rejects_missing_notes_section() {
     let root = temp_dir("validate-notes");
-    fs::create_dir_all(&root).expect("create temp dir");
+    fs::create_dir_all(root.path()).expect("create temp dir");
     let page = root.join("page.html");
     fs::write(
             &page,
@@ -236,14 +359,12 @@ fn validate_page_metadata_rejects_missing_notes_section() {
 
     let error = validate_page_metadata(&page).expect_err("missing notes section should fail");
     assert!(error.to_string().contains("missing notes section"));
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
 fn validate_page_metadata_rejects_duplicate_notes_sections() {
     let root = temp_dir("validate-duplicate-notes");
-    fs::create_dir_all(&root).expect("create temp dir");
+    fs::create_dir_all(root.path()).expect("create temp dir");
     let page = root.join("page.html");
     fs::write(
         &page,
@@ -263,14 +384,12 @@ fn validate_page_metadata_rejects_duplicate_notes_sections() {
 
     let error = validate_page_metadata(&page).expect_err("duplicate notes sections should fail");
     assert!(error.to_string().contains("duplicate notes section"));
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
 fn validate_page_metadata_rejects_malformed_note_ids() {
     let root = temp_dir("validate-note-id");
-    fs::create_dir_all(&root).expect("create temp dir");
+    fs::create_dir_all(root.path()).expect("create temp dir");
     let page = root.join("page.html");
     fs::write(
         &page,
@@ -291,14 +410,12 @@ fn validate_page_metadata_rejects_malformed_note_ids() {
 
     let error = validate_page_metadata(&page).expect_err("malformed note id should fail");
     assert!(error.to_string().contains("malformed note id"));
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
 fn validate_rejects_unsupported_manifest_version() {
     let root = temp_dir("manifest-version");
-    fs::create_dir_all(&root).expect("create temp dir");
+    fs::create_dir_all(root.path()).expect("create temp dir");
     fs::write(
         root.join("fractal.json"),
         serde_json::to_string_pretty(&ProjectManifest {
@@ -311,10 +428,8 @@ fn validate_rejects_unsupported_manifest_version() {
     )
     .expect("write manifest");
 
-    let error = validate_project(&root, false).expect_err("unsupported manifest should fail");
+    let error = validate_project(root.path(), false).expect_err("unsupported manifest should fail");
     assert!(error.to_string().contains("unsupported manifest version"));
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
@@ -339,7 +454,7 @@ fn validate_fix_repairs_missing_project_scaffold_and_page_markers() {
         )
         .expect("write page");
 
-    validate_project(&root, true).expect("fix and validate project");
+    validate_project(root.path(), true).expect("fix and validate project");
 
     assert!(root.join(".fractal/style.css").is_file());
     let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
@@ -351,8 +466,6 @@ fn validate_fix_repairs_missing_project_scaffold_and_page_markers() {
         .is_ok());
     assert!(html.contains("<body data-fractal-theme=\"dark\">"));
     assert_eq!(document.notes_section_count(), 1);
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
@@ -360,7 +473,7 @@ fn validate_fix_merges_duplicate_notes_sections() {
     let root = temp_dir("validate-fix-duplicate-notes");
     let pages_dir = root.join("pages");
     fs::create_dir_all(&pages_dir).expect("create pages dir");
-    write_test_manifest(&root);
+    write_test_manifest(root.path());
     fs::write(
         pages_dir.join("index.html"),
         r#"<!doctype html>
@@ -386,7 +499,7 @@ fn validate_fix_merges_duplicate_notes_sections() {
     )
     .expect("write page");
 
-    validate_project(&root, true).expect("fix and validate project");
+    validate_project(root.path(), true).expect("fix and validate project");
 
     let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
     let document = PageDocument::parse(&html);
@@ -404,8 +517,6 @@ fn validate_fix_merges_duplicate_notes_sections() {
             },
         ]
     );
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
@@ -439,9 +550,7 @@ fn validate_ignores_non_html_files_under_pages() {
     .expect("write index page");
     fs::write(pages_dir.join("asset.txt"), "asset").expect("write asset");
 
-    validate_project(&root, false).expect("validate project");
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
+    validate_project(root.path(), false).expect("validate project");
 }
 
 #[test]
@@ -450,6 +559,14 @@ fn page_destination_is_relative_to_pages_root() {
         .expect("resolve destination");
 
     assert_eq!(destination, PathBuf::from("./pages/nested/secondpage.html"));
+}
+
+#[test]
+fn page_destination_accepts_optional_pages_prefix() {
+    let destination = resolve_page_destination(Path::new("."), Path::new("pages/nested/topic"))
+        .expect("resolve destination");
+
+    assert_eq!(destination, PathBuf::from("./pages/nested/topic.html"));
 }
 
 #[test]
@@ -474,37 +591,27 @@ fn note_id_normalizes_trigger_text() {
 
 #[test]
 fn new_page_rebuilds_index() {
-    let root = temp_dir("new-page-index");
-    let pages_dir = root.join("pages");
-    let workspace_dir = root.join(".fractal");
-    fs::create_dir_all(&pages_dir).expect("create pages dir");
-    fs::create_dir_all(&workspace_dir).expect("create workspace dir");
-    fs::write(
-        root.join("fractal.json"),
-        serde_json::to_string_pretty(&ProjectManifest {
-            project_name: "test".to_string(),
-            version: MANIFEST_VERSION,
-            default_page: "pages/index.html".to_string(),
-            theme: Theme::Dark,
-        })
-        .expect("serialize manifest"),
-    )
-    .expect("write manifest");
-    fs::write(
-        pages_dir.join("index.html"),
+    let project = TestProject::new("new-page-index");
+    project.write_page(
+        "index.html",
         render_page_document(
             "index",
             "<p>body</p>",
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
-    )
-    .expect("write index page");
+    );
 
-    new_page(&root, Path::new("secondpage")).expect("create new page");
+    let report = new_page(project.root(), Path::new("secondpage")).expect("create new page");
+    assert_eq!(
+        report.events.first(),
+        Some(&OperationEvent::Created {
+            path: project.pages_dir().join("secondpage.html")
+        })
+    );
 
     let index: ProjectIndex = serde_json::from_str(
-        &fs::read_to_string(workspace_dir.join("index.json")).expect("read index"),
+        &fs::read_to_string(project.workspace_dir().join("index.json")).expect("read index"),
     )
     .expect("parse index");
 
@@ -541,14 +648,12 @@ fn new_page_rebuilds_index() {
             }
         ]
     );
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
 fn extracts_all_fractal_meta_tags() {
     let root = temp_dir("extract-meta");
-    fs::create_dir_all(&root).expect("create temp dir");
+    fs::create_dir_all(root.path()).expect("create temp dir");
     let page = root.join("page.html");
     fs::write(
             &page,
@@ -577,8 +682,6 @@ fn extracts_all_fractal_meta_tags() {
         .into_iter()
         .collect()
     );
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
@@ -635,36 +738,20 @@ fn page_document_extracts_from_ordinary_html_formatting() {
 
 #[test]
 fn add_note_creates_notes_section_in_requested_page() {
-    let root = temp_dir("add-note");
-    let pages_dir = root.join("pages");
-    let workspace_dir = root.join(".fractal");
-    fs::create_dir_all(&pages_dir).expect("create pages dir");
-    fs::create_dir_all(&workspace_dir).expect("create workspace dir");
-    fs::write(
-        root.join("fractal.json"),
-        serde_json::to_string_pretty(&ProjectManifest {
-            project_name: "test".to_string(),
-            version: MANIFEST_VERSION,
-            default_page: "pages/index.html".to_string(),
-            theme: Theme::Dark,
-        })
-        .expect("serialize manifest"),
-    )
-    .expect("write manifest");
-    fs::write(
-        pages_dir.join("index.html"),
+    let project = TestProject::new("add-note");
+    project.write_page(
+        "index.html",
         render_page_document(
             "index",
             "<p>body</p>",
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
-    )
-    .expect("write index page");
+    );
 
-    add_note(&root, Path::new("index"), "java", "my note text").expect("add note");
+    add_note(project.root(), Path::new("index"), "java", "my note text").expect("add note");
 
-    let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
+    let html = fs::read_to_string(project.pages_dir().join("index.html")).expect("read page");
     let document = PageDocument::parse(&html);
     assert_eq!(document.notes_section_count(), 1);
     assert_eq!(
@@ -675,28 +762,11 @@ fn add_note_creates_notes_section_in_requested_page() {
         }]
     );
     assert!(html.contains("<p>my note text</p>"));
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
 fn patch_note_updates_existing_note() {
-    let root = temp_dir("patch-note");
-    let pages_dir = root.join("pages");
-    let workspace_dir = root.join(".fractal");
-    fs::create_dir_all(&pages_dir).expect("create pages dir");
-    fs::create_dir_all(&workspace_dir).expect("create workspace dir");
-    fs::write(
-        root.join("fractal.json"),
-        serde_json::to_string_pretty(&ProjectManifest {
-            project_name: "test".to_string(),
-            version: MANIFEST_VERSION,
-            default_page: "pages/index.html".to_string(),
-            theme: Theme::Dark,
-        })
-        .expect("serialize manifest"),
-    )
-    .expect("write manifest");
+    let project = TestProject::new("patch-note");
     let page = insert_note_into_document(
         &render_page_document(
             "index",
@@ -707,35 +777,18 @@ fn patch_note_updates_existing_note() {
         &render_note_aside("note-java", "old text"),
     )
     .expect("insert note");
-    fs::write(pages_dir.join("index.html"), page).expect("write index page");
+    project.write_page("index.html", page);
 
-    patch_note(&root, Path::new("index"), "java", "new text").expect("patch note");
+    patch_note(project.root(), Path::new("index"), "java", "new text").expect("patch note");
 
-    let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
+    let html = fs::read_to_string(project.pages_dir().join("index.html")).expect("read page");
     assert!(html.contains("<p>new text</p>"));
     assert!(!html.contains("<p>old text</p>"));
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
 fn remove_note_keeps_empty_note_section() {
-    let root = temp_dir("remove-note");
-    let pages_dir = root.join("pages");
-    let workspace_dir = root.join(".fractal");
-    fs::create_dir_all(&pages_dir).expect("create pages dir");
-    fs::create_dir_all(&workspace_dir).expect("create workspace dir");
-    fs::write(
-        root.join("fractal.json"),
-        serde_json::to_string_pretty(&ProjectManifest {
-            project_name: "test".to_string(),
-            version: MANIFEST_VERSION,
-            default_page: "pages/index.html".to_string(),
-            theme: Theme::Dark,
-        })
-        .expect("serialize manifest"),
-    )
-    .expect("write manifest");
+    let project = TestProject::new("remove-note");
     let page = insert_note_into_document(
         &render_page_document(
             "index",
@@ -746,28 +799,21 @@ fn remove_note_keeps_empty_note_section() {
         &render_note_aside("note-java", "old text"),
     )
     .expect("insert note");
-    fs::write(pages_dir.join("index.html"), page).expect("write index page");
+    project.write_page("index.html", page);
 
-    remove_note(&root, Path::new("index"), "java").expect("remove note");
+    remove_note(project.root(), Path::new("index"), "java").expect("remove note");
 
-    let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
+    let html = fs::read_to_string(project.pages_dir().join("index.html")).expect("read page");
     let document = PageDocument::parse(&html);
     assert!(!html.contains("note-java"));
     assert_eq!(document.notes_section_count(), 1);
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
 fn note_mutation_handles_ordinary_html_formatting() {
-    let root = temp_dir("messy-note-mutation");
-    let pages_dir = root.join("pages");
-    let workspace_dir = root.join(".fractal");
-    fs::create_dir_all(&pages_dir).expect("create pages dir");
-    fs::create_dir_all(&workspace_dir).expect("create workspace dir");
-    write_test_manifest(&root);
-    fs::write(
-        pages_dir.join("index.html"),
+    let project = TestProject::new("messy-note-mutation");
+    project.write_page(
+        "index.html",
         r#"<!doctype html>
 <HTML lang="en">
   <HEAD>
@@ -784,14 +830,13 @@ fn note_mutation_handles_ordinary_html_formatting() {
   </BODY>
 </HTML>
 "#,
-    )
-    .expect("write index page");
+    );
 
-    add_note(&root, Path::new("index"), "Java", "java & <note>").expect("add note");
-    patch_note(&root, Path::new("index"), "rust", "patched <rust>").expect("patch note");
-    remove_note(&root, Path::new("index"), "Java").expect("remove note");
+    add_note(project.root(), Path::new("index"), "Java", "java & <note>").expect("add note");
+    patch_note(project.root(), Path::new("index"), "rust", "patched <rust>").expect("patch note");
+    remove_note(project.root(), Path::new("index"), "Java").expect("remove note");
 
-    let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
+    let html = fs::read_to_string(project.pages_dir().join("index.html")).expect("read page");
     let document = PageDocument::parse(&html);
     assert_eq!(document.notes_section_count(), 1);
     assert_eq!(
@@ -803,28 +848,11 @@ fn note_mutation_handles_ordinary_html_formatting() {
     );
     assert!(html.contains("patched &lt;rust&gt;"));
     assert!(!html.contains("note-java"));
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
 fn sync_rebuilds_index_and_links_notes_before_project_pages() {
-    let root = temp_dir("sync-links");
-    let pages_dir = root.join("pages");
-    let workspace_dir = root.join(".fractal");
-    fs::create_dir_all(&pages_dir).expect("create pages dir");
-    fs::create_dir_all(&workspace_dir).expect("create workspace dir");
-    fs::write(
-        root.join("fractal.json"),
-        serde_json::to_string_pretty(&ProjectManifest {
-            project_name: "test".to_string(),
-            version: MANIFEST_VERSION,
-            default_page: "pages/index.html".to_string(),
-            theme: Theme::Dark,
-        })
-        .expect("serialize manifest"),
-    )
-    .expect("write manifest");
+    let project = TestProject::new("sync-links");
 
     let index = render_page_document(
         "Home",
@@ -834,23 +862,30 @@ fn sync_rebuilds_index_and_links_notes_before_project_pages() {
     );
     let index = insert_note_into_document(&index, &render_note_aside("note-java", "note body"))
         .expect("insert note");
-    fs::write(pages_dir.join("index.html"), index).expect("write index page");
-    fs::write(
-        pages_dir.join("rust.html"),
+    project.write_page("index.html", index);
+    project.write_page(
+        "rust.html",
         render_page_document(
             "Rust",
             "<p>Home mentions Java.</p>",
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
-    )
-    .expect("write rust page");
-    fs::write(pages_dir.join("asset.txt"), "asset").expect("write asset");
+    );
+    fs::write(project.pages_dir().join("asset.txt"), "asset").expect("write asset");
 
-    sync_project(&root).expect("sync project");
-    sync_project(&root).expect("sync project twice");
+    let first_report = sync_project(project.root()).expect("sync project");
+    let second_report = sync_project(project.root()).expect("sync project twice");
+    assert!(first_report
+        .events
+        .iter()
+        .any(|event| matches!(event, OperationEvent::SyncComplete { pages_updated: 2 })));
+    assert!(second_report
+        .events
+        .iter()
+        .any(|event| matches!(event, OperationEvent::SyncComplete { pages_updated: 0 })));
 
-    let html = fs::read_to_string(pages_dir.join("index.html")).expect("read index page");
+    let html = fs::read_to_string(project.pages_dir().join("index.html")).expect("read index page");
     assert_eq!(html.matches("data-fractal-link=\"note\"").count(), 1);
     assert_eq!(html.matches("data-fractal-link=\"page\"").count(), 1);
     let links = PageDocument::parse(&html).links();
@@ -866,7 +901,7 @@ fn sync_rebuilds_index_and_links_notes_before_project_pages() {
     }));
 
     let index: ProjectIndex = serde_json::from_str(
-        &fs::read_to_string(workspace_dir.join("index.json")).expect("read index"),
+        &fs::read_to_string(project.workspace_dir().join("index.json")).expect("read index"),
     )
     .expect("parse index");
     assert_eq!(index.version, INDEX_VERSION);
@@ -911,7 +946,7 @@ fn sync_rebuilds_index_and_links_notes_before_project_pages() {
     );
 
     let graph: ProjectGraph = serde_json::from_str(
-        &fs::read_to_string(workspace_dir.join("graph.json")).expect("read graph"),
+        &fs::read_to_string(project.workspace_dir().join("graph.json")).expect("read graph"),
     )
     .expect("parse graph");
     assert!(graph.nodes.iter().any(|node| node.id == "page:index.html"));
@@ -945,20 +980,13 @@ fn sync_rebuilds_index_and_links_notes_before_project_pages() {
             text: "Home".to_string(),
         }]
     );
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
 fn sync_links_ordinary_html_without_touching_manual_or_code_links() {
-    let root = temp_dir("sync-ordinary-html");
-    let pages_dir = root.join("pages");
-    let workspace_dir = root.join(".fractal");
-    fs::create_dir_all(&pages_dir).expect("create pages dir");
-    fs::create_dir_all(&workspace_dir).expect("create workspace dir");
-    write_test_manifest(&root);
-    fs::write(
-        pages_dir.join("index.html"),
+    let project = TestProject::new("sync-ordinary-html");
+    project.write_page(
+        "index.html",
         r#"<!doctype html>
 <HTML lang="en">
   <HEAD>
@@ -978,22 +1006,20 @@ fn sync_links_ordinary_html_without_touching_manual_or_code_links() {
   </BODY>
 </HTML>
 "#,
-    )
-    .expect("write index page");
-    fs::write(
-        pages_dir.join("rust.html"),
+    );
+    project.write_page(
+        "rust.html",
         render_page_document(
             "Rust",
             "<p>body</p>",
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
-    )
-    .expect("write rust page");
+    );
 
-    sync_project(&root).expect("sync project");
+    sync_project(project.root()).expect("sync project");
 
-    let html = fs::read_to_string(pages_dir.join("index.html")).expect("read index page");
+    let html = fs::read_to_string(project.pages_dir().join("index.html")).expect("read index page");
     let links = PageDocument::parse(&html).links();
     assert!(links.contains(&LinkEntry {
         href: "manual.html".to_string(),
@@ -1014,17 +1040,15 @@ fn sync_links_ordinary_html_without_touching_manual_or_code_links() {
     );
     assert!(!links.iter().any(|link| link.href == "old.html"));
     assert!(html.contains("<code>Rust</code>"));
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
 fn graph_page_report_shows_backlinks_and_outlinks() {
     let root = temp_dir("graph-page-report");
-    fs::create_dir_all(&root).expect("create temp dir");
-    write_test_manifest(&root);
+    fs::create_dir_all(root.path()).expect("create temp dir");
+    write_test_manifest(root.path());
     write_test_graph(
-        &root,
+        root.path(),
         vec![PageGraphEntry {
             path: "index.html".to_string(),
             outlinks: vec![GraphPageLink {
@@ -1039,20 +1063,18 @@ fn graph_page_report_shows_backlinks_and_outlinks() {
     );
 
     assert_eq!(
-        graph_page_report(&root, Path::new("pages/index")).expect("page report"),
+        graph_page_report(root.path(), Path::new("pages/index")).expect("page report"),
         "index.html\noutlinks:\n  - rust.html (Rust)\nbacklinks:\n  - folder/topic.html (Home)\n"
     );
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
 fn graph_orphans_report_lists_pages_with_no_backlinks() {
     let root = temp_dir("graph-orphans-report");
-    fs::create_dir_all(&root).expect("create temp dir");
-    write_test_manifest(&root);
+    fs::create_dir_all(root.path()).expect("create temp dir");
+    write_test_manifest(root.path());
     write_test_graph(
-        &root,
+        root.path(),
         vec![
             PageGraphEntry {
                 path: "index.html".to_string(),
@@ -1074,18 +1096,16 @@ fn graph_orphans_report_lists_pages_with_no_backlinks() {
     );
 
     assert_eq!(
-        graph_orphans_report(&root).expect("orphans report"),
+        graph_orphans_report(root.path()).expect("orphans report"),
         "orphan pages\n  - index.html (1 outlink)\n"
     );
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
 fn graph_reports_reject_unsupported_graph_version() {
     let root = temp_dir("graph-version");
-    fs::create_dir_all(&root).expect("create temp dir");
-    write_test_manifest(&root);
+    fs::create_dir_all(root.path()).expect("create temp dir");
+    write_test_manifest(root.path());
     fs::create_dir_all(root.join(".fractal")).expect("create workspace dir");
     fs::write(
         root.join(".fractal").join("graph.json"),
@@ -1099,59 +1119,39 @@ fn graph_reports_reject_unsupported_graph_version() {
     )
     .expect("write graph");
 
-    let error = graph_orphans_report(&root).expect_err("unsupported graph should fail");
+    let error = graph_orphans_report(root.path()).expect_err("unsupported graph should fail");
     assert!(error.to_string().contains("unsupported graph version"));
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }
 
 #[test]
 fn sync_uses_relative_links_from_nested_pages() {
-    let root = temp_dir("sync-nested-links");
-    let pages_dir = root.join("pages");
-    let workspace_dir = root.join(".fractal");
-    fs::create_dir_all(pages_dir.join("folder")).expect("create pages dir");
-    fs::create_dir_all(&workspace_dir).expect("create workspace dir");
-    fs::write(
-        root.join("fractal.json"),
-        serde_json::to_string_pretty(&ProjectManifest {
-            project_name: "test".to_string(),
-            version: MANIFEST_VERSION,
-            default_page: "pages/index.html".to_string(),
-            theme: Theme::Dark,
-        })
-        .expect("serialize manifest"),
-    )
-    .expect("write manifest");
-    fs::write(
-        pages_dir.join("index.html"),
+    let project = TestProject::new("sync-nested-links");
+    project.write_page(
+        "index.html",
         render_page_document(
             "Home",
             "<p>Nested Topic lives elsewhere.</p>",
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
-    )
-    .expect("write index page");
-    fs::write(
-        pages_dir.join("folder/topic.html"),
+    );
+    project.write_page(
+        "folder/topic.html",
         render_page_document(
             "Nested Topic",
             "<p>Home is the default page.</p>",
             Theme::Dark,
             "../../.fractal/style.css".to_string(),
         ),
-    )
-    .expect("write nested page");
+    );
 
-    sync_project(&root).expect("sync project");
+    sync_project(project.root()).expect("sync project");
 
-    let nested = fs::read_to_string(pages_dir.join("folder/topic.html")).expect("read nested page");
+    let nested = fs::read_to_string(project.pages_dir().join("folder/topic.html"))
+        .expect("read nested page");
     assert!(PageDocument::parse(&nested).links().contains(&LinkEntry {
         href: "../index.html".to_string(),
         text: "Home".to_string(),
         scope: "page".to_string(),
     }));
-
-    fs::remove_dir_all(&root).expect("cleanup temp dir");
 }

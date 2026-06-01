@@ -5,20 +5,21 @@ use crate::project::index::{build_project_index, write_generated_project_data};
 use crate::project::links::{
     is_linkable_label, normalize_link_label, page_label_from_path, relative_href,
 };
-use crate::project::types::ProjectIndex;
+use crate::project::types::{OperationEvent, OperationReport, ProjectIndex};
 use crate::Result;
 use kuchiki::NodeRef;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-pub fn sync_project(root: impl AsRef<Path>) -> Result<()> {
+pub fn sync_project(root: impl AsRef<Path>) -> Result<OperationReport> {
     let root = root.as_ref();
     let initial_index = build_project_index(root)?;
     write_generated_project_data(root, &initial_index)?;
 
     let pages_dir = root.join(PAGES_DIR);
     let mut synced = 0;
+    let mut report = OperationReport::new();
     for page in &initial_index.pages {
         let path = pages_dir.join(&page.path);
         let html = fs::read_to_string(&path)?;
@@ -26,14 +27,16 @@ pub fn sync_project(root: impl AsRef<Path>) -> Result<()> {
         if updated != html {
             fs::write(&path, updated)?;
             synced += 1;
-            println!("synced {}", path.display());
+            report.push(OperationEvent::Synced { path });
         }
     }
 
     let final_index = build_project_index(root)?;
-    write_generated_project_data(root, &final_index)?;
-    println!("sync complete: {synced} page(s) updated");
-    Ok(())
+    report.extend(write_generated_project_data(root, &final_index)?);
+    report.push(OperationEvent::SyncComplete {
+        pages_updated: synced,
+    });
+    Ok(report)
 }
 
 pub(super) fn sync_page_links(html: &str, page_path: &str, index: &ProjectIndex) -> Result<String> {

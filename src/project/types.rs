@@ -1,5 +1,74 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OperationReport {
+    pub events: Vec<OperationEvent>,
+}
+
+impl OperationReport {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(super) fn from_event(event: OperationEvent) -> Self {
+        Self {
+            events: vec![event],
+        }
+    }
+
+    pub(super) fn push(&mut self, event: OperationEvent) {
+        self.events.push(event);
+    }
+
+    pub(super) fn extend(&mut self, report: OperationReport) {
+        self.events.extend(report.events);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperationEvent {
+    AddedNote {
+        page: PathBuf,
+        note_id: String,
+    },
+    Built {
+        path: PathBuf,
+    },
+    Created {
+        path: PathBuf,
+    },
+    Exported {
+        page: PathBuf,
+        output: PathBuf,
+    },
+    Fixed {
+        path: PathBuf,
+    },
+    Imported {
+        source: PathBuf,
+        destination: PathBuf,
+    },
+    PatchedNote {
+        page: PathBuf,
+        note_id: String,
+    },
+    RemovedNote {
+        page: PathBuf,
+        note_id: String,
+    },
+    Synced {
+        path: PathBuf,
+    },
+    SyncComplete {
+        pages_updated: usize,
+    },
+    ValidProject {
+        project_name: String,
+        manifest_path: PathBuf,
+    },
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProjectManifest {
@@ -10,17 +79,12 @@ pub struct ProjectManifest {
     pub theme: Theme,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
+    #[default]
     Dark,
     Light,
-}
-
-impl Default for Theme {
-    fn default() -> Self {
-        Self::Dark
-    }
 }
 
 impl Theme {

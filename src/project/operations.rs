@@ -3,14 +3,16 @@ use crate::project::constants::{
 };
 use crate::project::index::build_index;
 use crate::project::markdown::{html_to_markdown, markdown_to_html};
-use crate::project::paths::{load_manifest, normalize_project_path, resolve_page_destination};
+use crate::project::paths::{
+    load_manifest, page_relative_path, resolve_existing_page, resolve_page_destination,
+};
 use crate::project::render::{default_stylesheet, render_page_document, stylesheet_href};
-use crate::project::types::{ProjectManifest, Theme};
+use crate::project::types::{OperationEvent, OperationReport, ProjectManifest, Theme};
 use crate::Result;
 use std::fs;
 use std::path::Path;
 
-pub fn init_project(project_name: &str) -> Result<()> {
+pub fn init_project(project_name: &str) -> Result<OperationReport> {
     let root = Path::new(project_name);
     let workspace_dir = root.join(WORKSPACE_DIR);
     let pages_dir = root.join(PAGES_DIR);
@@ -43,11 +45,12 @@ pub fn init_project(project_name: &str) -> Result<()> {
         ),
     )?;
 
-    println!("created {}", root.display());
-    Ok(())
+    Ok(OperationReport::from_event(OperationEvent::Created {
+        path: root.to_path_buf(),
+    }))
 }
 
-pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<()> {
+pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<OperationReport> {
     let root = root.as_ref();
     let manifest = load_manifest(root)?;
 
@@ -76,12 +79,16 @@ pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<()> {
             stylesheet_href(relative_page),
         ),
     )?;
-    build_index(root)?;
-    println!("created {}", destination.display());
-    Ok(())
+    let generated = build_index(root)?;
+    let mut report = OperationReport::from_event(OperationEvent::Created { path: destination });
+    report.extend(generated);
+    Ok(report)
 }
 
-pub fn import_markdown(root: impl AsRef<Path>, source: impl AsRef<Path>) -> Result<()> {
+pub fn import_markdown(
+    root: impl AsRef<Path>,
+    source: impl AsRef<Path>,
+) -> Result<OperationReport> {
     let root = root.as_ref();
     let manifest = load_manifest(root)?;
 
@@ -95,7 +102,14 @@ pub fn import_markdown(root: impl AsRef<Path>, source: impl AsRef<Path>) -> Resu
         .file_stem()
         .and_then(|stem| stem.to_str())
         .ok_or("could not derive page name from source file")?;
-    let destination = root.join(PAGES_DIR).join(format!("{stem}.html"));
+    let destination = resolve_page_destination(root, Path::new(stem))?;
+    if destination.exists() {
+        return Err(format!("page already exists: {}", destination.display()).into());
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let relative_page = page_relative_path(root, &destination)?;
     let (title, body) = markdown_to_html(stem, &markdown);
 
     fs::write(
@@ -104,29 +118,27 @@ pub fn import_markdown(root: impl AsRef<Path>, source: impl AsRef<Path>) -> Resu
             &title,
             &body,
             manifest.theme,
-            stylesheet_href(Path::new(&format!("{stem}.html"))),
+            stylesheet_href(&relative_page),
         ),
     )?;
-    build_index(root)?;
-    println!("imported {} -> {}", source.display(), destination.display());
-    Ok(())
+    let generated = build_index(root)?;
+    let mut report = OperationReport::from_event(OperationEvent::Imported {
+        source: source.to_path_buf(),
+        destination,
+    });
+    report.extend(generated);
+    Ok(report)
 }
 
 pub fn export_page(
     root: impl AsRef<Path>,
     page: impl AsRef<Path>,
     output: impl AsRef<Path>,
-) -> Result<()> {
+) -> Result<OperationReport> {
     let root = root.as_ref();
     load_manifest(root)?;
 
-    let page = normalize_project_path(root, page.as_ref());
-    if page.extension().and_then(|ext| ext.to_str()) != Some("html") {
-        return Err(format!("expected an html page: {}", page.display()).into());
-    }
-    if !page.is_file() {
-        return Err(format!("page does not exist: {}", page.display()).into());
-    }
+    let page = resolve_existing_page(root, page.as_ref())?;
 
     let output = output.as_ref();
     if let Some(parent) = output
@@ -138,6 +150,8 @@ pub fn export_page(
 
     let html = fs::read_to_string(&page)?;
     fs::write(output, html_to_markdown(&html))?;
-    println!("exported {} -> {}", page.display(), output.display());
-    Ok(())
+    Ok(OperationReport::from_event(OperationEvent::Exported {
+        page,
+        output: output.to_path_buf(),
+    }))
 }

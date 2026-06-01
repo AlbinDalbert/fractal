@@ -1,6 +1,7 @@
 use crate::project::{
-    add_note, build_index, export_page, import_markdown, init_project, new_page, patch_note,
-    remove_note, show_graph_orphans, show_graph_page, sync_project, validate_project,
+    add_note, build_index, export_page, graph_orphans_report, graph_page_report, import_markdown,
+    init_project, new_page, patch_note, remove_note, sync_project, validate_project,
+    OperationEvent, OperationReport,
 };
 use crate::Result;
 use clap::{Parser, Subcommand};
@@ -117,7 +118,7 @@ enum NoteCommand {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    match cli.command {
+    let report = match cli.command {
         Command::Init { project_name } => init_project(&project_name),
         Command::Validate { fix } => validate_project(".", fix),
         Command::Import { path } => import_markdown(".", &path),
@@ -126,8 +127,14 @@ pub fn run() -> Result<()> {
             IndexCommand::Build => build_index("."),
         },
         Command::Graph { command } => match command {
-            GraphCommand::Page { page } => show_graph_page(".", &page),
-            GraphCommand::Orphans => show_graph_orphans("."),
+            GraphCommand::Page { page } => {
+                print!("{}", graph_page_report(".", &page)?);
+                return Ok(());
+            }
+            GraphCommand::Orphans => {
+                print!("{}", graph_orphans_report(".")?);
+                return Ok(());
+            }
         },
         Command::Sync => sync_project("."),
         Command::Page { path, command } => match command {
@@ -145,6 +152,59 @@ pub fn run() -> Result<()> {
                 }
             }
         },
+    }?;
+
+    print_operation_report(&report);
+    Ok(())
+}
+
+fn print_operation_report(report: &OperationReport) {
+    for event in &report.events {
+        match event {
+            OperationEvent::AddedNote { page, note_id } => {
+                println!("added note {} to {}", note_id, page.display());
+            }
+            OperationEvent::Built { path } => {
+                println!("built {}", path.display());
+            }
+            OperationEvent::Created { path } => {
+                println!("created {}", path.display());
+            }
+            OperationEvent::Exported { page, output } => {
+                println!("exported {} -> {}", page.display(), output.display());
+            }
+            OperationEvent::Fixed { path } => {
+                println!("fixed {}", path.display());
+            }
+            OperationEvent::Imported {
+                source,
+                destination,
+            } => {
+                println!("imported {} -> {}", source.display(), destination.display());
+            }
+            OperationEvent::PatchedNote { page, note_id } => {
+                println!("patched note {} in {}", note_id, page.display());
+            }
+            OperationEvent::RemovedNote { page, note_id } => {
+                println!("removed note {} from {}", note_id, page.display());
+            }
+            OperationEvent::Synced { path } => {
+                println!("synced {}", path.display());
+            }
+            OperationEvent::SyncComplete { pages_updated } => {
+                println!("sync complete: {pages_updated} page(s) updated");
+            }
+            OperationEvent::ValidProject {
+                project_name,
+                manifest_path,
+            } => {
+                println!(
+                    "valid Fractal project: {} ({})",
+                    project_name,
+                    manifest_path.display()
+                );
+            }
+        }
     }
 }
 
