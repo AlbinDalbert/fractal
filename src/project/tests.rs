@@ -958,9 +958,29 @@ fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
         "index.html",
         render_page_document(
             "Home",
-            "<p>body</p>",
+            r#"<p><a href="links.html">Links</a></p>
+      <p><a href="index.html#intro">Self</a></p>"#,
             Theme::Dark,
             "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "links.html",
+        render_page_document(
+            "Links",
+            r#"<p><a href="index.html#intro">Home</a></p>
+      <p><a href="https://example.com/index.html">External</a></p>"#,
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "folder/topic.html",
+        render_page_document(
+            "Topic",
+            r#"<p><a href="../index.html?view=1">Home query</a></p>"#,
+            Theme::Dark,
+            "../../.fractal/style.css".to_string(),
         ),
     );
 
@@ -996,11 +1016,24 @@ fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
         .events
         .iter()
         .any(|event| matches!(event, OperationEvent::UpdatedProjectManifest { .. })));
+    assert!(report
+        .events
+        .iter()
+        .any(|event| matches!(event, OperationEvent::UpdatedPageLinks { .. })));
 
     let html = fs::read_to_string(&destination).expect("read moved page");
     assert!(html.contains("<title>Home Base</title>"));
     assert!(html.contains("<h1>Home Base</h1>"));
     assert!(html.contains("href=\"../../.fractal/style.css\""));
+    assert!(html.contains("href=\"../links.html\""));
+    assert!(html.contains("href=\"home.html#intro\""));
+    let links_html =
+        fs::read_to_string(project.pages_dir().join("links.html")).expect("read links");
+    assert!(links_html.contains("href=\"folder/home.html#intro\""));
+    assert!(links_html.contains("href=\"https://example.com/index.html\""));
+    let topic_html =
+        fs::read_to_string(project.pages_dir().join("folder/topic.html")).expect("read topic");
+    assert!(topic_html.contains("href=\"home.html?view=1\""));
     assert_eq!(
         load_project_manifest(project.root())
             .expect("load manifest")

@@ -83,6 +83,10 @@ pub enum OperationEvent {
         name: String,
         content: String,
     },
+    UpdatedPageLinks {
+        page: PathBuf,
+        count: usize,
+    },
     UpdatedProjectManifest {
         path: PathBuf,
     },

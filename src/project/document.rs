@@ -1,5 +1,7 @@
 use crate::project::html::{escape_html, escape_html_attribute};
-use crate::project::links::{inferred_link_scope, normalize_link_label, note_label_from_id};
+use crate::project::links::{
+    inferred_link_scope, normalize_link_label, note_label_from_id, relative_href, resolve_page_href,
+};
 use crate::project::types::{LinkEntry, NoteEntry};
 use crate::Result;
 use kuchiki::traits::*;
@@ -397,6 +399,79 @@ impl PageDocument {
         links
     }
 
+    pub(super) fn rewrite_page_hrefs(
+        &self,
+        from_page: &str,
+        old_target: &str,
+        new_href: &str,
+    ) -> usize {
+        let mut updated = 0;
+
+        for element in self
+            .document
+            .select("a[href]")
+            .expect("static selector should parse")
+        {
+            let mut attributes = element.attributes.borrow_mut();
+            let Some(href) = attributes.get("href") else {
+                continue;
+            };
+
+            if resolve_page_href(from_page, href).as_deref() != Some(old_target) {
+                continue;
+            }
+
+            let rewritten = rewrite_href_path(href, new_href);
+            if rewritten == href {
+                continue;
+            }
+
+            attributes.insert("href", rewritten);
+            updated += 1;
+        }
+
+        updated
+    }
+
+    pub(super) fn rewrite_relative_page_hrefs_for_move(
+        &self,
+        old_page: &str,
+        new_page: &str,
+    ) -> usize {
+        let mut updated = 0;
+
+        for element in self
+            .document
+            .select("a[href]")
+            .expect("static selector should parse")
+        {
+            let mut attributes = element.attributes.borrow_mut();
+            let Some(href) = attributes.get("href") else {
+                continue;
+            };
+            if href.starts_with('#') {
+                continue;
+            }
+
+            let Some(mut target) = resolve_page_href(old_page, href) else {
+                continue;
+            };
+            if target == old_page {
+                target = new_page.to_string();
+            }
+
+            let rewritten = rewrite_href_path(href, &relative_href(new_page, &target));
+            if rewritten == href {
+                continue;
+            }
+
+            attributes.insert("href", rewritten);
+            updated += 1;
+        }
+
+        updated
+    }
+
     fn element_text(&self, selector: &str) -> Option<String> {
         self.document
             .select_first(selector)
@@ -479,4 +554,12 @@ fn prepend_child(parent: &NodeRef, child: NodeRef) {
     } else {
         parent.append(child);
     }
+}
+
+fn rewrite_href_path(href: &str, path: &str) -> String {
+    let suffix_start = href
+        .char_indices()
+        .find_map(|(index, character)| matches!(character, '?' | '#').then_some(index))
+        .unwrap_or(href.len());
+    format!("{}{}", path, &href[suffix_start..])
 }

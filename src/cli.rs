@@ -304,6 +304,9 @@ fn print_operation_report(report: &OperationReport) {
             } => {
                 println!("updated {} for {} to {}", name, page.display(), content);
             }
+            OperationEvent::UpdatedPageLinks { page, count } => {
+                println!("updated {count} page link(s) in {}", page.display());
+            }
             OperationEvent::UpdatedProjectManifest { path } => {
                 println!("updated project manifest {}", path.display());
             }

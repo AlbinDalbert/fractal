@@ -5,10 +5,11 @@ use crate::project::document::PageDocument;
 use crate::project::graph::build_project_graph;
 use crate::project::index::ensure_page_labels_available_for;
 use crate::project::index::{build_index, build_project_index, ensure_page_labels_available};
-use crate::project::links::{normalize_link_label, page_label_from_path};
+use crate::project::links::{normalize_link_label, page_label_from_path, relative_href};
 use crate::project::markdown::{html_to_markdown, markdown_to_html};
 use crate::project::paths::{
-    load_manifest, page_relative_path, resolve_existing_page, resolve_page_destination,
+    collect_page_paths, is_html_path, load_manifest, page_relative_path, resolve_existing_page,
+    resolve_page_destination,
 };
 use crate::project::render::{default_stylesheet, render_page_document, stylesheet_href};
 use crate::project::types::{
@@ -146,6 +147,9 @@ pub fn rename_page(
 
     let title_changed = document.set_title(&title)?;
     document.set_stylesheet_href(&stylesheet_href(&destination_relative))?;
+    let moved_page_link_updates = path_changed
+        .then(|| document.rewrite_relative_page_hrefs_for_move(&source_path, &destination_path))
+        .unwrap_or(0);
     let updated_html = document.to_html()?;
 
     if let Some(parent) = destination.parent() {
@@ -169,6 +173,20 @@ pub fn rename_page(
             page: destination.clone(),
             title,
         });
+    }
+    if moved_page_link_updates > 0 {
+        report.push(OperationEvent::UpdatedPageLinks {
+            page: destination.clone(),
+            count: moved_page_link_updates,
+        });
+    }
+
+    if path_changed {
+        report.extend(rewrite_renamed_page_links(
+            root,
+            &source_path,
+            &destination_path,
+        )?);
     }
 
     if manifest_default_page_path(root, &manifest)? == source_path {
@@ -349,4 +367,35 @@ fn manifest_default_page_path(root: &Path, manifest: &ProjectManifest) -> Result
     Ok(page_relative_path(root, Path::new(&manifest.default_page))?
         .to_string_lossy()
         .replace('\\', "/"))
+}
+
+fn rewrite_renamed_page_links(
+    root: &Path,
+    source_path: &str,
+    destination_path: &str,
+) -> Result<OperationReport> {
+    let pages_dir = root.join(PAGES_DIR);
+    let mut page_paths = Vec::new();
+    collect_page_paths(&pages_dir, &pages_dir, &mut page_paths)?;
+    page_paths.sort();
+
+    let mut report = OperationReport::new();
+    for page_path in page_paths.into_iter().filter(|path| is_html_path(path)) {
+        let page = pages_dir.join(&page_path);
+        let html = fs::read_to_string(&page)?;
+        let document = PageDocument::parse(&html);
+        let href = relative_href(&page_path, destination_path);
+        let updated = document.rewrite_page_hrefs(&page_path, source_path, &href);
+        if updated == 0 {
+            continue;
+        }
+
+        fs::write(&page, document.to_html()?)?;
+        report.push(OperationEvent::UpdatedPageLinks {
+            page,
+            count: updated,
+        });
+    }
+
+    Ok(report)
 }
