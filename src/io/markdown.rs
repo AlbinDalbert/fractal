@@ -1,8 +1,8 @@
-use crate::project::document::PageDocument;
-use crate::project::html::escape_html;
+use crate::document::html::escape_html;
+use crate::document::PageDocument;
 use kuchiki::NodeRef;
 
-pub(super) fn markdown_to_html(default_title: &str, markdown: &str) -> (String, String) {
+pub(crate) fn markdown_to_html(default_title: &str, markdown: &str) -> (String, String) {
     let blocks = parse_markdown_blocks(markdown);
     let title = match blocks.first() {
         Some(MarkdownBlock::Heading { level: 1, text }) => text.clone(),
@@ -84,7 +84,7 @@ fn flush_paragraph(blocks: &mut Vec<MarkdownBlock>, paragraph: &mut Vec<&str>) {
     paragraph.clear();
 }
 
-pub(super) fn html_to_markdown(html: &str) -> String {
+pub(crate) fn html_to_markdown(html: &str) -> String {
     let document = PageDocument::parse(html);
     let Ok(main) = document.document.select_first("main") else {
         return String::new();

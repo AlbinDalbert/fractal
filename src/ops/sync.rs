@@ -1,11 +1,11 @@
-use crate::project::constants::PAGES_DIR;
-use crate::project::document::PageDocument;
-use crate::project::html::{escape_html, escape_html_attribute, find_case_insensitive};
-use crate::project::index::{build_project_index, write_generated_project_data};
-use crate::project::links::{
+use crate::document::html::{escape_html, escape_html_attribute, find_case_insensitive};
+use crate::document::PageDocument;
+use crate::graph::links::{
     is_linkable_label, link_label_key, normalize_link_label, page_link_labels, relative_href,
 };
-use crate::project::types::{OperationEvent, OperationReport, ProjectIndex};
+use crate::index::{build_project_index, write_generated_project_data};
+use crate::project::constants::PAGES_DIR;
+use crate::types::{OperationEvent, OperationReport, ProjectIndex};
 use crate::Result;
 use kuchiki::NodeRef;
 use std::collections::BTreeSet;
@@ -39,7 +39,7 @@ pub fn sync_project(root: impl AsRef<Path>) -> Result<OperationReport> {
     Ok(report)
 }
 
-pub(super) fn sync_page_links(html: &str, page_path: &str, index: &ProjectIndex) -> Result<String> {
+pub(crate) fn sync_page_links(html: &str, page_path: &str, index: &ProjectIndex) -> Result<String> {
     let document = PageDocument::parse(html);
     let main = document
         .document

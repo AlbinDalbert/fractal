@@ -1,9 +1,9 @@
+use crate::document::html::escape_html;
 use crate::project::constants::{DEFAULT_SUMMARY, DEFAULT_TAGS, DEFAULT_VERSION};
-use crate::project::html::escape_html;
-use crate::project::types::Theme;
+use crate::types::Theme;
 use std::path::Path;
 
-pub(super) fn required_meta_tags() -> [(&'static str, &'static str); 3] {
+pub(crate) fn required_meta_tags() -> [(&'static str, &'static str); 3] {
     [
         ("fractal:version", DEFAULT_VERSION),
         ("fractal:summary", DEFAULT_SUMMARY),
@@ -11,7 +11,7 @@ pub(super) fn required_meta_tags() -> [(&'static str, &'static str); 3] {
     ]
 }
 
-pub(super) fn render_page_document(
+pub(crate) fn render_page_document(
     title: &str,
     body: &str,
     theme: Theme,
@@ -28,7 +28,7 @@ pub(super) fn render_page_document(
     )
 }
 
-pub(super) fn stylesheet_href(page_path: &Path) -> String {
+pub(crate) fn stylesheet_href(page_path: &Path) -> String {
     let parent_depth = page_path
         .parent()
         .map(|parent| parent.components().count())
@@ -41,7 +41,7 @@ pub(super) fn stylesheet_href(page_path: &Path) -> String {
     href
 }
 
-pub(super) fn default_stylesheet() -> &'static str {
+pub(crate) fn default_stylesheet() -> &'static str {
     r#"body[data-fractal-theme="dark"] {
   --fractal-background: #19110b;
   --fractal-surface: #26180f;

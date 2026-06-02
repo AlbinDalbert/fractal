@@ -1,7 +1,9 @@
+pub(crate) mod links;
+
+use crate::graph::links::{is_external_href, resolve_page_href};
 use crate::project::constants::{GRAPH_FILE, GRAPH_VERSION, WORKSPACE_DIR};
-use crate::project::links::{is_external_href, resolve_page_href};
 use crate::project::paths::{load_manifest, page_relative_path};
-use crate::project::types::{
+use crate::types::{
     GraphEdge, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry,
     PageGraphEntry, ProjectGraph, ProjectIndex,
 };
@@ -10,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-pub(super) fn build_project_graph(index: &ProjectIndex) -> ProjectGraph {
+pub(crate) fn build_project_graph(index: &ProjectIndex) -> ProjectGraph {
     let page_paths = index
         .pages
         .iter()
@@ -384,6 +386,6 @@ fn page_node_id(path: &str) -> String {
     format!("page:{path}")
 }
 
-pub(super) fn note_node_id(page_path: &str, note_id: &str) -> String {
+pub(crate) fn note_node_id(page_path: &str, note_id: &str) -> String {
     format!("note:{page_path}#{note_id}")
 }

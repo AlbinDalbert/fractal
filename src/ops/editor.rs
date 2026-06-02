@@ -1,12 +1,12 @@
-use crate::project::document::PageDocument;
-use crate::project::graph::build_project_graph;
-use crate::project::index::{build_index, build_project_index, ensure_page_labels_available_for};
-use crate::project::links::normalize_link_label;
-use crate::project::metadata::{
+use crate::document::metadata::{
     normalize_tags, summary_from_meta, tags_from_meta, SUMMARY_META, TAGS_META,
 };
+use crate::document::PageDocument;
+use crate::graph::build_project_graph;
+use crate::graph::links::normalize_link_label;
+use crate::index::{build_index, build_project_index, ensure_page_labels_available_for};
 use crate::project::paths::{page_relative_path, resolve_existing_page};
-use crate::project::types::{
+use crate::types::{
     EditorNoteDetail, EditorPageDetail, EditorPageListEntry, EditorPageUpdate, OperationEvent,
     OperationReport, PageMetadata, PageSource,
 };

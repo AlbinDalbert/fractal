@@ -1,5 +1,5 @@
-use crate::project::index::load_project_index;
-use crate::project::types::{PageEntry, SearchMatch, SearchResult};
+use crate::index::load_project_index;
+use crate::types::{PageEntry, SearchMatch, SearchResult};
 use crate::Result;
 use std::collections::BTreeSet;
 use std::path::Path;

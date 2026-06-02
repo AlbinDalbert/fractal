@@ -1,10 +1,10 @@
 use crate::project::constants::{MANIFEST_FILE, MANIFEST_VERSION, PAGES_DIR};
-use crate::project::types::ProjectManifest;
+use crate::types::ProjectManifest;
 use crate::Result;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-pub(super) fn file_kind(path: &str) -> &'static str {
+pub(crate) fn file_kind(path: &str) -> &'static str {
     if is_html_path(path) {
         "page"
     } else {
@@ -12,11 +12,11 @@ pub(super) fn file_kind(path: &str) -> &'static str {
     }
 }
 
-pub(super) fn is_html_path(path: &str) -> bool {
+pub(crate) fn is_html_path(path: &str) -> bool {
     Path::new(path).extension().and_then(|ext| ext.to_str()) == Some("html")
 }
 
-pub(super) fn load_manifest(root: &Path) -> Result<ProjectManifest> {
+pub(crate) fn load_manifest(root: &Path) -> Result<ProjectManifest> {
     let manifest_path = root.join(MANIFEST_FILE);
     if !manifest_path.is_file() {
         return Err(format!("missing manifest: {}", manifest_path.display()).into());
@@ -36,12 +36,12 @@ pub(super) fn load_manifest(root: &Path) -> Result<ProjectManifest> {
     Ok(manifest)
 }
 
-pub(super) fn resolve_page_destination(root: &Path, page: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve_page_destination(root: &Path, page: &Path) -> Result<PathBuf> {
     let relative = normalize_page_relative_path(page)?;
     Ok(root.join(PAGES_DIR).join(relative))
 }
 
-pub(super) fn resolve_existing_page(root: &Path, page: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve_existing_page(root: &Path, page: &Path) -> Result<PathBuf> {
     let destination = resolve_page_reference(root, page)?;
     if !destination.is_file() {
         return Err(format!("page does not exist: {}", destination.display()).into());
@@ -49,7 +49,7 @@ pub(super) fn resolve_existing_page(root: &Path, page: &Path) -> Result<PathBuf>
     Ok(destination)
 }
 
-pub(super) fn page_relative_path(root: &Path, page: &Path) -> Result<PathBuf> {
+pub(crate) fn page_relative_path(root: &Path, page: &Path) -> Result<PathBuf> {
     let resolved = resolve_page_reference(root, page)?;
     Ok(resolved.strip_prefix(root.join(PAGES_DIR))?.to_path_buf())
 }
@@ -110,7 +110,7 @@ fn normalize_page_relative_path(page: &Path) -> Result<PathBuf> {
     Ok(relative)
 }
 
-pub(super) fn collect_page_paths(
+pub(crate) fn collect_page_paths(
     root: &Path,
     current: &Path,
     pages: &mut Vec<String>,

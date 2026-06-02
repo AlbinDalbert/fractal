@@ -1,13 +1,12 @@
-use super::constants::{GRAPH_VERSION, INDEX_VERSION, MANIFEST_VERSION};
-use super::document::PageDocument;
-use super::graph::{graph_orphans_report, graph_page, graph_page_report, orphan_pages};
-use super::html::escape_html;
-use super::markdown::{html_to_markdown, markdown_to_html};
-use super::notes::{insert_note_into_document, note_id_from_trigger, render_note_aside};
-use super::paths::{collect_page_paths, resolve_page_destination};
-use super::render::{render_page_document, stylesheet_href};
-use super::validation::validate_page_metadata;
-use super::{
+use crate::document::html::escape_html;
+use crate::document::notes::{insert_note_into_document, note_id_from_trigger, render_note_aside};
+use crate::document::render::{render_page_document, stylesheet_href};
+use crate::document::PageDocument;
+use crate::graph::{graph_orphans_report, graph_page, graph_page_report, orphan_pages};
+use crate::io::markdown::{html_to_markdown, markdown_to_html};
+use crate::project::constants::{GRAPH_VERSION, INDEX_VERSION, MANIFEST_VERSION};
+use crate::project::paths::{collect_page_paths, resolve_page_destination};
+use crate::project::{
     add_note, build_index, delete_page, editor_page_detail, export_page, graph_backlinks_report,
     graph_notes_report, graph_outlinks_report, graph_related_report, import_markdown,
     init_project_at, list_editor_pages, load_project_index, load_project_manifest, new_page,
@@ -20,6 +19,7 @@ use super::{
     PageGraphEntry, PageRename, ProjectGraph, ProjectIndex, ProjectManifest, SearchMatch,
     SearchResult, Theme,
 };
+use crate::validation::validate_page_metadata;
 use std::collections::BTreeMap;
 use std::fs;
 use std::ops::Deref;

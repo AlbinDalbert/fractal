@@ -1,8 +1,8 @@
-use crate::project::document::PageDocument;
-use crate::project::html::escape_html;
-use crate::project::index::build_index;
+use crate::document::html::escape_html;
+use crate::document::PageDocument;
+use crate::index::build_index;
 use crate::project::paths::resolve_existing_page;
-use crate::project::types::{OperationEvent, OperationReport};
+use crate::types::{OperationEvent, OperationReport};
 use crate::Result;
 use kuchiki::NodeRef;
 use std::fs;
@@ -67,7 +67,7 @@ pub fn patch_note(
     Ok(report)
 }
 
-pub(super) fn note_id_from_trigger(trigger: &str) -> Result<String> {
+pub(crate) fn note_id_from_trigger(trigger: &str) -> Result<String> {
     let mut slug = String::new();
     let mut previous_was_dash = false;
 
@@ -98,7 +98,7 @@ pub(super) fn note_id_from_trigger(trigger: &str) -> Result<String> {
     Ok(format!("note-{slug}"))
 }
 
-pub(super) fn is_valid_note_id(note_id: &str) -> bool {
+pub(crate) fn is_valid_note_id(note_id: &str) -> bool {
     let Some(slug) = note_id.strip_prefix("note-") else {
         return false;
     };
@@ -112,7 +112,7 @@ pub(super) fn is_valid_note_id(note_id: &str) -> bool {
         })
 }
 
-pub(super) fn insert_note_into_document(html: &str, note: &str) -> Result<String> {
+pub(crate) fn insert_note_into_document(html: &str, note: &str) -> Result<String> {
     let document = PageDocument::parse(html);
     let section = document.single_notes_section()?;
     let note = parse_note_aside(note)?;
@@ -161,7 +161,7 @@ fn parse_note_aside(note: &str) -> Result<NodeRef> {
     Ok(aside)
 }
 
-pub(super) fn render_note_aside(note_id: &str, content: &str) -> String {
+pub(crate) fn render_note_aside(note_id: &str, content: &str) -> String {
     format!(
         "    <aside id=\"{note_id}\" data-fractal-note>\n      <p>{}</p>\n    </aside>\n",
         escape_html(content)

@@ -1,12 +1,12 @@
-use crate::project::constants::{INDEX_PAGE, MANIFEST_FILE, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR};
-use crate::project::document::PageDocument;
-use crate::project::index::build_project_index;
-use crate::project::notes::is_valid_note_id;
-use crate::project::paths::{collect_page_paths, is_html_path, load_manifest};
-use crate::project::render::{
+use crate::document::notes::is_valid_note_id;
+use crate::document::render::{
     default_stylesheet, render_page_document, required_meta_tags, stylesheet_href,
 };
-use crate::project::types::{OperationEvent, OperationReport, Theme};
+use crate::document::PageDocument;
+use crate::index::build_project_index;
+use crate::project::constants::{INDEX_PAGE, MANIFEST_FILE, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR};
+use crate::project::paths::{collect_page_paths, is_html_path, load_manifest};
+use crate::types::{OperationEvent, OperationReport, Theme};
 use crate::Result;
 use std::collections::BTreeSet;
 use std::fs;
@@ -124,7 +124,7 @@ fn fix_project(root: &Path) -> Result<OperationReport> {
     Ok(report)
 }
 
-pub(super) fn validate_page_metadata(page: &Path) -> Result<()> {
+pub(crate) fn validate_page_metadata(page: &Path) -> Result<()> {
     let document = PageDocument::from_path(page)?;
 
     match document.notes_section_count() {

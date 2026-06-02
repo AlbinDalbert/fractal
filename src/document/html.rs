@@ -1,4 +1,4 @@
-pub(super) fn find_case_insensitive(haystack: &str, needle: &str, start: usize) -> Option<usize> {
+pub(crate) fn find_case_insensitive(haystack: &str, needle: &str, start: usize) -> Option<usize> {
     if needle.is_empty() || start > haystack.len() || needle.len() > haystack.len() {
         return None;
     }
@@ -19,13 +19,13 @@ pub(super) fn find_case_insensitive(haystack: &str, needle: &str, start: usize) 
     None
 }
 
-pub(super) fn escape_html(input: &str) -> String {
+pub(crate) fn escape_html(input: &str) -> String {
     input
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
 
-pub(super) fn escape_html_attribute(input: &str) -> String {
+pub(crate) fn escape_html_attribute(input: &str) -> String {
     escape_html(input).replace('"', "&quot;")
 }

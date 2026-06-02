@@ -1,11 +1,13 @@
-use crate::project::constants::{GRAPH_FILE, INDEX_FILE, INDEX_VERSION, PAGES_DIR, WORKSPACE_DIR};
-use crate::project::document::PageDocument;
-use crate::project::graph::build_project_graph;
-use crate::project::links::{
+pub mod search;
+
+use crate::document::PageDocument;
+use crate::graph::build_project_graph;
+use crate::graph::links::{
     link_label_key, normalize_link_label, page_label_from_path, page_link_labels,
 };
+use crate::project::constants::{GRAPH_FILE, INDEX_FILE, INDEX_VERSION, PAGES_DIR, WORKSPACE_DIR};
 use crate::project::paths::{collect_page_paths, file_kind, is_html_path, load_manifest};
-use crate::project::types::{
+use crate::types::{
     FileEntry, OperationEvent, OperationReport, PageEntry, ProjectGraph, ProjectIndex,
 };
 use crate::Result;
@@ -45,7 +47,7 @@ pub fn load_project_index(root: impl AsRef<Path>) -> Result<ProjectIndex> {
     Ok(index)
 }
 
-pub(super) fn build_project_index(root: &Path) -> Result<ProjectIndex> {
+pub(crate) fn build_project_index(root: &Path) -> Result<ProjectIndex> {
     load_manifest(root)?;
 
     let workspace_dir = root.join(WORKSPACE_DIR);
@@ -85,11 +87,11 @@ pub(super) fn build_project_index(root: &Path) -> Result<ProjectIndex> {
     })
 }
 
-pub(super) fn ensure_page_labels_available(root: &Path, path: &str, title: &str) -> Result<()> {
+pub(crate) fn ensure_page_labels_available(root: &Path, path: &str, title: &str) -> Result<()> {
     ensure_page_labels_available_for(root, None, path, title)
 }
 
-pub(super) fn ensure_page_labels_available_for(
+pub(crate) fn ensure_page_labels_available_for(
     root: &Path,
     current_path: Option<&str>,
     path: &str,
@@ -112,7 +114,7 @@ pub(super) fn ensure_page_labels_available_for(
     validate_unique_page_labels(&pages)
 }
 
-pub(super) fn write_generated_project_data(
+pub(crate) fn write_generated_project_data(
     root: &Path,
     index: &ProjectIndex,
 ) -> Result<OperationReport> {

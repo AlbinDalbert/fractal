@@ -1,16 +1,16 @@
+use crate::document::PageDocument;
+use crate::graph::links::normalize_link_label;
+use crate::index::build_index;
 use crate::project::constants::{DEFAULT_SUMMARY, DEFAULT_TAGS};
-use crate::project::document::PageDocument;
-use crate::project::index::build_index;
-use crate::project::links::normalize_link_label;
 use crate::project::paths::{page_relative_path, resolve_existing_page};
-use crate::project::types::{OperationEvent, OperationReport, PageMetadata};
+use crate::types::{OperationEvent, OperationReport, PageMetadata};
 use crate::Result;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-pub(super) const SUMMARY_META: &str = "fractal:summary";
-pub(super) const TAGS_META: &str = "fractal:tags";
+pub(crate) const SUMMARY_META: &str = "fractal:summary";
+pub(crate) const TAGS_META: &str = "fractal:tags";
 
 pub fn page_metadata(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<PageMetadata> {
     let root = root.as_ref();
@@ -106,23 +106,23 @@ fn update_page_meta(
     Ok(report)
 }
 
-pub(super) fn summary_from_meta(meta: &BTreeMap<String, String>) -> Option<String> {
+pub(crate) fn summary_from_meta(meta: &BTreeMap<String, String>) -> Option<String> {
     meta.get(SUMMARY_META)
         .filter(|summary| !summary.trim().is_empty())
         .cloned()
 }
 
-pub(super) fn tags_from_meta(meta: &BTreeMap<String, String>) -> Vec<String> {
+pub(crate) fn tags_from_meta(meta: &BTreeMap<String, String>) -> Vec<String> {
     meta.get(TAGS_META)
         .map(|tags| parse_tags(tags))
         .unwrap_or_default()
 }
 
-pub(super) fn parse_tags(tags: &str) -> Vec<String> {
+pub(crate) fn parse_tags(tags: &str) -> Vec<String> {
     normalize_tags(tags.split(','))
 }
 
-pub(super) fn normalize_tags(tags: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
+pub(crate) fn normalize_tags(tags: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
     let mut seen = BTreeSet::new();
     let mut normalized = Vec::new();
 

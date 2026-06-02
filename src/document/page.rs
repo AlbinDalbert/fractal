@@ -1,8 +1,8 @@
-use crate::project::html::{escape_html, escape_html_attribute};
-use crate::project::links::{
+use crate::document::html::{escape_html, escape_html_attribute};
+use crate::graph::links::{
     inferred_link_scope, normalize_link_label, note_label_from_id, relative_href, resolve_page_href,
 };
-use crate::project::types::{LinkEntry, NoteEntry};
+use crate::types::{LinkEntry, NoteEntry};
 use crate::Result;
 use kuchiki::traits::*;
 use kuchiki::NodeRef;
@@ -10,30 +10,30 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-pub(super) struct PageDocument {
-    pub(super) document: kuchiki::NodeRef,
+pub(crate) struct PageDocument {
+    pub(crate) document: kuchiki::NodeRef,
 }
 
 impl PageDocument {
-    pub(super) fn parse(html: &str) -> Self {
+    pub(crate) fn parse(html: &str) -> Self {
         Self {
             document: kuchiki::parse_html().one(html),
         }
     }
 
-    pub(super) fn from_path(page: &Path) -> Result<Self> {
+    pub(crate) fn from_path(page: &Path) -> Result<Self> {
         Ok(Self::parse(&fs::read_to_string(page)?))
     }
 
-    pub(super) fn has_notes_section(&self) -> bool {
+    pub(crate) fn has_notes_section(&self) -> bool {
         self.notes_section_count() > 0
     }
 
-    pub(super) fn notes_section_count(&self) -> usize {
+    pub(crate) fn notes_section_count(&self) -> usize {
         self.notes_sections().len()
     }
 
-    pub(super) fn notes_sections(&self) -> Vec<NodeRef> {
+    pub(crate) fn notes_sections(&self) -> Vec<NodeRef> {
         self.document
             .select("section[data-fractal-notes]")
             .expect("static selector should parse")
@@ -41,7 +41,7 @@ impl PageDocument {
             .collect()
     }
 
-    pub(super) fn single_notes_section(&self) -> Result<NodeRef> {
+    pub(crate) fn single_notes_section(&self) -> Result<NodeRef> {
         let sections = self.notes_sections();
         match sections.as_slice() {
             [] => Err("missing notes section in page".into()),
@@ -50,7 +50,7 @@ impl PageDocument {
         }
     }
 
-    pub(super) fn ensure_meta_tag(&self, name: &str, content: &str) -> Result<bool> {
+    pub(crate) fn ensure_meta_tag(&self, name: &str, content: &str) -> Result<bool> {
         if self.fractal_meta().contains_key(name) {
             return Ok(false);
         }
@@ -69,7 +69,7 @@ impl PageDocument {
         Ok(true)
     }
 
-    pub(super) fn set_meta_tag(&self, name: &str, content: &str) -> Result<bool> {
+    pub(crate) fn set_meta_tag(&self, name: &str, content: &str) -> Result<bool> {
         let mut updated = false;
 
         for element in self
@@ -97,7 +97,7 @@ impl PageDocument {
         self.ensure_meta_tag(name, content)
     }
 
-    pub(super) fn ensure_stylesheet_link(&self, href: &str) -> Result<bool> {
+    pub(crate) fn ensure_stylesheet_link(&self, href: &str) -> Result<bool> {
         if self
             .document
             .select("link[href][rel]")
@@ -127,7 +127,7 @@ impl PageDocument {
         Ok(true)
     }
 
-    pub(super) fn set_stylesheet_href(&self, href: &str) -> Result<bool> {
+    pub(crate) fn set_stylesheet_href(&self, href: &str) -> Result<bool> {
         let mut changed = false;
         let mut found = false;
 
@@ -162,7 +162,7 @@ impl PageDocument {
         }
     }
 
-    pub(super) fn ensure_body_theme(&self, theme: &str) -> Result<bool> {
+    pub(crate) fn ensure_body_theme(&self, theme: &str) -> Result<bool> {
         let body = self.body_node()?;
         let Some(element) = body.as_element() else {
             return Err("body node is not an element".into());
@@ -176,7 +176,7 @@ impl PageDocument {
         Ok(true)
     }
 
-    pub(super) fn ensure_single_notes_section(&self) -> Result<bool> {
+    pub(crate) fn ensure_single_notes_section(&self) -> Result<bool> {
         let sections = self.notes_sections();
         match sections.as_slice() {
             [] => {
@@ -203,7 +203,7 @@ impl PageDocument {
         }
     }
 
-    pub(super) fn note_node(&self, note_id: &str) -> Option<NodeRef> {
+    pub(crate) fn note_node(&self, note_id: &str) -> Option<NodeRef> {
         self.document
             .select("section[data-fractal-notes] aside[data-fractal-note]")
             .expect("static selector should parse")
@@ -213,13 +213,13 @@ impl PageDocument {
             })
     }
 
-    pub(super) fn to_html(&self) -> Result<String> {
+    pub(crate) fn to_html(&self) -> Result<String> {
         let mut serialized = Vec::new();
         self.document.serialize(&mut serialized)?;
         Ok(String::from_utf8(serialized)?)
     }
 
-    pub(super) fn main_body_html(&self) -> Result<String> {
+    pub(crate) fn main_body_html(&self) -> Result<String> {
         let main = self.main_node()?;
         let children = main.children().collect::<Vec<_>>();
         let body_start = children
@@ -236,7 +236,7 @@ impl PageDocument {
         Ok(String::from_utf8(serialized)?)
     }
 
-    pub(super) fn set_title(&self, title: &str) -> Result<bool> {
+    pub(crate) fn set_title(&self, title: &str) -> Result<bool> {
         let before = self.to_html()?;
 
         match self.document.select_first("title").ok() {
@@ -266,7 +266,7 @@ impl PageDocument {
         Ok(before != self.to_html()?)
     }
 
-    pub(super) fn set_main_body_html(&self, body_html: &str) -> Result<bool> {
+    pub(crate) fn set_main_body_html(&self, body_html: &str) -> Result<bool> {
         let before = self.to_html()?;
         let main = self.main_node()?;
         let heading = direct_child_element(&main, "h1")
@@ -298,14 +298,14 @@ impl PageDocument {
         Ok(before != self.to_html()?)
     }
 
-    pub(super) fn title(&self) -> Option<String> {
+    pub(crate) fn title(&self) -> Option<String> {
         self.element_text("title")
             .or_else(|| self.element_text("h1"))
             .map(|title| normalize_link_label(&title))
             .filter(|title| !title.is_empty())
     }
 
-    pub(super) fn fractal_meta(&self) -> BTreeMap<String, String> {
+    pub(crate) fn fractal_meta(&self) -> BTreeMap<String, String> {
         let mut meta = BTreeMap::new();
 
         for element in self
@@ -330,7 +330,7 @@ impl PageDocument {
         meta
     }
 
-    pub(super) fn notes(&self) -> Vec<NoteEntry> {
+    pub(crate) fn notes(&self) -> Vec<NoteEntry> {
         let selector = if self.has_notes_section() {
             "section[data-fractal-notes] aside[data-fractal-note]"
         } else {
@@ -366,7 +366,7 @@ impl PageDocument {
         notes
     }
 
-    pub(super) fn links(&self) -> Vec<LinkEntry> {
+    pub(crate) fn links(&self) -> Vec<LinkEntry> {
         let mut links = Vec::new();
 
         for element in self
@@ -399,7 +399,7 @@ impl PageDocument {
         links
     }
 
-    pub(super) fn rewrite_page_hrefs(
+    pub(crate) fn rewrite_page_hrefs(
         &self,
         from_page: &str,
         old_target: &str,
@@ -433,7 +433,7 @@ impl PageDocument {
         updated
     }
 
-    pub(super) fn rewrite_relative_page_hrefs_for_move(
+    pub(crate) fn rewrite_relative_page_hrefs_for_move(
         &self,
         old_page: &str,
         new_page: &str,

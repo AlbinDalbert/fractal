@@ -1,18 +1,18 @@
+use crate::document::render::{default_stylesheet, render_page_document, stylesheet_href};
+use crate::document::PageDocument;
+use crate::graph::build_project_graph;
+use crate::graph::links::{normalize_link_label, page_label_from_path, relative_href};
+use crate::index::ensure_page_labels_available_for;
+use crate::index::{build_index, build_project_index, ensure_page_labels_available};
+use crate::io::markdown::{html_to_markdown, markdown_to_html};
 use crate::project::constants::{
     INDEX_PAGE, MANIFEST_FILE, MANIFEST_VERSION, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR,
 };
-use crate::project::document::PageDocument;
-use crate::project::graph::build_project_graph;
-use crate::project::index::ensure_page_labels_available_for;
-use crate::project::index::{build_index, build_project_index, ensure_page_labels_available};
-use crate::project::links::{normalize_link_label, page_label_from_path, relative_href};
-use crate::project::markdown::{html_to_markdown, markdown_to_html};
 use crate::project::paths::{
     collect_page_paths, is_html_path, load_manifest, page_relative_path, resolve_existing_page,
     resolve_page_destination,
 };
-use crate::project::render::{default_stylesheet, render_page_document, stylesheet_href};
-use crate::project::types::{
+use crate::types::{
     OperationEvent, OperationReport, PageRename, PageSource, ProjectManifest, Theme,
 };
 use crate::Result;
