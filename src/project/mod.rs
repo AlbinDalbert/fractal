@@ -5,6 +5,7 @@ mod html;
 mod index;
 mod links;
 mod markdown;
+mod metadata;
 mod notes;
 mod operations;
 mod paths;
@@ -20,6 +21,9 @@ pub use graph::{
     page_backlinks, page_notes, page_outlinks, related_pages,
 };
 pub use index::{build_index, load_project_index};
+pub use metadata::{
+    page_metadata, page_metadata_report, reset_page_metadata, set_page_summary, set_page_tags,
+};
 pub use notes::{add_note, patch_note, remove_note};
 pub use operations::{
     export_page, import_markdown, init_project, init_project_at, load_project_manifest, new_page,
@@ -29,8 +33,8 @@ pub use search::{search_project, search_report};
 pub use sync::sync_project;
 pub use types::{
     FileEntry, GraphEdge, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry,
-    NoteEntry, OperationEvent, OperationReport, PageEntry, PageGraphEntry, PageSource,
-    ProjectGraph, ProjectIndex, ProjectManifest, SearchMatch, SearchResult, Theme,
+    NoteEntry, OperationEvent, OperationReport, PageEntry, PageGraphEntry, PageMetadata,
+    PageSource, ProjectGraph, ProjectIndex, ProjectManifest, SearchMatch, SearchResult, Theme,
 };
 pub use validation::validate_project;
 

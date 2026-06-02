@@ -22,11 +22,29 @@ Because of that, import and export are not side features. Converting other forma
 
 - Backlinks/outlinks graph: expand the initial durable graph data beyond `.fractal/graph.json` v0. This is likely one of the most important engine pieces because runtime linking, discovery, traversal, and LLM-oriented lookup should not depend on repeatedly rescanning every page. The current graph stores page/note nodes, graph edges, per-page backlinks/outlinks, and basic graph query commands. The next step is to add richer edge types on top of it.
 - Search and discovery: grow keyword search, graph traversal, related pages, and orphan page detection into a more complete discovery surface.
-- Unresolved mention tracking: keep this pinned until the sync feature's responsibilities are clearer. It likely belongs near inferred linking, but the design should decide whether unresolved mentions are a generated index concern, a graph edge concern, a sync report concern, or some combination of those.
+- Implicit linking contract: keep page labels normalized, unique, and case-insensitive. If text matches one known page title, page filename stem, or page-local note trigger, Fractal may link it automatically. If it does not match a known label, it remains ordinary text. Duplicate page labels are invalid project state for now, even when the files live in different folders.
 - Semantic/ontological tooling: support entity extraction, aliases, relationships, concept typing, summaries, and embeddings or other semantic index support.
 - Rich metadata model: make summaries and tags editable, replace placeholder defaults, support schema/version migration, and likely introduce stable page IDs or slugs.
-- Robust HTML handling: continue replacing string scanning with a proper HTML parser/serializer. Indexing, validation extraction, and note mutation now use an HTML parser, but generated link rewriting and import/export still need a parser-backed mutation/serialization path so ordinary inspectable HTML works without brittle formatting requirements.
+- Robust HTML handling: continue replacing any remaining brittle string assumptions with parser-backed extraction, mutation, and serialization. Indexing, validation extraction, note mutation, generated link rewriting, and markdown export now use an HTML parser, but import/export still need to grow beyond basic headings and paragraphs.
 - Change tracking/genealogy: track how pages and graph relationships change over time. This may be a later or bonus feature, but it fits the long-term knowledge-engine direction.
+
+## Pre-alpha editor todo
+
+These are the engine-facing tasks that should be done before starting a basic editor in earnest. The goal is not to build UI in this crate, but to give a future Tauri editor or other application a stable enough Rust API that it can use Fractal directly instead of shelling out to the CLI or hand-editing project files.
+
+- Page list/detail API: add a structured way to list project pages and inspect one page's editor-relevant data. A page list should include path, title, summary, tags, and small graph facts such as backlink and outlink counts. A page detail call should return the page source plus metadata, notes, links, backlinks, and outlinks. This gives an editor enough data for a sidebar, page picker, inspector, and link panel without repeatedly combining raw index and graph files itself.
+- Safe page editing API: grow beyond raw `read_page_source` and `write_page_source` into editor-friendly mutations for the parts Fractal owns. The editor should be able to update page body content, title, summary, tags, and notes through library calls that preserve required Fractal structure, rebuild generated data, and report what changed. Raw HTML read/write can remain available, but it should not be the only practical editing path.
+- Rename/move page API: support changing a page path and/or title while preserving the unique, case-insensitive label contract. This should fail before writing when the new title or filename stem would collide with another page, move the file safely, rebuild generated data, and provide a clear mutation report. Link repair can stay conservative at first, but the engine should at least make rename/move a coherent operation instead of leaving editors to compose filesystem writes and sync calls.
+- Delete page API: provide a first-class operation for removing a page from a project. It should delete the page file, rebuild the generated index and graph, and report affected backlinks/outlinks so an editor can warn the user before or after deletion. The first version can leave ordinary prose untouched, but it should handle Fractal-managed generated data cleanly.
+- Editor sync contract: decide and document when editor clients should call `sync`, `index build`, and validation. A basic editor needs predictable rules for save behavior: whether every save rebuilds indexes, whether generated links are applied automatically or by explicit command, and what operation reports mean. This contract matters more than having a UI because it defines how external applications safely cooperate with the engine.
+
+## Implicit linking contract
+
+Fractal treats links as generated project structure, not as something users should have to maintain by hand. The current rule is intentionally strict: a link can be inferred only from a known, unique label in the project index.
+
+Page labels are derived from page titles and filename stems. Matching is normalized and case-insensitive, so `Rust`, `rust`, and `RUST` are the same label for linking and validation purposes. Two pages may not expose the same label, even if they are stored in different folders. Creating or importing a page with a duplicate label should fail before writing the new page, and manually-added duplicates should make validation or indexing fail.
+
+Unknown prose is not an unresolved link candidate. If a word or phrase does not match a known page label or page-local note trigger, Fractal leaves it as ordinary text.
 
 ## Current CLI surface
 
@@ -46,6 +64,10 @@ fractal graph notes <page/path>
 fractal graph orphans
 fractal sync
 fractal page new <page/path>
+fractal page <page/path> meta show
+fractal page <page/path> meta set-summary "<summary>"
+fractal page <page/path> meta set-tags <tag> [tag...]
+fractal page <page/path> meta reset
 fractal page <page/path> note add <trigger> "<content>"
 fractal page <page/path> note remove <trigger>
 fractal page <page/path> note patch <trigger> "<content>"
@@ -89,6 +111,7 @@ my-project/
 - `graph orphans` reads `.fractal/graph.json` and lists pages with no backlinks.
 - `sync` rebuilds `.fractal/index.json` and `.fractal/graph.json`, updates each page's note links inside its own `<main>`, then links remaining matching page-title/page-stem text against the project index. It rebuilds both generated data files again after the page rewrites so generated links are reflected.
 - `page new` creates a new HTML page under `pages/`, adds `.html` automatically when omitted, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
+- `page <page/path> meta show/set-summary/set-tags/reset` reads and mutates Fractal-owned page metadata using parser-backed HTML operations, normalizes comma-separated or repeated tags, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
 - `page <page/path> note add/remove/patch` mutates notes in the requested page using parser-backed HTML operations and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
 
 All generated pages currently include these required meta tags:

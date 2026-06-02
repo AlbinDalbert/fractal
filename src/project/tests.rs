@@ -10,12 +10,13 @@ use super::validation::validate_page_metadata;
 use super::{
     add_note, build_index, export_page, graph_backlinks_report, graph_notes_report,
     graph_outlinks_report, graph_related_report, import_markdown, init_project_at,
-    load_project_index, load_project_manifest, new_page, page_backlinks, page_notes, page_outlinks,
-    patch_note, read_page_source, related_pages, remove_note, search_project, search_report,
-    sync_project, validate_project, write_page_source, FileEntry, GraphEdge, GraphNode,
-    GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry, NoteEntry, OperationEvent,
-    PageEntry, PageGraphEntry, ProjectGraph, ProjectIndex, ProjectManifest, SearchMatch,
-    SearchResult, Theme,
+    load_project_index, load_project_manifest, new_page, page_backlinks, page_metadata,
+    page_metadata_report, page_notes, page_outlinks, patch_note, read_page_source, related_pages,
+    remove_note, reset_page_metadata, search_project, search_report, set_page_summary,
+    set_page_tags, sync_project, validate_project, write_page_source, FileEntry, GraphEdge,
+    GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry, NoteEntry,
+    OperationEvent, PageEntry, PageGraphEntry, ProjectGraph, ProjectIndex, ProjectManifest,
+    SearchMatch, SearchResult, Theme,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -902,6 +903,147 @@ fn remove_note_keeps_empty_note_section() {
     let document = PageDocument::parse(&html);
     assert!(!html.contains("note-java"));
     assert_eq!(document.notes_section_count(), 1);
+}
+
+#[test]
+fn page_metadata_reads_summary_tags_and_extra_fractal_meta() {
+    let project = TestProject::new("metadata-read");
+    project.write_page(
+        "index.html",
+        r#"<!doctype html>
+<html>
+  <head>
+    <title>Knowledge Base</title>
+    <meta name="fractal:version" content="0.1">
+    <meta name="fractal:summary" content="Graph notes">
+    <meta name="fractal:tags" content="rust, Graphs, rust">
+    <meta name="fractal:extra" content="kept">
+  </head>
+  <body>
+    <main><p>body</p></main>
+    <section data-fractal-notes></section>
+  </body>
+</html>
+"#,
+    );
+
+    let metadata = page_metadata(project.root(), Path::new("index")).expect("read metadata");
+
+    assert_eq!(metadata.path, "index.html");
+    assert_eq!(metadata.title, "Knowledge Base");
+    assert_eq!(metadata.summary, Some("Graph notes".to_string()));
+    assert_eq!(
+        metadata.tags,
+        vec!["rust".to_string(), "Graphs".to_string()]
+    );
+    assert_eq!(
+        metadata.meta.get("fractal:extra").map(String::as_str),
+        Some("kept")
+    );
+}
+
+#[test]
+fn set_page_metadata_updates_meta_tags_and_rebuilds_index() {
+    let project = TestProject::new("metadata-set");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "index",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let summary_report = set_page_summary(project.root(), Path::new("index"), "Local graph notes")
+        .expect("set summary");
+    assert!(summary_report.events.iter().any(|event| matches!(
+        event,
+        OperationEvent::UpdatedMetadata { name, content, .. }
+            if name == "fractal:summary" && content == "Local graph notes"
+    )));
+
+    set_page_tags(
+        project.root(),
+        Path::new("index"),
+        ["rust", "graphs, parsing", "rust"],
+    )
+    .expect("set tags");
+
+    let metadata = page_metadata(project.root(), Path::new("index")).expect("read metadata");
+    assert_eq!(metadata.summary, Some("Local graph notes".to_string()));
+    assert_eq!(
+        metadata.tags,
+        vec![
+            "rust".to_string(),
+            "graphs".to_string(),
+            "parsing".to_string()
+        ]
+    );
+
+    let index = load_project_index(project.root()).expect("load generated index");
+    assert_eq!(
+        index.pages[0]
+            .meta
+            .get("fractal:summary")
+            .map(String::as_str),
+        Some("Local graph notes")
+    );
+    assert_eq!(
+        index.pages[0].meta.get("fractal:tags").map(String::as_str),
+        Some("rust, graphs, parsing")
+    );
+}
+
+#[test]
+fn reset_page_metadata_restores_generated_defaults() {
+    let project = TestProject::new("metadata-reset");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "index",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    set_page_summary(project.root(), Path::new("index"), "Custom summary").expect("set summary");
+    set_page_tags(project.root(), Path::new("index"), ["custom"]).expect("set tags");
+
+    reset_page_metadata(project.root(), Path::new("index")).expect("reset metadata");
+
+    let metadata = page_metadata(project.root(), Path::new("index")).expect("read metadata");
+    assert_eq!(
+        metadata.summary,
+        Some("Short page summary here.".to_string())
+    );
+    assert_eq!(
+        metadata.tags,
+        vec![
+            "rust".to_string(),
+            "graphs".to_string(),
+            "parsing".to_string()
+        ]
+    );
+}
+
+#[test]
+fn page_metadata_report_prints_editor_friendly_summary() {
+    let project = TestProject::new("metadata-report");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "index",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    assert_eq!(
+        page_metadata_report(project.root(), Path::new("index")).expect("metadata report"),
+        "index.html\ntitle: index\nsummary: Short page summary here.\ntags: rust, graphs, parsing\n"
+    );
 }
 
 #[test]

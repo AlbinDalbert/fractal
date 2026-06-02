@@ -67,6 +67,34 @@ impl PageDocument {
         Ok(true)
     }
 
+    pub(super) fn set_meta_tag(&self, name: &str, content: &str) -> Result<bool> {
+        let mut updated = false;
+
+        for element in self
+            .document
+            .select("meta[name][content]")
+            .expect("static selector should parse")
+        {
+            let mut attributes = element.attributes.borrow_mut();
+            if attributes.get("name") != Some(name) {
+                continue;
+            }
+
+            if attributes.get("content") == Some(content) {
+                return Ok(false);
+            }
+
+            attributes.insert("content", content.to_string());
+            updated = true;
+        }
+
+        if updated {
+            return Ok(true);
+        }
+
+        self.ensure_meta_tag(name, content)
+    }
+
     pub(super) fn ensure_stylesheet_link(&self, href: &str) -> Result<bool> {
         if self
             .document

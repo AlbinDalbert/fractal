@@ -1,7 +1,8 @@
 use crate::project::{
     add_note, build_index, export_page, graph_backlinks_report, graph_notes_report,
     graph_orphans_report, graph_outlinks_report, graph_page_report, graph_related_report,
-    import_markdown, init_project, new_page, patch_note, remove_note, search_report, sync_project,
+    import_markdown, init_project, new_page, page_metadata_report, patch_note, remove_note,
+    reset_page_metadata, search_report, set_page_summary, set_page_tags, sync_project,
     validate_project, OperationEvent, OperationReport,
 };
 use crate::Result;
@@ -116,6 +117,11 @@ enum PageCommand {
         #[command(subcommand)]
         command: NoteCommand,
     },
+    /// Manage page metadata.
+    Meta {
+        #[command(subcommand)]
+        command: MetaCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -139,6 +145,24 @@ enum NoteCommand {
         /// Replacement note body text.
         content: String,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum MetaCommand {
+    /// Show page metadata.
+    Show,
+    /// Set the page summary.
+    SetSummary {
+        /// Summary text.
+        summary: String,
+    },
+    /// Replace the page tag list.
+    SetTags {
+        /// Tags. Values may be repeated or comma-separated.
+        tags: Vec<String>,
+    },
+    /// Reset summary and tags to generated defaults.
+    Reset,
 }
 
 pub fn run() -> Result<()> {
@@ -197,6 +221,21 @@ pub fn run() -> Result<()> {
                     }
                 }
             }
+            PageCommand::Meta { command } => {
+                let path = path.ok_or("missing page path for meta command")?;
+                match command {
+                    MetaCommand::Show => {
+                        print!("{}", page_metadata_report(".", &path)?);
+                        return Ok(());
+                    }
+                    MetaCommand::SetSummary { summary } => set_page_summary(".", &path, &summary),
+                    MetaCommand::SetTags { tags } => {
+                        let tags = tags.iter().flat_map(|tag| tag.split(','));
+                        set_page_tags(".", &path, tags)
+                    }
+                    MetaCommand::Reset => reset_page_metadata(".", &path),
+                }
+            }
         },
     }?;
 
@@ -233,6 +272,13 @@ fn print_operation_report(report: &OperationReport) {
             }
             OperationEvent::RemovedNote { page, note_id } => {
                 println!("removed note {} from {}", note_id, page.display());
+            }
+            OperationEvent::UpdatedMetadata {
+                page,
+                name,
+                content,
+            } => {
+                println!("updated {} for {} to {}", name, page.display(), content);
             }
             OperationEvent::SavedPage { path } => {
                 println!("saved {}", path.display());
@@ -299,6 +345,34 @@ mod tests {
                 assert_eq!(path, PathBuf::from("index"));
                 assert_eq!(trigger, "java");
                 assert_eq!(content, "note body");
+            }
+            command => panic!("unexpected command: {command:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_existing_page_meta_command_shape() {
+        let cli = Cli::try_parse_from([
+            "fractal",
+            "page",
+            "index",
+            "meta",
+            "set-tags",
+            "rust",
+            "graphs,parsing",
+        ])
+        .expect("parse page meta set-tags");
+
+        match cli.command {
+            Command::Page {
+                path: Some(path),
+                command:
+                    PageCommand::Meta {
+                        command: MetaCommand::SetTags { tags },
+                    },
+            } => {
+                assert_eq!(path, PathBuf::from("index"));
+                assert_eq!(tags, vec!["rust".to_string(), "graphs,parsing".to_string()]);
             }
             command => panic!("unexpected command: {command:?}"),
         }

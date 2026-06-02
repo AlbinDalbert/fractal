@@ -59,6 +59,11 @@ pub enum OperationEvent {
         page: PathBuf,
         note_id: String,
     },
+    UpdatedMetadata {
+        page: PathBuf,
+        name: String,
+        content: String,
+    },
     SavedPage {
         path: PathBuf,
     },
@@ -139,6 +144,15 @@ pub struct LinkEntry {
 pub struct PageSource {
     pub path: String,
     pub html: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageMetadata {
+    pub path: String,
+    pub title: String,
+    pub summary: Option<String>,
+    pub tags: Vec<String>,
+    pub meta: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
