@@ -8,15 +8,17 @@ use super::paths::{collect_page_paths, resolve_page_destination};
 use super::render::{render_page_document, stylesheet_href};
 use super::validation::validate_page_metadata;
 use super::{
-    add_note, build_index, export_page, graph_backlinks_report, graph_notes_report,
-    graph_outlinks_report, graph_related_report, import_markdown, init_project_at,
-    load_project_index, load_project_manifest, new_page, page_backlinks, page_metadata,
-    page_metadata_report, page_notes, page_outlinks, patch_note, read_page_source, related_pages,
-    remove_note, reset_page_metadata, search_project, search_report, set_page_summary,
-    set_page_tags, sync_project, validate_project, write_page_source, FileEntry, GraphEdge,
-    GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry, NoteEntry,
-    OperationEvent, PageEntry, PageGraphEntry, ProjectGraph, ProjectIndex, ProjectManifest,
-    SearchMatch, SearchResult, Theme,
+    add_note, build_index, delete_page, editor_page_detail, export_page, graph_backlinks_report,
+    graph_notes_report, graph_outlinks_report, graph_related_report, import_markdown,
+    init_project_at, list_editor_pages, load_project_index, load_project_manifest, new_page,
+    page_backlinks, page_metadata, page_metadata_report, page_notes, page_outlinks, patch_note,
+    read_page_source, related_pages, remove_note, rename_page, reset_page_metadata, search_project,
+    search_report, set_page_summary, set_page_tags, set_page_title, sync_project,
+    update_editor_page, update_page_body, validate_project, write_page_source, EditorNoteDetail,
+    EditorPageListEntry, EditorPageUpdate, FileEntry, GraphEdge, GraphNode, GraphNoteLink,
+    GraphPageLink, GraphRelatedPage, LinkEntry, NoteEntry, OperationEvent, PageEntry,
+    PageGraphEntry, PageRename, ProjectGraph, ProjectIndex, ProjectManifest, SearchMatch,
+    SearchResult, Theme,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -744,6 +746,444 @@ fn page_source_round_trip_rebuilds_index_and_serializes_report() {
 
     let report_json = serde_json::to_value(&report).expect("serialize report");
     assert_eq!(report_json["events"][0]["type"], "saved_page");
+}
+
+#[test]
+fn editor_page_api_lists_pages_and_returns_detail_data() {
+    let project = TestProject::new("editor-page-api");
+    let home = render_page_document(
+        "Home",
+        "<p><a href=\"rust.html\">Rust</a> and Java.</p>",
+        Theme::Dark,
+        "../.fractal/style.css".to_string(),
+    );
+    let home = insert_note_into_document(&home, &render_note_aside("note-java", "note body"))
+        .expect("insert note");
+    project.write_page("index.html", home);
+    project.write_page(
+        "rust.html",
+        render_page_document(
+            "Rust",
+            "<p><a href=\"index.html\">Home</a></p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let pages = list_editor_pages(project.root()).expect("list editor pages");
+    assert_eq!(
+        pages,
+        vec![
+            EditorPageListEntry {
+                path: "index.html".to_string(),
+                title: "Home".to_string(),
+                summary: Some("Short page summary here.".to_string()),
+                tags: vec![
+                    "rust".to_string(),
+                    "graphs".to_string(),
+                    "parsing".to_string()
+                ],
+                backlink_count: 1,
+                outlink_count: 1,
+            },
+            EditorPageListEntry {
+                path: "rust.html".to_string(),
+                title: "Rust".to_string(),
+                summary: Some("Short page summary here.".to_string()),
+                tags: vec![
+                    "rust".to_string(),
+                    "graphs".to_string(),
+                    "parsing".to_string()
+                ],
+                backlink_count: 1,
+                outlink_count: 1,
+            },
+        ]
+    );
+
+    let detail = editor_page_detail(project.root(), Path::new("index")).expect("page detail");
+    assert_eq!(detail.source.path, "index.html");
+    assert!(detail
+        .source
+        .html
+        .contains("<a href=\"rust.html\">Rust</a>"));
+    assert!(detail.body_html.contains("Java"));
+    assert_eq!(detail.metadata.title, "Home");
+    assert_eq!(
+        detail.notes,
+        vec![EditorNoteDetail {
+            id: "note-java".to_string(),
+            label: "java".to_string(),
+            text: "note body".to_string(),
+        }]
+    );
+    assert_eq!(
+        detail.outlinks,
+        vec![GraphPageLink {
+            page: "rust.html".to_string(),
+            text: "Rust".to_string(),
+        }]
+    );
+    assert_eq!(
+        detail.backlinks,
+        vec![GraphPageLink {
+            page: "rust.html".to_string(),
+            text: "Home".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn safe_editor_page_update_mutates_owned_fields_and_rebuilds_index() {
+    let project = TestProject::new("safe-editor-update");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p>Original body.</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "rust.html",
+        render_page_document(
+            "Rust",
+            "<p>Target page.</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let report = update_editor_page(
+        project.root(),
+        Path::new("index"),
+        EditorPageUpdate {
+            title: Some("Home Base".to_string()),
+            body_html: Some("<p><a href=\"rust.html\">Rust</a> updated.</p>".to_string()),
+            summary: Some("Local project home".to_string()),
+            tags: Some(vec![
+                "Projects".to_string(),
+                "rust, projects".to_string(),
+                " ".to_string(),
+            ]),
+        },
+    )
+    .expect("update editor page");
+
+    assert!(report.events.iter().any(|event| {
+        matches!(
+            event,
+            OperationEvent::UpdatedPageTitle { title, .. } if title == "Home Base"
+        )
+    }));
+    assert!(report
+        .events
+        .iter()
+        .any(|event| matches!(event, OperationEvent::UpdatedPageBody { .. })));
+    assert!(report.events.iter().any(|event| {
+        matches!(
+            event,
+            OperationEvent::UpdatedMetadata { name, content, .. }
+                if name == "fractal:summary" && content == "Local project home"
+        )
+    }));
+    assert!(report
+        .events
+        .iter()
+        .any(|event| matches!(event, OperationEvent::Built { .. })));
+
+    let detail = editor_page_detail(project.root(), Path::new("index")).expect("page detail");
+    assert_eq!(detail.metadata.title, "Home Base");
+    assert_eq!(
+        detail.metadata.summary,
+        Some("Local project home".to_string())
+    );
+    assert_eq!(
+        detail.metadata.tags,
+        vec!["Projects".to_string(), "rust".to_string()]
+    );
+    assert!(detail.source.html.contains("<title>Home Base</title>"));
+    assert!(detail.source.html.contains("<h1>Home Base</h1>"));
+    assert!(detail.body_html.contains("Rust"));
+    assert_eq!(
+        detail.links,
+        vec![LinkEntry {
+            href: "rust.html".to_string(),
+            text: "Rust".to_string(),
+            scope: "page".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn safe_page_editing_rejects_duplicate_title_before_writing() {
+    let project = TestProject::new("safe-editor-duplicate-title");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "rust.html",
+        render_page_document(
+            "Rust",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let error = set_page_title(project.root(), Path::new("index"), "rust")
+        .expect_err("duplicate title should fail");
+    assert!(error.to_string().contains("duplicate page label"));
+    assert!(fs::read_to_string(project.pages_dir().join("index.html"))
+        .expect("read index")
+        .contains("<title>Home</title>"));
+
+    update_page_body(project.root(), Path::new("index"), "<p>safe body</p>").expect("update body");
+    assert!(fs::read_to_string(project.pages_dir().join("index.html"))
+        .expect("read updated index")
+        .contains("<p>safe body</p>"));
+}
+
+#[test]
+fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
+    let project = TestProject::new("rename-page");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let report = rename_page(
+        project.root(),
+        Path::new("index"),
+        PageRename {
+            path: Some(PathBuf::from("folder/home")),
+            title: Some("Home Base".to_string()),
+        },
+    )
+    .expect("rename page");
+
+    let source = project.pages_dir().join("index.html");
+    let destination = project.pages_dir().join("folder/home.html");
+    assert!(!source.exists());
+    assert!(destination.is_file());
+    assert!(report.events.iter().any(|event| {
+        matches!(
+            event,
+            OperationEvent::MovedPage { from, to }
+                if from == &source && to == &destination
+        )
+    }));
+    assert!(report.events.iter().any(|event| {
+        matches!(
+            event,
+            OperationEvent::UpdatedPageTitle { page, title }
+                if page == &destination && title == "Home Base"
+        )
+    }));
+    assert!(report
+        .events
+        .iter()
+        .any(|event| matches!(event, OperationEvent::UpdatedProjectManifest { .. })));
+
+    let html = fs::read_to_string(&destination).expect("read moved page");
+    assert!(html.contains("<title>Home Base</title>"));
+    assert!(html.contains("<h1>Home Base</h1>"));
+    assert!(html.contains("href=\"../../.fractal/style.css\""));
+    assert_eq!(
+        load_project_manifest(project.root())
+            .expect("load manifest")
+            .default_page,
+        "pages/folder/home.html"
+    );
+    assert_eq!(
+        load_project_index(project.root())
+            .expect("load index")
+            .pages[0]
+            .path,
+        "folder/home.html"
+    );
+    validate_project(project.root(), false).expect("renamed project validates");
+}
+
+#[test]
+fn rename_page_rejects_label_collision_before_writing() {
+    let project = TestProject::new("rename-page-collision");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "rust.html",
+        render_page_document(
+            "Rust",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let error = rename_page(
+        project.root(),
+        Path::new("index"),
+        PageRename {
+            path: Some(PathBuf::from("folder/rust")),
+            title: Some("Rust".to_string()),
+        },
+    )
+    .expect_err("duplicate future labels should fail");
+
+    assert!(error.to_string().contains("duplicate page label"));
+    assert!(project.pages_dir().join("index.html").is_file());
+    assert!(!project.pages_dir().join("folder/rust.html").exists());
+    assert!(fs::read_to_string(project.pages_dir().join("index.html"))
+        .expect("read original page")
+        .contains("<title>Home</title>"));
+}
+
+#[test]
+fn delete_page_removes_file_rebuilds_generated_data_and_reports_links() {
+    let project = TestProject::new("delete-page");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p><a href=\"rust.html\">Rust</a></p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "rust.html",
+        render_page_document(
+            "Rust",
+            "<p><a href=\"java.html\">Java</a></p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "java.html",
+        render_page_document(
+            "Java",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let report = delete_page(project.root(), Path::new("rust")).expect("delete page");
+
+    assert!(!project.pages_dir().join("rust.html").exists());
+    assert!(report.events.iter().any(|event| {
+        matches!(
+            event,
+            OperationEvent::PageLinksAffected {
+                page,
+                backlinks,
+                outlinks,
+            } if page == "rust.html"
+                && backlinks == &vec![GraphPageLink {
+                    page: "index.html".to_string(),
+                    text: "Rust".to_string(),
+                }]
+                && outlinks == &vec![GraphPageLink {
+                    page: "java.html".to_string(),
+                    text: "Java".to_string(),
+                }]
+        )
+    }));
+    assert!(report.events.iter().any(|event| {
+        matches!(
+            event,
+            OperationEvent::DeletedPage { path }
+                if path == &project.pages_dir().join("rust.html")
+        )
+    }));
+    assert_eq!(
+        load_project_index(project.root())
+            .expect("load generated index")
+            .pages
+            .into_iter()
+            .map(|page| page.path)
+            .collect::<Vec<_>>(),
+        vec!["index.html".to_string(), "java.html".to_string()]
+    );
+    validate_project(project.root(), false).expect("project validates after delete");
+}
+
+#[test]
+fn delete_page_updates_manifest_default_when_needed() {
+    let project = TestProject::new("delete-default-page");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "second.html",
+        render_page_document(
+            "Second",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let report = delete_page(project.root(), Path::new("index")).expect("delete default page");
+
+    assert!(!project.pages_dir().join("index.html").exists());
+    assert_eq!(
+        load_project_manifest(project.root())
+            .expect("load manifest")
+            .default_page,
+        "pages/second.html"
+    );
+    assert!(report
+        .events
+        .iter()
+        .any(|event| matches!(event, OperationEvent::UpdatedProjectManifest { .. })));
+    validate_project(project.root(), false).expect("project validates after default delete");
+}
+
+#[test]
+fn delete_page_rejects_removing_only_page() {
+    let project = TestProject::new("delete-only-page");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let error =
+        delete_page(project.root(), Path::new("index")).expect_err("only page delete should fail");
+
+    assert!(error.to_string().contains("cannot delete the only page"));
+    assert!(project.pages_dir().join("index.html").is_file());
 }
 
 #[test]

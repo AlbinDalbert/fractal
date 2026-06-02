@@ -86,8 +86,21 @@ pub(super) fn build_project_index(root: &Path) -> Result<ProjectIndex> {
 }
 
 pub(super) fn ensure_page_labels_available(root: &Path, path: &str, title: &str) -> Result<()> {
+    ensure_page_labels_available_for(root, None, path, title)
+}
+
+pub(super) fn ensure_page_labels_available_for(
+    root: &Path,
+    current_path: Option<&str>,
+    path: &str,
+    title: &str,
+) -> Result<()> {
     let index = build_project_index(root)?;
-    let mut pages = index.pages;
+    let mut pages = index
+        .pages
+        .into_iter()
+        .filter(|page| Some(page.path.as_str()) != current_path)
+        .collect::<Vec<_>>();
     pages.push(PageEntry {
         path: path.to_string(),
         title: normalize_link_label(title),

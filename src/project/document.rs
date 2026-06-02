@@ -1,4 +1,4 @@
-use crate::project::html::escape_html_attribute;
+use crate::project::html::{escape_html, escape_html_attribute};
 use crate::project::links::{inferred_link_scope, normalize_link_label, note_label_from_id};
 use crate::project::types::{LinkEntry, NoteEntry};
 use crate::Result;
@@ -125,6 +125,41 @@ impl PageDocument {
         Ok(true)
     }
 
+    pub(super) fn set_stylesheet_href(&self, href: &str) -> Result<bool> {
+        let mut changed = false;
+        let mut found = false;
+
+        for element in self
+            .document
+            .select("link[href][rel]")
+            .expect("static selector should parse")
+        {
+            let mut attributes = element.attributes.borrow_mut();
+            let rel = attributes.get("rel").unwrap_or_default();
+            let existing_href = attributes.get("href").unwrap_or_default();
+            let is_fractal_stylesheet = rel
+                .split_whitespace()
+                .any(|token| token.eq_ignore_ascii_case("stylesheet"))
+                && existing_href.contains(".fractal/style.css");
+
+            if !is_fractal_stylesheet {
+                continue;
+            }
+
+            found = true;
+            if existing_href != href {
+                attributes.insert("href", href.to_string());
+                changed = true;
+            }
+        }
+
+        if found {
+            Ok(changed)
+        } else {
+            self.ensure_stylesheet_link(href)
+        }
+    }
+
     pub(super) fn ensure_body_theme(&self, theme: &str) -> Result<bool> {
         let body = self.body_node()?;
         let Some(element) = body.as_element() else {
@@ -180,6 +215,85 @@ impl PageDocument {
         let mut serialized = Vec::new();
         self.document.serialize(&mut serialized)?;
         Ok(String::from_utf8(serialized)?)
+    }
+
+    pub(super) fn main_body_html(&self) -> Result<String> {
+        let main = self.main_node()?;
+        let children = main.children().collect::<Vec<_>>();
+        let body_start = children
+            .iter()
+            .position(|child| is_element_named(child, "h1"))
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let mut serialized = Vec::new();
+
+        for child in children.into_iter().skip(body_start) {
+            child.serialize(&mut serialized)?;
+        }
+
+        Ok(String::from_utf8(serialized)?)
+    }
+
+    pub(super) fn set_title(&self, title: &str) -> Result<bool> {
+        let before = self.to_html()?;
+
+        match self.document.select_first("title").ok() {
+            Some(title_element) => replace_children_with_text(title_element.as_node(), title),
+            None => {
+                let head = self.head_node()?;
+                head.append(NodeRef::new_text("\n    "));
+                head.append(parse_document_node(
+                    &format!("<title>{}</title>", escape_html(title)),
+                    "title",
+                )?);
+                head.append(NodeRef::new_text("\n  "));
+            }
+        }
+
+        match self.document.select_first("main h1").ok() {
+            Some(heading) => replace_children_with_text(heading.as_node(), title),
+            None => {
+                let main = self.main_node()?;
+                prepend_child(
+                    &main,
+                    parse_document_node(&format!("<h1>{}</h1>", escape_html(title)), "h1")?,
+                );
+            }
+        }
+
+        Ok(before != self.to_html()?)
+    }
+
+    pub(super) fn set_main_body_html(&self, body_html: &str) -> Result<bool> {
+        let before = self.to_html()?;
+        let main = self.main_node()?;
+        let heading = direct_child_element(&main, "h1")
+            .or_else(|| {
+                self.document
+                    .select_first("main h1")
+                    .ok()
+                    .map(|h| h.as_node().clone())
+            })
+            .unwrap_or_else(|| {
+                let title = self.title().unwrap_or_else(|| "Untitled".to_string());
+                parse_document_node(&format!("<h1>{}</h1>", escape_html(&title)), "h1")
+                    .expect("generated heading should parse")
+            });
+        let body_nodes = parse_main_fragment_children(body_html)?;
+
+        for child in main.children().collect::<Vec<_>>() {
+            child.detach();
+        }
+
+        main.append(NodeRef::new_text("\n      "));
+        main.append(heading);
+        for child in body_nodes {
+            main.append(NodeRef::new_text("\n      "));
+            main.append(child);
+        }
+        main.append(NodeRef::new_text("\n    "));
+
+        Ok(before != self.to_html()?)
     }
 
     pub(super) fn title(&self) -> Option<String> {
@@ -307,6 +421,15 @@ impl PageDocument {
             .as_node()
             .clone())
     }
+
+    fn main_node(&self) -> Result<NodeRef> {
+        Ok(self
+            .document
+            .select_first("main")
+            .map_err(|_| "missing main section in page")?
+            .as_node()
+            .clone())
+    }
 }
 
 fn parse_document_node(html: &str, selector: &str) -> Result<NodeRef> {
@@ -319,4 +442,41 @@ fn parse_document_node(html: &str, selector: &str) -> Result<NodeRef> {
         .clone();
     node.detach();
     Ok(node)
+}
+
+fn parse_main_fragment_children(html: &str) -> Result<Vec<NodeRef>> {
+    let document = PageDocument::parse(&format!("<main>{html}</main>"));
+    let main = document.main_node()?;
+    let children = main.children().collect::<Vec<_>>();
+    for child in &children {
+        child.detach();
+    }
+    Ok(children)
+}
+
+fn is_element_named(node: &NodeRef, name: &str) -> bool {
+    node.as_element()
+        .map(|element| element.name.local.to_string() == name)
+        .unwrap_or(false)
+}
+
+fn direct_child_element(parent: &NodeRef, name: &str) -> Option<NodeRef> {
+    parent
+        .children()
+        .find(|child| is_element_named(child, name))
+}
+
+fn replace_children_with_text(node: &NodeRef, text: &str) {
+    for child in node.children().collect::<Vec<_>>() {
+        child.detach();
+    }
+    node.append(NodeRef::new_text(text));
+}
+
+fn prepend_child(parent: &NodeRef, child: NodeRef) {
+    if let Some(first_child) = parent.first_child() {
+        first_child.insert_before(child);
+    } else {
+        parent.append(child);
+    }
 }

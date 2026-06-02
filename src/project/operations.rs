@@ -1,13 +1,19 @@
 use crate::project::constants::{
     INDEX_PAGE, MANIFEST_FILE, MANIFEST_VERSION, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR,
 };
-use crate::project::index::{build_index, ensure_page_labels_available};
+use crate::project::document::PageDocument;
+use crate::project::graph::build_project_graph;
+use crate::project::index::ensure_page_labels_available_for;
+use crate::project::index::{build_index, build_project_index, ensure_page_labels_available};
+use crate::project::links::{normalize_link_label, page_label_from_path};
 use crate::project::markdown::{html_to_markdown, markdown_to_html};
 use crate::project::paths::{
     load_manifest, page_relative_path, resolve_existing_page, resolve_page_destination,
 };
 use crate::project::render::{default_stylesheet, render_page_document, stylesheet_href};
-use crate::project::types::{OperationEvent, OperationReport, PageSource, ProjectManifest, Theme};
+use crate::project::types::{
+    OperationEvent, OperationReport, PageRename, PageSource, ProjectManifest, Theme,
+};
 use crate::Result;
 use std::fs;
 use std::path::Path;
@@ -97,6 +103,133 @@ pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Operat
     let generated = build_index(root)?;
     let mut report = OperationReport::from_event(OperationEvent::Created { path: destination });
     report.extend(generated);
+    Ok(report)
+}
+
+pub fn rename_page(
+    root: impl AsRef<Path>,
+    page: impl AsRef<Path>,
+    rename: PageRename,
+) -> Result<OperationReport> {
+    let root = root.as_ref();
+    let mut manifest = load_manifest(root)?;
+    let source = resolve_existing_page(root, page.as_ref())?;
+    let source_relative = page_relative_path(root, &source)?;
+    let source_path = source_relative.to_string_lossy().replace('\\', "/");
+    let destination = match rename.path.as_deref() {
+        Some(path) => resolve_page_destination(root, path)?,
+        None => source.clone(),
+    };
+    let destination_relative = page_relative_path(root, &destination)?;
+    let destination_path = destination_relative.to_string_lossy().replace('\\', "/");
+    let path_changed = source != destination;
+
+    if !path_changed && rename.title.is_none() {
+        return Err("rename requires a new page path, a new title, or both".into());
+    }
+
+    if path_changed && destination.exists() {
+        return Err(format!("page already exists: {}", destination.display()).into());
+    }
+
+    let html = fs::read_to_string(&source)?;
+    let document = PageDocument::parse(&html);
+    let current_title = document
+        .title()
+        .unwrap_or_else(|| page_label_from_path(&source_path));
+    let title = match rename.title.as_deref() {
+        Some(title) => normalize_page_title(title)?,
+        None => current_title,
+    };
+
+    ensure_page_labels_available_for(root, Some(&source_path), &destination_path, &title)?;
+
+    let title_changed = document.set_title(&title)?;
+    document.set_stylesheet_href(&stylesheet_href(&destination_relative))?;
+    let updated_html = document.to_html()?;
+
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    if path_changed {
+        fs::rename(&source, &destination)?;
+    }
+    fs::write(&destination, updated_html)?;
+
+    let mut report = OperationReport::new();
+    if path_changed {
+        report.push(OperationEvent::MovedPage {
+            from: source.clone(),
+            to: destination.clone(),
+        });
+    }
+    if title_changed {
+        report.push(OperationEvent::UpdatedPageTitle {
+            page: destination.clone(),
+            title,
+        });
+    }
+
+    if manifest_default_page_path(root, &manifest)? == source_path {
+        manifest.default_page = format!("{PAGES_DIR}/{destination_path}");
+        let manifest_path = root.join(MANIFEST_FILE);
+        fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+        report.push(OperationEvent::UpdatedProjectManifest {
+            path: manifest_path,
+        });
+    }
+
+    report.extend(build_index(root)?);
+    Ok(report)
+}
+
+pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<OperationReport> {
+    let root = root.as_ref();
+    let mut manifest = load_manifest(root)?;
+    let page = resolve_existing_page(root, page.as_ref())?;
+    let relative_page = page_relative_path(root, &page)?;
+    let page_path = relative_page.to_string_lossy().replace('\\', "/");
+    let index = build_project_index(root)?;
+    let graph = build_project_graph(&index);
+    let graph_entry = graph
+        .pages
+        .into_iter()
+        .find(|entry| entry.path == page_path)
+        .ok_or_else(|| format!("page not found in graph: {page_path}"))?;
+    let remaining_pages = index
+        .pages
+        .iter()
+        .filter(|entry| entry.path != page_path)
+        .collect::<Vec<_>>();
+    let deleting_default = manifest_default_page_path(root, &manifest)? == page_path;
+
+    if remaining_pages.is_empty() {
+        return Err("cannot delete the only page in a project".into());
+    }
+
+    let replacement_default = deleting_default.then(|| remaining_pages[0].path.clone());
+
+    fs::remove_file(&page)?;
+
+    let mut report = OperationReport::new();
+    report.push(OperationEvent::PageLinksAffected {
+        page: page_path,
+        backlinks: graph_entry.backlinks,
+        outlinks: graph_entry.outlinks,
+    });
+    report.push(OperationEvent::DeletedPage { path: page });
+
+    if let Some(default_page) = replacement_default {
+        manifest.default_page = format!("{PAGES_DIR}/{default_page}");
+        let manifest_path = root.join(MANIFEST_FILE);
+        fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+        report.push(OperationEvent::UpdatedProjectManifest {
+            path: manifest_path,
+        });
+    }
+
+    report.extend(build_index(root)?);
     Ok(report)
 }
 
@@ -202,4 +335,18 @@ pub fn write_page_source(
     let mut report = OperationReport::from_event(OperationEvent::SavedPage { path: page });
     report.extend(generated);
     Ok(report)
+}
+
+fn normalize_page_title(title: &str) -> Result<String> {
+    let title = normalize_link_label(title);
+    if title.is_empty() {
+        return Err("page title cannot be empty".into());
+    }
+    Ok(title)
+}
+
+fn manifest_default_page_path(root: &Path, manifest: &ProjectManifest) -> Result<String> {
+    Ok(page_relative_path(root, Path::new(&manifest.default_page))?
+        .to_string_lossy()
+        .replace('\\', "/"))
 }

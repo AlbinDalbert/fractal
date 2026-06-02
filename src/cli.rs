@@ -258,6 +258,9 @@ fn print_operation_report(report: &OperationReport) {
             OperationEvent::Exported { page, output } => {
                 println!("exported {} -> {}", page.display(), output.display());
             }
+            OperationEvent::DeletedPage { path } => {
+                println!("deleted page {}", path.display());
+            }
             OperationEvent::Fixed { path } => {
                 println!("fixed {}", path.display());
             }
@@ -267,11 +270,32 @@ fn print_operation_report(report: &OperationReport) {
             } => {
                 println!("imported {} -> {}", source.display(), destination.display());
             }
+            OperationEvent::MovedPage { from, to } => {
+                println!("moved page {} -> {}", from.display(), to.display());
+            }
             OperationEvent::PatchedNote { page, note_id } => {
                 println!("patched note {} in {}", note_id, page.display());
             }
+            OperationEvent::PageLinksAffected {
+                page,
+                backlinks,
+                outlinks,
+            } => {
+                println!(
+                    "affected links for {}: {} backlink(s), {} outlink(s)",
+                    page,
+                    backlinks.len(),
+                    outlinks.len()
+                );
+            }
             OperationEvent::RemovedNote { page, note_id } => {
                 println!("removed note {} from {}", note_id, page.display());
+            }
+            OperationEvent::UpdatedPageBody { page } => {
+                println!("updated page body for {}", page.display());
+            }
+            OperationEvent::UpdatedPageTitle { page, title } => {
+                println!("updated page title for {} to {}", page.display(), title);
             }
             OperationEvent::UpdatedMetadata {
                 page,
@@ -279,6 +303,9 @@ fn print_operation_report(report: &OperationReport) {
                 content,
             } => {
                 println!("updated {} for {} to {}", name, page.display(), content);
+            }
+            OperationEvent::UpdatedProjectManifest { path } => {
+                println!("updated project manifest {}", path.display());
             }
             OperationEvent::SavedPage { path } => {
                 println!("saved {}", path.display());

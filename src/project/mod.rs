@@ -1,5 +1,6 @@
 mod constants;
 mod document;
+mod editor;
 mod graph;
 mod html;
 mod index;
@@ -15,6 +16,9 @@ mod sync;
 mod types;
 mod validation;
 
+pub use editor::{
+    editor_page_detail, list_editor_pages, set_page_title, update_editor_page, update_page_body,
+};
 pub use graph::{
     graph_backlinks_report, graph_notes_report, graph_orphans_report, graph_outlinks_report,
     graph_page, graph_page_report, graph_related_report, load_project_graph, orphan_pages,
@@ -26,14 +30,15 @@ pub use metadata::{
 };
 pub use notes::{add_note, patch_note, remove_note};
 pub use operations::{
-    export_page, import_markdown, init_project, init_project_at, load_project_manifest, new_page,
-    read_page_source, write_page_source,
+    delete_page, export_page, import_markdown, init_project, init_project_at,
+    load_project_manifest, new_page, read_page_source, rename_page, write_page_source,
 };
 pub use search::{search_project, search_report};
 pub use sync::sync_project;
 pub use types::{
-    FileEntry, GraphEdge, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry,
-    NoteEntry, OperationEvent, OperationReport, PageEntry, PageGraphEntry, PageMetadata,
+    EditorNoteDetail, EditorPageDetail, EditorPageListEntry, EditorPageUpdate, FileEntry,
+    GraphEdge, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry, NoteEntry,
+    OperationEvent, OperationReport, PageEntry, PageGraphEntry, PageMetadata, PageRename,
     PageSource, ProjectGraph, ProjectIndex, ProjectManifest, SearchMatch, SearchResult, Theme,
 };
 pub use validation::validate_project;

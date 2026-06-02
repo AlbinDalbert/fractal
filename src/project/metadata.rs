@@ -5,12 +5,12 @@ use crate::project::links::normalize_link_label;
 use crate::project::paths::{page_relative_path, resolve_existing_page};
 use crate::project::types::{OperationEvent, OperationReport, PageMetadata};
 use crate::Result;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-const SUMMARY_META: &str = "fractal:summary";
-const TAGS_META: &str = "fractal:tags";
+pub(super) const SUMMARY_META: &str = "fractal:summary";
+pub(super) const TAGS_META: &str = "fractal:tags";
 
 pub fn page_metadata(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<PageMetadata> {
     let root = root.as_ref();
@@ -20,14 +20,8 @@ pub fn page_metadata(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<P
     let document = PageDocument::from_path(&page)?;
     let meta = document.fractal_meta();
     let title = document.title().unwrap_or_else(|| path.clone());
-    let summary = meta
-        .get(SUMMARY_META)
-        .filter(|summary| !summary.trim().is_empty())
-        .cloned();
-    let tags = meta
-        .get(TAGS_META)
-        .map(|tags| parse_tags(tags))
-        .unwrap_or_default();
+    let summary = summary_from_meta(&meta);
+    let tags = tags_from_meta(&meta);
 
     Ok(PageMetadata {
         path,
@@ -112,11 +106,23 @@ fn update_page_meta(
     Ok(report)
 }
 
-fn parse_tags(tags: &str) -> Vec<String> {
+pub(super) fn summary_from_meta(meta: &BTreeMap<String, String>) -> Option<String> {
+    meta.get(SUMMARY_META)
+        .filter(|summary| !summary.trim().is_empty())
+        .cloned()
+}
+
+pub(super) fn tags_from_meta(meta: &BTreeMap<String, String>) -> Vec<String> {
+    meta.get(TAGS_META)
+        .map(|tags| parse_tags(tags))
+        .unwrap_or_default()
+}
+
+pub(super) fn parse_tags(tags: &str) -> Vec<String> {
     normalize_tags(tags.split(','))
 }
 
-fn normalize_tags(tags: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
+pub(super) fn normalize_tags(tags: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
     let mut seen = BTreeSet::new();
     let mut normalized = Vec::new();
 

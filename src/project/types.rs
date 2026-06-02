@@ -44,6 +44,9 @@ pub enum OperationEvent {
         page: PathBuf,
         output: PathBuf,
     },
+    DeletedPage {
+        path: PathBuf,
+    },
     Fixed {
         path: PathBuf,
     },
@@ -51,18 +54,37 @@ pub enum OperationEvent {
         source: PathBuf,
         destination: PathBuf,
     },
+    MovedPage {
+        from: PathBuf,
+        to: PathBuf,
+    },
     PatchedNote {
         page: PathBuf,
         note_id: String,
+    },
+    PageLinksAffected {
+        page: String,
+        backlinks: Vec<GraphPageLink>,
+        outlinks: Vec<GraphPageLink>,
     },
     RemovedNote {
         page: PathBuf,
         note_id: String,
     },
+    UpdatedPageBody {
+        page: PathBuf,
+    },
+    UpdatedPageTitle {
+        page: PathBuf,
+        title: String,
+    },
     UpdatedMetadata {
         page: PathBuf,
         name: String,
         content: String,
+    },
+    UpdatedProjectManifest {
+        path: PathBuf,
     },
     SavedPage {
         path: PathBuf,
@@ -153,6 +175,48 @@ pub struct PageMetadata {
     pub summary: Option<String>,
     pub tags: Vec<String>,
     pub meta: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditorPageListEntry {
+    pub path: String,
+    pub title: String,
+    pub summary: Option<String>,
+    pub tags: Vec<String>,
+    pub backlink_count: usize,
+    pub outlink_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditorPageDetail {
+    pub source: PageSource,
+    pub body_html: String,
+    pub metadata: PageMetadata,
+    pub notes: Vec<EditorNoteDetail>,
+    pub links: Vec<LinkEntry>,
+    pub backlinks: Vec<GraphPageLink>,
+    pub outlinks: Vec<GraphPageLink>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditorNoteDetail {
+    pub id: String,
+    pub label: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditorPageUpdate {
+    pub title: Option<String>,
+    pub body_html: Option<String>,
+    pub summary: Option<String>,
+    pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageRename {
+    pub path: Option<PathBuf>,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
