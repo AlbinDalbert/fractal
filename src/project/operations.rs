@@ -147,9 +147,11 @@ pub fn rename_page(
 
     let title_changed = document.set_title(&title)?;
     document.set_stylesheet_href(&stylesheet_href(&destination_relative))?;
-    let moved_page_link_updates = path_changed
-        .then(|| document.rewrite_relative_page_hrefs_for_move(&source_path, &destination_path))
-        .unwrap_or(0);
+    let moved_page_link_updates = if path_changed {
+        document.rewrite_relative_page_hrefs_for_move(&source_path, &destination_path)
+    } else {
+        0
+    };
     let updated_html = document.to_html()?;
 
     if let Some(parent) = destination.parent() {
