@@ -1,0 +1,6 @@
+{
+  "project_name": "my_test_project",
+  "version": 1,
+  "default_page": "pages/index.html",
+  "theme": "dark"
+}

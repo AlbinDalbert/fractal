@@ -2,7 +2,7 @@
 
 - This Rust project is under very active development.
 - Prefer the current source, tests, and docs when inferring intended behavior.
-- When making changes, verify the project state before handoff with `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test --all-features`. If a command cannot be run or fails because of pre-existing worktree state, report that explicitly.
+- When making changes to any rust files, verify the project state before handoff with `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test --all-features`. If a command cannot be run or fails because of pre-existing worktree state, report that explicitly.
 - Do not rely on removed legacy prototype code or old custom `.frac`/binary-format design notes unless the user explicitly asks to recover or compare them from git history.
 - Preserve the current product direction: Fractal is the engine for the Fractal document/project format, not a markdown-first notes app and not a generic arbitrary-HTML site tool.
 - Fractal documents are HTML-backed at the raw storage layer, but "valid Fractal" is stricter than "valid HTML". Think of this like JSON borrowing JavaScript syntax, or Word documents borrowing XML: the underlying representation is inspectable, but Fractal owns the format contract.
