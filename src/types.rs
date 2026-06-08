@@ -1,3 +1,4 @@
+use crate::FractalError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -221,6 +222,54 @@ pub struct EditorPageUpdate {
 pub struct PageRename {
     pub path: Option<PathBuf>,
     pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageDeletePreflight {
+    pub page: String,
+    pub path: PathBuf,
+    pub deleting_default: bool,
+    pub replacement_default_page: Option<String>,
+    pub backlinks: Vec<GraphPageLink>,
+    pub outlinks: Vec<GraphPageLink>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageRenamePreflight {
+    pub source_page: String,
+    pub destination_page: String,
+    pub source_path: PathBuf,
+    pub destination_path: PathBuf,
+    pub title: String,
+    pub path_changed: bool,
+    pub title_changed: bool,
+    pub updates_default_page: bool,
+    pub backlinks: Vec<GraphPageLink>,
+    pub outlinks: Vec<GraphPageLink>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectSummary {
+    pub root: PathBuf,
+    pub manifest_path: PathBuf,
+    pub project_name: String,
+    pub version: u32,
+    pub default_page: String,
+    pub theme: Theme,
+    pub valid: bool,
+    pub validation_error: Option<FractalError>,
+    pub file_count: usize,
+    pub page_count: usize,
+    pub asset_count: usize,
+    pub note_count: usize,
+    pub link_count: usize,
+    pub graph_node_count: usize,
+    pub graph_edge_count: usize,
+    pub orphan_page_count: usize,
+    pub generated_index_exists: bool,
+    pub generated_graph_exists: bool,
+    pub generated_index_fresh: bool,
+    pub generated_graph_fresh: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -1,5 +1,6 @@
 mod editor;
 mod page;
+mod summary;
 mod sync;
 
 pub use editor::{
@@ -7,6 +8,8 @@ pub use editor::{
 };
 pub use page::{
     delete_page, export_page, import_markdown, init_project, init_project_at,
-    load_project_manifest, new_page, read_page_source, rename_page, write_page_source,
+    load_project_manifest, new_page, preflight_delete_page, preflight_rename_page,
+    read_page_source, rename_page, write_page_source,
 };
+pub use summary::project_summary;
 pub use sync::sync_project;

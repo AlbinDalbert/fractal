@@ -13,7 +13,8 @@ use crate::project::paths::{
     resolve_page_destination,
 };
 use crate::types::{
-    OperationEvent, OperationReport, PageRename, PageSource, ProjectManifest, Theme,
+    OperationEvent, OperationReport, PageDeletePreflight, PageRename, PageRenamePreflight,
+    PageSource, ProjectManifest, Theme,
 };
 use crate::Result;
 use std::fs;
@@ -107,22 +108,22 @@ pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Operat
     Ok(report)
 }
 
-pub fn rename_page(
+pub fn preflight_rename_page(
     root: impl AsRef<Path>,
     page: impl AsRef<Path>,
     rename: PageRename,
-) -> Result<OperationReport> {
+) -> Result<PageRenamePreflight> {
     let root = root.as_ref();
-    let mut manifest = load_manifest(root)?;
+    let manifest = load_manifest(root)?;
     let source = resolve_existing_page(root, page.as_ref())?;
     let source_relative = page_relative_path(root, &source)?;
-    let source_path = source_relative.to_string_lossy().replace('\\', "/");
+    let source_page = source_relative.to_string_lossy().replace('\\', "/");
     let destination = match rename.path.as_deref() {
         Some(path) => resolve_page_destination(root, path)?,
         None => source.clone(),
     };
     let destination_relative = page_relative_path(root, &destination)?;
-    let destination_path = destination_relative.to_string_lossy().replace('\\', "/");
+    let destination_page = destination_relative.to_string_lossy().replace('\\', "/");
     let path_changed = source != destination;
 
     if !path_changed && rename.title.is_none() {
@@ -137,62 +138,100 @@ pub fn rename_page(
     let document = PageDocument::parse(&html);
     let current_title = document
         .title()
-        .unwrap_or_else(|| page_label_from_path(&source_path));
+        .unwrap_or_else(|| page_label_from_path(&source_page));
     let title = match rename.title.as_deref() {
         Some(title) => normalize_page_title(title)?,
-        None => current_title,
+        None => current_title.clone(),
     };
 
-    ensure_page_labels_available_for(root, Some(&source_path), &destination_path, &title)?;
+    ensure_page_labels_available_for(root, Some(&source_page), &destination_page, &title)?;
 
-    let title_changed = document.set_title(&title)?;
+    let index = build_project_index(root)?;
+    let graph = build_project_graph(&index);
+    let graph_entry = graph
+        .pages
+        .into_iter()
+        .find(|entry| entry.path == source_page)
+        .ok_or_else(|| format!("page not found in graph: {source_page}"))?;
+
+    Ok(PageRenamePreflight {
+        source_page: source_page.clone(),
+        destination_page,
+        source_path: source,
+        destination_path: destination,
+        title: title.clone(),
+        path_changed,
+        title_changed: current_title != title,
+        updates_default_page: path_changed
+            && manifest_default_page_path(root, &manifest)? == source_page,
+        backlinks: graph_entry.backlinks,
+        outlinks: graph_entry.outlinks,
+    })
+}
+
+pub fn rename_page(
+    root: impl AsRef<Path>,
+    page: impl AsRef<Path>,
+    rename: PageRename,
+) -> Result<OperationReport> {
+    let root = root.as_ref();
+    let mut manifest = load_manifest(root)?;
+    let preflight = preflight_rename_page(root, page, rename)?;
+    let html = fs::read_to_string(&preflight.source_path)?;
+    let document = PageDocument::parse(&html);
+    let destination_relative = page_relative_path(root, &preflight.destination_path)?;
+
+    let title_changed = document.set_title(&preflight.title)?;
     document.set_stylesheet_href(&stylesheet_href(&destination_relative))?;
-    let moved_page_link_updates = if path_changed {
-        document.rewrite_relative_page_hrefs_for_move(&source_path, &destination_path)
+    let moved_page_link_updates = if preflight.path_changed {
+        document.rewrite_relative_page_hrefs_for_move(
+            &preflight.source_page,
+            &preflight.destination_page,
+        )
     } else {
         0
     };
     let updated_html = document.to_html()?;
 
-    if let Some(parent) = destination.parent() {
+    if let Some(parent) = preflight.destination_path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    if path_changed {
-        fs::rename(&source, &destination)?;
+    if preflight.path_changed {
+        fs::rename(&preflight.source_path, &preflight.destination_path)?;
     }
-    fs::write(&destination, updated_html)?;
+    fs::write(&preflight.destination_path, updated_html)?;
 
     let mut report = OperationReport::new();
-    if path_changed {
+    if preflight.path_changed {
         report.push(OperationEvent::MovedPage {
-            from: source.clone(),
-            to: destination.clone(),
+            from: preflight.source_path.clone(),
+            to: preflight.destination_path.clone(),
         });
     }
     if title_changed {
         report.push(OperationEvent::UpdatedPageTitle {
-            page: destination.clone(),
-            title,
+            page: preflight.destination_path.clone(),
+            title: preflight.title.clone(),
         });
     }
     if moved_page_link_updates > 0 {
         report.push(OperationEvent::UpdatedPageLinks {
-            page: destination.clone(),
+            page: preflight.destination_path.clone(),
             count: moved_page_link_updates,
         });
     }
 
-    if path_changed {
+    if preflight.path_changed {
         report.extend(rewrite_renamed_page_links(
             root,
-            &source_path,
-            &destination_path,
+            &preflight.source_page,
+            &preflight.destination_page,
         )?);
     }
 
-    if manifest_default_page_path(root, &manifest)? == source_path {
-        manifest.default_page = format!("{PAGES_DIR}/{destination_path}");
+    if preflight.updates_default_page {
+        manifest.default_page = format!("{PAGES_DIR}/{}", preflight.destination_page);
         let manifest_path = root.join(MANIFEST_FILE);
         fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
         report.push(OperationEvent::UpdatedProjectManifest {
@@ -204,9 +243,12 @@ pub fn rename_page(
     Ok(report)
 }
 
-pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<OperationReport> {
+pub fn preflight_delete_page(
+    root: impl AsRef<Path>,
+    page: impl AsRef<Path>,
+) -> Result<PageDeletePreflight> {
     let root = root.as_ref();
-    let mut manifest = load_manifest(root)?;
+    let manifest = load_manifest(root)?;
     let page = resolve_existing_page(root, page.as_ref())?;
     let relative_page = page_relative_path(root, &page)?;
     let page_path = relative_page.to_string_lossy().replace('\\', "/");
@@ -228,19 +270,33 @@ pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Ope
         return Err("cannot delete the only page in a project".into());
     }
 
-    let replacement_default = deleting_default.then(|| remaining_pages[0].path.clone());
+    Ok(PageDeletePreflight {
+        page: page_path,
+        path: page,
+        deleting_default,
+        replacement_default_page: deleting_default.then(|| remaining_pages[0].path.clone()),
+        backlinks: graph_entry.backlinks,
+        outlinks: graph_entry.outlinks,
+    })
+}
 
-    fs::remove_file(&page)?;
+pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<OperationReport> {
+    let root = root.as_ref();
+    let mut manifest = load_manifest(root)?;
+    let preflight = preflight_delete_page(root, page)?;
+    fs::remove_file(&preflight.path)?;
 
     let mut report = OperationReport::new();
     report.push(OperationEvent::PageLinksAffected {
-        page: page_path,
-        backlinks: graph_entry.backlinks,
-        outlinks: graph_entry.outlinks,
+        page: preflight.page,
+        backlinks: preflight.backlinks,
+        outlinks: preflight.outlinks,
     });
-    report.push(OperationEvent::DeletedPage { path: page });
+    report.push(OperationEvent::DeletedPage {
+        path: preflight.path,
+    });
 
-    if let Some(default_page) = replacement_default {
+    if let Some(default_page) = preflight.replacement_default_page {
         manifest.default_page = format!("{PAGES_DIR}/{default_page}");
         let manifest_path = root.join(MANIFEST_FILE);
         fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;

@@ -11,15 +11,16 @@ use crate::project::{
     graph_notes_report, graph_outlinks_report, graph_related_report, import_markdown,
     init_project_at, list_editor_pages, load_project_index, load_project_manifest, new_page,
     page_backlinks, page_metadata, page_metadata_report, page_notes, page_outlinks, patch_note,
-    read_page_source, related_pages, remove_note, rename_page, reset_page_metadata, search_project,
-    search_report, set_page_summary, set_page_tags, set_page_title, sync_project,
-    update_editor_page, update_page_body, validate_project, write_page_source, EditorNoteDetail,
-    EditorPageListEntry, EditorPageUpdate, FileEntry, GraphEdge, GraphNode, GraphNoteLink,
-    GraphPageLink, GraphRelatedPage, LinkEntry, NoteEntry, OperationEvent, PageEntry,
-    PageGraphEntry, PageRename, ProjectGraph, ProjectIndex, ProjectManifest, SearchMatch,
-    SearchResult, Theme,
+    preflight_delete_page, preflight_rename_page, project_summary, read_page_source, related_pages,
+    remove_note, rename_page, reset_page_metadata, search_project, search_report, set_page_summary,
+    set_page_tags, set_page_title, sync_project, update_editor_page, update_page_body,
+    validate_project, write_page_source, EditorNoteDetail, EditorPageListEntry, EditorPageUpdate,
+    FileEntry, GraphEdge, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry,
+    NoteEntry, OperationEvent, PageEntry, PageGraphEntry, PageRename, ProjectGraph, ProjectIndex,
+    ProjectManifest, SearchMatch, SearchResult, Theme,
 };
 use crate::validation::validate_page_metadata;
+use crate::FractalErrorCode;
 use std::collections::BTreeMap;
 use std::fs;
 use std::ops::Deref;
@@ -635,6 +636,7 @@ fn page_destination_rejects_parent_traversal() {
     let error = resolve_page_destination(Path::new("."), Path::new("../escape"))
         .expect_err("parent traversal should be rejected");
 
+    assert_eq!(error.code, FractalErrorCode::InvalidInput);
     assert_eq!(error.to_string(), "page path cannot contain `..`");
 }
 
@@ -834,6 +836,66 @@ fn editor_page_api_lists_pages_and_returns_detail_data() {
 }
 
 #[test]
+fn project_summary_reports_validation_counts_and_generated_freshness() {
+    let project = TestProject::new("project-summary");
+    let home = render_page_document(
+        "Home",
+        "<p><a href=\"rust.html\">Rust</a></p>",
+        Theme::Dark,
+        "../.fractal/style.css".to_string(),
+    );
+    let home = insert_note_into_document(&home, &render_note_aside("note-java", "note body"))
+        .expect("insert note");
+    project.write_page("index.html", home);
+    project.write_page(
+        "rust.html",
+        render_page_document(
+            "Rust",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    fs::write(project.pages_dir().join("asset.txt"), "asset").expect("write asset");
+    build_index(project.root()).expect("build generated data");
+
+    let summary = project_summary(project.root()).expect("project summary");
+
+    assert_eq!(summary.project_name, "test");
+    assert_eq!(summary.default_page, "pages/index.html");
+    assert!(summary.valid);
+    assert_eq!(summary.validation_error, None);
+    assert_eq!(summary.file_count, 3);
+    assert_eq!(summary.page_count, 2);
+    assert_eq!(summary.asset_count, 1);
+    assert_eq!(summary.note_count, 1);
+    assert_eq!(summary.link_count, 1);
+    assert_eq!(summary.graph_node_count, 3);
+    assert_eq!(summary.graph_edge_count, 2);
+    assert_eq!(summary.orphan_page_count, 1);
+    assert!(summary.generated_index_exists);
+    assert!(summary.generated_graph_exists);
+    assert!(summary.generated_index_fresh);
+    assert!(summary.generated_graph_fresh);
+
+    project.write_page(
+        "java.html",
+        render_page_document(
+            "Java",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let stale_summary = project_summary(project.root()).expect("stale project summary");
+
+    assert_eq!(stale_summary.page_count, 3);
+    assert!(!stale_summary.generated_index_fresh);
+    assert!(!stale_summary.generated_graph_fresh);
+}
+
+#[test]
 fn safe_editor_page_update_mutates_owned_fields_and_rebuilds_index() {
     let project = TestProject::new("safe-editor-update");
     project.write_page(
@@ -949,6 +1011,79 @@ fn safe_page_editing_rejects_duplicate_title_before_writing() {
     assert!(fs::read_to_string(project.pages_dir().join("index.html"))
         .expect("read updated index")
         .contains("<p>safe body</p>"));
+}
+
+#[test]
+fn preflight_rename_page_reports_affected_state_without_writing() {
+    let project = TestProject::new("preflight-rename-page");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p><a href=\"rust.html\">Rust</a></p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "links.html",
+        render_page_document(
+            "Links",
+            "<p><a href=\"index.html\">Home</a></p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "rust.html",
+        render_page_document(
+            "Rust",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let preflight = preflight_rename_page(
+        project.root(),
+        Path::new("index"),
+        PageRename {
+            path: Some(PathBuf::from("folder/home")),
+            title: Some("Home Base".to_string()),
+        },
+    )
+    .expect("preflight rename");
+
+    assert_eq!(preflight.source_page, "index.html");
+    assert_eq!(preflight.destination_page, "folder/home.html");
+    assert_eq!(
+        preflight.source_path,
+        project.pages_dir().join("index.html")
+    );
+    assert_eq!(
+        preflight.destination_path,
+        project.pages_dir().join("folder/home.html")
+    );
+    assert_eq!(preflight.title, "Home Base");
+    assert!(preflight.path_changed);
+    assert!(preflight.title_changed);
+    assert!(preflight.updates_default_page);
+    assert_eq!(
+        preflight.backlinks,
+        vec![GraphPageLink {
+            page: "links.html".to_string(),
+            text: "Home".to_string(),
+        }]
+    );
+    assert_eq!(
+        preflight.outlinks,
+        vec![GraphPageLink {
+            page: "rust.html".to_string(),
+            text: "Rust".to_string(),
+        }]
+    );
+    assert!(project.pages_dir().join("index.html").is_file());
+    assert!(!project.pages_dir().join("folder/home.html").exists());
 }
 
 #[test]
@@ -1088,6 +1223,61 @@ fn rename_page_rejects_label_collision_before_writing() {
     assert!(fs::read_to_string(project.pages_dir().join("index.html"))
         .expect("read original page")
         .contains("<title>Home</title>"));
+}
+
+#[test]
+fn preflight_delete_page_reports_default_and_links_without_writing() {
+    let project = TestProject::new("preflight-delete-page");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p><a href=\"rust.html\">Rust</a></p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "rust.html",
+        render_page_document(
+            "Rust",
+            "<p><a href=\"java.html\">Java</a></p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "java.html",
+        render_page_document(
+            "Java",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let preflight =
+        preflight_delete_page(project.root(), Path::new("rust")).expect("preflight delete");
+
+    assert_eq!(preflight.page, "rust.html");
+    assert_eq!(preflight.path, project.pages_dir().join("rust.html"));
+    assert!(!preflight.deleting_default);
+    assert_eq!(preflight.replacement_default_page, None);
+    assert_eq!(
+        preflight.backlinks,
+        vec![GraphPageLink {
+            page: "index.html".to_string(),
+            text: "Rust".to_string(),
+        }]
+    );
+    assert_eq!(
+        preflight.outlinks,
+        vec![GraphPageLink {
+            page: "java.html".to_string(),
+            text: "Java".to_string(),
+        }]
+    );
+    assert!(project.pages_dir().join("rust.html").is_file());
 }
 
 #[test]

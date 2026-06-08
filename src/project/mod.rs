@@ -14,8 +14,8 @@ pub use crate::index::search::{search_project, search_report};
 pub use crate::index::{build_index, load_project_index};
 pub use crate::ops::{
     delete_page, export_page, import_markdown, init_project, init_project_at,
-    load_project_manifest, new_page, read_page_source, rename_page, sync_project,
-    write_page_source,
+    load_project_manifest, new_page, preflight_delete_page, preflight_rename_page, project_summary,
+    read_page_source, rename_page, sync_project, write_page_source,
 };
 pub use crate::ops::{
     editor_page_detail, list_editor_pages, set_page_title, update_editor_page, update_page_body,
@@ -23,7 +23,8 @@ pub use crate::ops::{
 pub use crate::types::{
     EditorNoteDetail, EditorPageDetail, EditorPageListEntry, EditorPageUpdate, FileEntry,
     GraphEdge, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry, NoteEntry,
-    OperationEvent, OperationReport, PageEntry, PageGraphEntry, PageMetadata, PageRename,
-    PageSource, ProjectGraph, ProjectIndex, ProjectManifest, SearchMatch, SearchResult, Theme,
+    OperationEvent, OperationReport, PageDeletePreflight, PageEntry, PageGraphEntry, PageMetadata,
+    PageRename, PageRenamePreflight, PageSource, ProjectGraph, ProjectIndex, ProjectManifest,
+    ProjectSummary, SearchMatch, SearchResult, Theme,
 };
 pub use crate::validation::validate_project;

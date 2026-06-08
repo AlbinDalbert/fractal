@@ -1,6 +1,7 @@
 #[cfg(feature = "cli")]
 pub mod cli;
 mod document;
+mod error;
 mod graph;
 mod index;
 mod io;
@@ -9,9 +10,9 @@ pub mod project;
 mod types;
 mod validation;
 
-use std::error::Error;
+pub use error::{FractalError, FractalErrorCode};
 
-pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
+pub type Result<T> = std::result::Result<T, FractalError>;
 
 #[cfg(test)]
 mod tests;
