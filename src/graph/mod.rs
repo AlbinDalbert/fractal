@@ -4,8 +4,8 @@ use crate::graph::links::{is_external_href, resolve_page_href};
 use crate::project::constants::{GRAPH_FILE, GRAPH_VERSION, WORKSPACE_DIR};
 use crate::project::paths::{load_manifest, page_relative_path};
 use crate::types::{
-    GraphEdge, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry,
-    PageGraphEntry, ProjectGraph, ProjectIndex,
+    GraphEdge, GraphNeighborPage, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage,
+    LinkEntry, PageGraphEntry, ProjectGraph, ProjectIndex,
 };
 use crate::Result;
 use std::collections::{BTreeMap, BTreeSet};
@@ -170,6 +170,65 @@ pub fn related_pages(
     Ok(related)
 }
 
+pub fn neighbor_pages(
+    root: impl AsRef<Path>,
+    page: impl AsRef<Path>,
+    depth: usize,
+) -> Result<Vec<GraphNeighborPage>> {
+    if depth == 0 {
+        return Ok(Vec::new());
+    }
+
+    let root = root.as_ref();
+    let page_path = normalize_graph_page_path(root, page.as_ref())?;
+    let graph = load_project_graph(root)?;
+    let pages = graph
+        .pages
+        .iter()
+        .map(|entry| (entry.path.clone(), entry))
+        .collect::<BTreeMap<_, _>>();
+    if !pages.contains_key(&page_path) {
+        return Err(format!("page not found in graph: {page_path}").into());
+    }
+
+    let mut visited = BTreeSet::from([page_path.clone()]);
+    let mut frontier = BTreeSet::from([page_path]);
+    let mut neighbors = Vec::new();
+
+    for distance in 1..=depth {
+        let mut next_frontier = BTreeSet::new();
+
+        for current in &frontier {
+            let Some(entry) = pages.get(current) else {
+                continue;
+            };
+            for adjacent in entry
+                .outlinks
+                .iter()
+                .chain(entry.backlinks.iter())
+                .map(|link| link.page.as_str())
+            {
+                if !visited.insert(adjacent.to_string()) {
+                    continue;
+                }
+                next_frontier.insert(adjacent.to_string());
+                neighbors.push(GraphNeighborPage {
+                    page: adjacent.to_string(),
+                    distance,
+                });
+            }
+        }
+
+        if next_frontier.is_empty() {
+            break;
+        }
+        frontier = next_frontier;
+    }
+
+    neighbors.sort();
+    Ok(neighbors)
+}
+
 pub fn page_notes(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Vec<GraphNoteLink>> {
     let root = root.as_ref();
     let page_path = normalize_graph_page_path(root, page.as_ref())?;
@@ -266,6 +325,31 @@ pub fn graph_related_report(root: impl AsRef<Path>, page: impl AsRef<Path>) -> R
         report.push_str(&format!(
             "  - {} ({}: {})\n",
             link.page, link.direction, link.text
+        ));
+    }
+    Ok(report)
+}
+
+pub fn graph_neighbors_report(
+    root: impl AsRef<Path>,
+    page: impl AsRef<Path>,
+    depth: usize,
+) -> Result<String> {
+    let root = root.as_ref();
+    let page_path = normalize_graph_page_path(root, page.as_ref())?;
+    let neighbors = neighbor_pages(root, Path::new(&page_path), depth)?;
+
+    let mut report = String::new();
+    report.push_str(&format!("{page_path}\nneighbors depth {depth}:\n"));
+    if neighbors.is_empty() {
+        report.push_str("  (none)\n");
+        return Ok(report);
+    }
+
+    for neighbor in neighbors {
+        report.push_str(&format!(
+            "  - {} (distance {})\n",
+            neighbor.page, neighbor.distance
         ));
     }
     Ok(report)

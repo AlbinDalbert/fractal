@@ -413,6 +413,13 @@ pub fn write_page_source(
     Ok(report)
 }
 
+pub fn extract_page_text(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<String> {
+    let root = root.as_ref();
+    load_manifest(root)?;
+    let page_path = resolve_existing_page(root, page.as_ref())?;
+    PageDocument::from_path(&page_path)?.main_text()
+}
+
 fn normalize_page_title(title: &str) -> Result<String> {
     let title = normalize_link_label(title);
     if title.is_empty() {

@@ -2,22 +2,26 @@ use crate::document::html::escape_html;
 use crate::document::notes::{insert_note_into_document, note_id_from_trigger, render_note_aside};
 use crate::document::render::{render_page_document, stylesheet_href};
 use crate::document::PageDocument;
-use crate::graph::{graph_orphans_report, graph_page, graph_page_report, orphan_pages};
+use crate::graph::{
+    graph_neighbors_report, graph_orphans_report, graph_page, graph_page_report, neighbor_pages,
+    orphan_pages,
+};
 use crate::io::markdown::{html_to_markdown, markdown_to_html};
 use crate::project::constants::{GRAPH_VERSION, INDEX_VERSION, MANIFEST_VERSION};
 use crate::project::paths::{collect_page_paths, resolve_page_destination};
 use crate::project::{
-    add_note, build_index, delete_page, editor_page_detail, export_page, graph_backlinks_report,
-    graph_notes_report, graph_outlinks_report, graph_related_report, import_markdown,
-    init_project_at, list_editor_pages, load_project_index, load_project_manifest, new_page,
-    page_backlinks, page_metadata, page_metadata_report, page_notes, page_outlinks, patch_note,
-    preflight_delete_page, preflight_rename_page, project_summary, read_page_source, related_pages,
-    remove_note, rename_page, reset_page_metadata, search_project, search_report, set_page_summary,
-    set_page_tags, set_page_title, sync_project, update_editor_page, update_page_body,
-    validate_project, write_page_source, EditorNoteDetail, EditorPageListEntry, EditorPageUpdate,
-    FileEntry, GraphEdge, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry,
-    NoteEntry, OperationEvent, PageEntry, PageGraphEntry, PageRename, ProjectGraph, ProjectIndex,
-    ProjectManifest, SearchMatch, SearchResult, Theme,
+    add_note, build_index, delete_page, editor_page_detail, export_page, extract_page_text,
+    graph_backlinks_report, graph_notes_report, graph_outlinks_report, graph_related_report,
+    import_markdown, init_project_at, list_editor_pages, load_project_index, load_project_manifest,
+    new_page, page_backlinks, page_metadata, page_metadata_report, page_notes, page_outlinks,
+    patch_note, preflight_delete_page, preflight_rename_page, project_summary, read_page_source,
+    related_pages, remove_note, rename_page, reset_page_metadata, search_project, search_report,
+    set_page_summary, set_page_tags, set_page_title, sync_project, update_editor_page,
+    update_page_body, validate_project, write_page_source, EditorNoteDetail, EditorPageListEntry,
+    EditorPageUpdate, FileEntry, GraphEdge, GraphNeighborPage, GraphNode, GraphNoteLink,
+    GraphPageLink, GraphRelatedPage, LinkEntry, NoteEntry, OperationEvent, PageEntry,
+    PageGraphEntry, PageRename, ProjectGraph, ProjectIndex, ProjectManifest, SearchMatch,
+    SearchResult, Theme,
 };
 use crate::validation::validate_page_metadata;
 use crate::FractalErrorCode;
@@ -370,6 +374,38 @@ fn export_page_accepts_optional_pages_prefix() {
     assert_eq!(
         fs::read_to_string(output).expect("read export"),
         "# Source\n\nHello"
+    );
+}
+
+#[test]
+fn extract_page_text_returns_compact_main_text() {
+    let project = TestProject::new("extract-page");
+    project.write_page(
+        "source.html",
+        r#"<!doctype html>
+<html>
+  <head>
+    <title>Source</title>
+    <meta name="fractal:version" content="0.1">
+    <meta name="fractal:summary" content="Do not include me.">
+    <meta name="fractal:tags" content="hidden">
+  </head>
+  <body>
+    <main>
+      <h1>Source</h1>
+      <p>Alpha <a href="other.html">linked beta</a>.</p>
+      <pre>code block</pre>
+    </main>
+    <section data-fractal-notes>
+      <aside id="note-alpha" data-fractal-note><p>Note text</p></aside>
+    </section>
+  </body>
+</html>"#,
+    );
+
+    assert_eq!(
+        extract_page_text(project.root(), Path::new("source")).expect("extract text"),
+        "Source Alpha linked beta. code block"
     );
 }
 
@@ -2050,7 +2086,7 @@ fn search_project_finds_indexed_page_fields() {
     <meta name="fractal:tags" content="space, graph">
   </head>
   <body>
-    <main><p><a href="rust.html">Rust engine</a></p></main>
+    <main><p><a href="rust.html">Rust engine</a> supports quantum snippets.</p></main>
     <section data-fractal-notes>
       <aside id="note-andromeda-galaxy" data-fractal-note data-fractal-trigger="Andromeda Galaxy"></aside>
     </section>
@@ -2082,7 +2118,18 @@ fn search_project_finds_indexed_page_fields() {
     );
     assert_eq!(
         search_report(project.root(), "rust").expect("search report"),
-        "search results for `rust`\n  - index.html (Knowledge Base)\n    link: Rust engine\n"
+        "search results for `rust`\n  - index.html (Knowledge Base)\n    body: Rust engine supports quantum snippets.\n    link: Rust engine\n"
+    );
+    assert_eq!(
+        search_project(project.root(), "quantum").expect("body search"),
+        vec![SearchResult {
+            path: "index.html".to_string(),
+            title: "Knowledge Base".to_string(),
+            matches: vec![SearchMatch {
+                field: "body".to_string(),
+                text: "Rust engine supports quantum snippets.".to_string(),
+            }],
+        }]
     );
 }
 
@@ -2215,6 +2262,91 @@ fn graph_focused_reports_show_basic_page_views() {
     assert_eq!(
         graph_notes_report(root.path(), Path::new("pages/index")).expect("notes report"),
         "index.html\nnotes:\n  - note-rust (Rust)\n"
+    );
+}
+
+#[test]
+fn graph_neighbors_traverse_depth_limited_page_links() {
+    let root = temp_dir("graph-neighbors");
+    fs::create_dir_all(root.path()).expect("create temp dir");
+    write_test_manifest(root.path());
+    write_test_graph(
+        root.path(),
+        vec![
+            PageGraphEntry {
+                path: "index.html".to_string(),
+                outlinks: vec![GraphPageLink {
+                    page: "rust.html".to_string(),
+                    text: "Rust".to_string(),
+                }],
+                backlinks: vec![GraphPageLink {
+                    page: "topic.html".to_string(),
+                    text: "Home".to_string(),
+                }],
+            },
+            PageGraphEntry {
+                path: "rust.html".to_string(),
+                outlinks: vec![GraphPageLink {
+                    page: "borrow.html".to_string(),
+                    text: "Borrow".to_string(),
+                }],
+                backlinks: vec![GraphPageLink {
+                    page: "index.html".to_string(),
+                    text: "Rust".to_string(),
+                }],
+            },
+            PageGraphEntry {
+                path: "topic.html".to_string(),
+                outlinks: vec![GraphPageLink {
+                    page: "index.html".to_string(),
+                    text: "Home".to_string(),
+                }],
+                backlinks: Vec::new(),
+            },
+            PageGraphEntry {
+                path: "borrow.html".to_string(),
+                outlinks: Vec::new(),
+                backlinks: vec![GraphPageLink {
+                    page: "rust.html".to_string(),
+                    text: "Borrow".to_string(),
+                }],
+            },
+        ],
+    );
+
+    assert_eq!(
+        neighbor_pages(root.path(), Path::new("index"), 1).expect("depth one neighbors"),
+        vec![
+            GraphNeighborPage {
+                page: "rust.html".to_string(),
+                distance: 1,
+            },
+            GraphNeighborPage {
+                page: "topic.html".to_string(),
+                distance: 1,
+            },
+        ]
+    );
+    assert_eq!(
+        neighbor_pages(root.path(), Path::new("index"), 2).expect("depth two neighbors"),
+        vec![
+            GraphNeighborPage {
+                page: "borrow.html".to_string(),
+                distance: 2,
+            },
+            GraphNeighborPage {
+                page: "rust.html".to_string(),
+                distance: 1,
+            },
+            GraphNeighborPage {
+                page: "topic.html".to_string(),
+                distance: 1,
+            },
+        ]
+    );
+    assert_eq!(
+        graph_neighbors_report(root.path(), Path::new("pages/index"), 2).expect("neighbors report"),
+        "index.html\nneighbors depth 2:\n  - borrow.html (distance 2)\n  - rust.html (distance 1)\n  - topic.html (distance 1)\n"
     );
 }
 

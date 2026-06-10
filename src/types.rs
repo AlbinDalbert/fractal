@@ -324,6 +324,12 @@ pub struct GraphRelatedPage {
     pub direction: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GraphNeighborPage {
+    pub page: String,
+    pub distance: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SearchResult {
     pub path: String,

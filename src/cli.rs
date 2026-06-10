@@ -1,9 +1,10 @@
 use crate::project::{
-    add_note, build_index, export_page, graph_backlinks_report, graph_notes_report,
-    graph_orphans_report, graph_outlinks_report, graph_page_report, graph_related_report,
-    import_markdown, init_project, new_page, page_metadata_report, patch_note, remove_note,
-    reset_page_metadata, search_report, set_page_summary, set_page_tags, sync_project,
-    validate_project, OperationEvent, OperationReport,
+    add_note, build_index, export_page, extract_page_text, graph_backlinks_report,
+    graph_neighbors_report, graph_notes_report, graph_orphans_report, graph_outlinks_report,
+    graph_page_report, graph_related_report, import_markdown, init_project, new_page,
+    page_metadata_report, patch_note, remove_note, reset_page_metadata, search_report,
+    set_page_summary, set_page_tags, sync_project, validate_project, OperationEvent,
+    OperationReport,
 };
 use crate::Result;
 use clap::{Parser, Subcommand};
@@ -96,6 +97,14 @@ enum GraphCommand {
         /// Page path relative to pages/, with or without .html.
         page: PathBuf,
     },
+    /// Show depth-limited neighboring pages.
+    Neighbors {
+        /// Page path relative to pages/, with or without .html.
+        page: PathBuf,
+        /// Maximum graph distance to traverse.
+        #[arg(long, default_value_t = 1)]
+        depth: usize,
+    },
     /// Show notes contained by a page.
     Notes {
         /// Page path relative to pages/, with or without .html.
@@ -122,6 +131,8 @@ enum PageCommand {
         #[command(subcommand)]
         command: MetaCommand,
     },
+    /// Print compact text extracted from the page main section.
+    Extract,
 }
 
 #[derive(Debug, Subcommand)]
@@ -193,6 +204,10 @@ pub fn run() -> Result<()> {
                 print!("{}", graph_related_report(".", &page)?);
                 return Ok(());
             }
+            GraphCommand::Neighbors { page, depth } => {
+                print!("{}", graph_neighbors_report(".", &page, depth)?);
+                return Ok(());
+            }
             GraphCommand::Notes { page } => {
                 print!("{}", graph_notes_report(".", &page)?);
                 return Ok(());
@@ -235,6 +250,11 @@ pub fn run() -> Result<()> {
                     }
                     MetaCommand::Reset => reset_page_metadata(".", &path),
                 }
+            }
+            PageCommand::Extract => {
+                let path = path.ok_or("missing page path for extract command")?;
+                println!("{}", extract_page_text(".", &path)?);
+                return Ok(());
             }
         },
     }?;

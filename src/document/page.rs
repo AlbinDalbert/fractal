@@ -236,6 +236,10 @@ impl PageDocument {
         Ok(String::from_utf8(serialized)?)
     }
 
+    pub(crate) fn main_text(&self) -> Result<String> {
+        Ok(normalize_extracted_text(&self.main_node()?.text_contents()))
+    }
+
     pub(crate) fn set_title(&self, title: &str) -> Result<bool> {
         let before = self.to_html()?;
 
@@ -562,4 +566,8 @@ fn rewrite_href_path(href: &str, path: &str) -> String {
         .find_map(|(index, character)| matches!(character, '?' | '#').then_some(index))
         .unwrap_or(href.len());
     format!("{}{}", path, &href[suffix_start..])
+}
+
+fn normalize_extracted_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
