@@ -62,30 +62,44 @@ Unknown prose is not an unresolved link candidate. If a word or phrase does not 
 
 ## Current CLI surface
 
+The CLI migration has started toward the canonical resource/action grammar from `CLI-PROPOSITION.md`:
+
 ```text
-fractal init <project-name>
-fractal validate
-fractal validate --fix
-fractal import <path/to/file.md>
-fractal export <pages/page.html> <export/filename.md>
+fractal [--project <root>] [--format human|json] [--json] <resource> <action> ...
+
+fractal project init <path> [--name <name>]
+fractal project validate
+fractal project repair
+fractal project sync
 fractal index build
-fractal search <query>
+
+fractal page list
+fractal page read <page/path> [--view agent|metadata|source]
+fractal page create <page/path>
+fractal page set <page/path> [--title <title>] [--summary <summary>] [--tag <tag>...] [--body-file <path>]
+fractal page move <page/path> --to <new-page/path> [--title <title>]
+fractal page delete <page/path> --yes
+fractal page source read <page/path>
+
+fractal note add <page/path> <trigger> --content "<content>"
+fractal note remove <page/path> <trigger>
+fractal note set <page/path> <trigger> --content "<content>"
+
+fractal search text <query>
 fractal graph page <page/path>
 fractal graph backlinks <page/path>
 fractal graph outlinks <page/path>
 fractal graph related <page/path>
+fractal graph neighbors <page/path> [--depth <n>]
 fractal graph notes <page/path>
 fractal graph orphans
-fractal sync
-fractal page new <page/path>
-fractal page <page/path> meta show
-fractal page <page/path> meta set-summary "<summary>"
-fractal page <page/path> meta set-tags <tag> [tag...]
-fractal page <page/path> meta reset
-fractal page <page/path> note add <trigger> "<content>"
-fractal page <page/path> note remove <trigger>
-fractal page <page/path> note patch <trigger> "<content>"
+fractal context page <page/path> [--budget <n>]
+fractal import markdown <path/to/file.md>
+fractal export markdown <page/path> --to <export/filename.md>
+fractal schema commands
 ```
+
+`--json` returns a stable `fractal.command_result.v1` success envelope for migrated commands. The old top-level `init`, `validate`, and `sync` commands remain as hidden compatibility aliases during the migration.
 
 ## Project layout
 
