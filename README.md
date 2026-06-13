@@ -12,6 +12,8 @@ Fractal is the engine, not an end-user interface. This crate should focus on the
 
 The page format is HTML by design. Fractal can impose a strict project structure and strict page conventions, but the user's actual files should remain resilient: if the tool breaks or disappears, the pages are still inspectable, editable, and renderable by ordinary browsers on almost any device. HTML also avoids making Fractal responsible for a custom rendering engine, and gives the project a richer and more consistent rendering target than markdown.
 
+The current Fractal format contract is documented in [`docs/format-contract.md`](docs/format-contract.md). Treat that file as the short-form contract for what validation is expected to enforce.
+
 The core product idea is that users should not have to remember which pages to link to, when to link them, or how to maintain the graph by hand. Linking, discovery, metadata, indexing, and graph structure should increasingly be inferred and maintained by the tool.
 
 There is a second-order goal behind the same design: Fractal should become a human-usable knowledge system that is also useful to LLMs, including small local models. The engine should offload graph search, semantic lookup, indexing, summaries, and other ontological work from the model, so an LLM does not need to spend large token budgets rediscovering the structure of a knowledge base. In that sense Fractal is a slim RAG / knowledge-graph engine whose data model is shared with the user-facing linked-page tool.
@@ -20,13 +22,13 @@ Because of that, import and export are not side features. Converting other forma
 
 ## Core next tasks
 
-- Backlinks/outlinks graph: expand the initial durable graph data beyond `.fractal/graph.json` v0. This is likely one of the most important engine pieces because runtime linking, discovery, traversal, and LLM-oriented lookup should not depend on repeatedly rescanning every page. The current graph stores page/note nodes, graph edges, per-page backlinks/outlinks, and basic graph query commands. The next step is to add richer edge types on top of it.
-- Search and discovery: grow keyword search, graph traversal, related pages, and orphan page detection into a more complete discovery surface.
-- Implicit linking contract: keep page labels normalized, unique, and case-insensitive. If text matches one known page title, page filename stem, or page-local note trigger, Fractal may link it automatically. If it does not match a known label, it remains ordinary text. Duplicate page labels are invalid project state for now, even when the files live in different folders.
-- Semantic/ontological tooling: support entity extraction, aliases, relationships, concept typing, summaries, and embeddings or other semantic index support.
-- Rich metadata model: make summaries and tags editable, replace placeholder defaults, support schema/version migration, and likely introduce stable page IDs or slugs.
-- Robust HTML handling: continue replacing any remaining brittle string assumptions with parser-backed extraction, mutation, and serialization. Indexing, validation extraction, note mutation, generated link rewriting, and markdown export now use an HTML parser, but import/export still need to grow beyond basic headings and paragraphs.
-- Change tracking/genealogy: track how pages and graph relationships change over time. This may be a later or bonus feature, but it fits the long-term knowledge-engine direction.
+Near-term priority is engine hardening before broad feature growth. See [`ENGINE-HARDENING-ROADMAP.md`](ENGINE-HARDENING-ROADMAP.md) for the phase plan.
+
+- Land the Phase 1 baseline: keep [`docs/format-contract.md`](docs/format-contract.md), this README, validation, and tests aligned.
+- Build the Phase 2 safe mutation layer: centralize project writes, preflight multi-file operations, use atomic writes where practical, and make failure behavior predictable.
+- Stabilize errors and reports so humans, editors, scripts, and LLM agents can branch on stable machine-readable outcomes instead of parsing strings.
+- Make generated index/graph freshness explicit for graph and search reads.
+- Then grow graph/search/import/export on the hardened core: richer edge types, snippets, field filters, semantic search, aliases/entities/relationships, context packets, and richer import/export.
 
 ## Pre-alpha editor todo
 
@@ -50,7 +52,7 @@ Use `build_index` when files changed outside the safe mutation APIs and the edit
 
 Use `validate_project` as the health gate. Editors should validate when opening a project, after imports or raw source writes, before export/publish workflows, and after detecting external file changes that may have broken Fractal structure. `validate_project(root, true)` may repair missing Fractal scaffold and page markers; safe mutation calls are expected to preserve those markers without needing a repair pass.
 
-Raw source APIs remain escape hatches. `read_page_source` and `write_page_source` are available for inspection and advanced tools; `write_page_source` rebuilds generated data, but callers are responsible for preserving valid Fractal structure or running validation afterward.
+Raw source APIs remain escape hatches. `read_page_source` and `write_page_source` are available for inspection and advanced tools; `write_page_source` validates candidate HTML before saving and rebuilds generated data if accepted. Callers should still prefer safe mutation APIs for ordinary edits.
 
 ## Implicit linking contract
 
@@ -126,8 +128,8 @@ my-project/
 ## What works today
 
 - `init` creates the project folder, manifest, starter stylesheet, and starter page.
-- `validate` checks the project structure, verifies the required Fractal meta tags exist in each page, requires the page format version to match, requires exactly one `data-fractal-notes` section, rejects malformed note ids, and rejects ambiguous duplicate page labels. HTML extraction for validation is parser-backed, so it is not tied to Fractal's generated indentation or attribute quoting.
-- `validate --fix` adds missing Fractal-owned scaffold pieces before validating: `.fractal/`, `.fractal/style.css`, `pages/`, the configured default page, missing required page meta tags, the generated stylesheet link, the body theme marker, and the notes section. It also merges duplicate notes sections while preserving their child content.
+- `validate` checks the project structure and enforces the current strict Fractal page contract. Pages must have exactly one direct `<main>` and exactly one direct notes section outside `<main>`, matching `<title>`/first `<main h1>`, exactly the required `fractal:*` meta tags, the exact generated stylesheet href for their depth, a body theme matching the manifest, valid note IDs, allowed body/note elements only, generated links that resolve, and no manual links or extra `fractal:*` metadata. It also rejects ambiguous duplicate page labels. HTML extraction for validation is parser-backed, so it is not tied to Fractal's generated indentation or attribute quoting.
+- `validate --fix` adds or repairs safe Fractal-owned scaffold pieces before validating: `.fractal/`, `.fractal/style.css`, `pages/`, the configured default page, missing required page meta tags, the generated stylesheet link, the body theme marker, missing title/heading pairs when one side can be inferred, and the notes section. It also merges duplicate notes sections while preserving their child content and unwraps simple manual links into plain text.
 - `import` reads a markdown file, converts basic headings and paragraphs into a minimal HTML page under `pages/`, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
 - `export` converts basic headings and paragraphs from an existing Fractal HTML page to markdown at the requested output path.
 - `index build` generates `.fractal/index.json` with every file under `pages/`, page entries for HTML files, page titles, all page meta tags whose names start with `fractal:`, notes, and links. It also generates `.fractal/graph.json` with page/note nodes, graph edges, and per-page backlinks/outlinks.
@@ -135,16 +137,19 @@ my-project/
 - `graph page <page/path>` reads `.fractal/graph.json` and prints the page's backlinks and outlinks. The page path may be relative to `pages/`, include `pages/`, and omit `.html`.
 - `graph backlinks <page/path>` and `graph outlinks <page/path>` print focused page-link views.
 - `graph related <page/path>` prints the union of the page's backlinks and outlinks with direction markers.
+- `graph neighbors <page/path> --depth <n>` prints a bounded undirected page neighborhood from generated page links.
 - `graph notes <page/path>` prints notes contained by the page from the generated graph's `contains_note` edges.
 - `graph orphans` reads `.fractal/graph.json` and lists pages with no backlinks.
 - `sync` rebuilds `.fractal/index.json` and `.fractal/graph.json`, updates each page's note links inside its own `<main>`, then links remaining matching page-title/page-stem text against the project index. It rebuilds both generated data files again after the page rewrites so generated links are reflected.
 - `page new` creates a new HTML page under `pages/`, adds `.html` automatically when omitted, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
+- `page <page/path> extract` prints compact text extracted from the page's `<main>`.
 - `page <page/path> meta show/set-summary/set-tags/reset` reads and mutates Fractal-owned page metadata using parser-backed HTML operations, normalizes comma-separated or repeated tags, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
 - `page <page/path> note add/remove/patch` mutates notes in the requested page using parser-backed HTML operations and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
-- `list_editor_pages` and `editor_page_detail` provide a library API for editor sidebars, page inspectors, and link panels without requiring clients to manually combine index and graph files.
-- `update_editor_page`, `set_page_title`, and `update_page_body` provide parser-backed library mutations for Fractal-owned editor fields and rebuild generated data.
-- `rename_page` changes a page path and/or title after preflighting the unique label contract, updates the default page manifest entry when needed, updates the page stylesheet link for its new depth, and rebuilds generated data.
-- `delete_page` removes a page, reports its affected backlinks/outlinks, promotes a replacement default page when deleting the current default, and rebuilds generated data.
+- Library API: `list_editor_pages` and `editor_page_detail` provide editor sidebars, page inspectors, and link panels without requiring clients to manually combine index and graph files.
+- Library API: `update_editor_page`, `set_page_title`, and `update_page_body` provide parser-backed mutations for Fractal-owned editor fields, validate the resulting Fractal HTML, and rebuild generated data.
+- Library API: `write_page_source` validates candidate raw HTML before saving, leaves the original file untouched on validation failure, and rebuilds generated data when accepted.
+- Library API: `rename_page` changes a page path and/or title after preflighting the unique label contract, updates the default page manifest entry when needed, updates the page stylesheet link for its new depth, and rebuilds generated data. This is not exposed by the current CLI yet.
+- Library API: `delete_page` removes a page, reports its affected backlinks/outlinks, unwraps Fractal-generated links to the deleted page, promotes a replacement default page when deleting the current default, and rebuilds generated data. This is not exposed by the current CLI yet.
 
 All generated pages currently include these required meta tags:
 
@@ -187,7 +192,7 @@ After note links are applied, `sync` uses the project index for project-scope li
 <a href="subpage.html" data-fractal-link="page">Subpage</a>
 ```
 
-Generated links are marked with `data-fractal-link`, so rerunning `sync` can replace Fractal-managed links without changing manual links.
+Generated links are marked with `data-fractal-link`, so rerunning `sync` can replace Fractal-managed links. Manual `<a>` links are not part of valid Fractal pages yet; `validate` rejects them and `validate --fix` may unwrap simple manual links into plain text.
 
 `.fractal/index.json` and `.fractal/graph.json` are generated data and include schema versions. They can be regenerated with `fractal index build` or `fractal sync`; graph query commands reject unsupported graph versions rather than guessing.
 
@@ -203,6 +208,7 @@ The `import` and `export` flows currently support only markdown headings (`#` th
 ## Repo notes
 
 - The active rewrite lives in the root crate.
-- Older experimental Rust code has been moved into `protptype/` as reference only.
-- `README-legacy.md` can hold older ideas if you still want them around during the reset.
-- `cargo run --manifest-path ../Cargo.toml --`
+- [`docs/format-contract.md`](docs/format-contract.md) is the current short-form Fractal project/page contract.
+- [`ENGINE-HARDENING-ROADMAP.md`](ENGINE-HARDENING-ROADMAP.md) tracks the engine hardening phases.
+- [`CLI-PROPOSITION.md`](CLI-PROPOSITION.md), `wishlist.md`, and `gemma4_wishlists.md` are future-facing design inputs, not descriptions of the current CLI.
+- `README-legacy.md` archives older `.frac`/binary-format thinking and should not be treated as current product direction.

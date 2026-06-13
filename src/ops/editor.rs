@@ -10,6 +10,7 @@ use crate::types::{
     EditorNoteDetail, EditorPageDetail, EditorPageListEntry, EditorPageUpdate, OperationEvent,
     OperationReport, PageMetadata, PageSource,
 };
+use crate::validation::validate_page_html_for_project;
 use crate::Result;
 use std::collections::BTreeMap;
 use std::fs;
@@ -145,7 +146,9 @@ pub fn update_editor_page(
     }
 
     if !report.events.is_empty() {
-        fs::write(&page, document.to_html()?)?;
+        let html = document.to_html()?;
+        validate_page_html_for_project(root, &path, &html)?;
+        fs::write(&page, html)?;
     }
 
     report.extend(build_index(root)?);

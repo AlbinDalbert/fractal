@@ -1,5 +1,7 @@
 # Fractal CLI Proposition
 
+Status: future-facing CLI design proposal. This is not a description of the current implemented CLI. For the current command surface, see `README.md`; for the current page/project contract, see `docs/format-contract.md`.
+
 This document proposes a clean-slate command-line interface for Fractal, informed by
 `LLM-DESIGN-BRIEF.md`, `gemma4_wishlists.md`, the current README, and the current
 Rust engine/API direction.
@@ -634,7 +636,9 @@ output.
 | `fractal search <query>` | `fractal search text <query>` |
 | `fractal graph page <page>` | `fractal graph page <page>` |
 | `fractal graph related <page>` | `fractal graph related <page>` or `fractal graph neighbors <page>` |
+| `fractal graph neighbors <page> --depth <n>` | `fractal graph neighbors <page> --depth <n>` |
 | `fractal page new <page>` | `fractal page create <page>` |
+| `fractal page <page> extract` | `fractal page read <page> --view body` or `fractal context page <page>` |
 | `fractal page <page> meta show` | `fractal page read <page> --view metadata` |
 | `fractal page <page> meta set-summary <text>` | `fractal page set <page> --summary <text>` |
 | `fractal page <page> meta set-tags <tags...>` | `fractal page set <page> --tag <tag>...` |
@@ -645,9 +649,11 @@ output.
 Compatibility aliases can remain while the project is pre-alpha, but docs and
 machine schemas should present only the canonical shape.
 
-## Implementation Phases
+## CLI Migration Stages
 
-### Phase 1: Regularize and expose reports
+These stages are CLI migration stages, not the engine hardening phases from `ENGINE-HARDENING-ROADMAP.md`.
+
+### Stage 1: Regularize and expose reports
 
 - Add global `--project`, `--format`, `--json`, `--quiet`, and `--no-color`.
 - Serialize existing `OperationReport` in JSON mode.
@@ -655,16 +661,16 @@ machine schemas should present only the canonical shape.
 - Add `project` namespace aliases for `init`, `validate`, `repair`, and `sync`.
 - Add `schema commands` with static command metadata.
 
-### Phase 2: Make existing library API visible
+### Stage 2: Make existing library API visible
 
 - Expose `page list`, `page read`, `page set`, `page move`, and `page delete`.
 - Expose `note list/read/add/set/remove`.
 - Add dry-run support to move/delete/repair/sync/link operations where practical.
-- Add `graph neighbors` as bounded related traversal.
+- Regularize `graph neighbors` under the canonical JSON-capable graph surface.
 - Add `context page` and `context neighborhood` from existing index/graph/page
   detail data.
 
-### Phase 3: Agent search and ontological growth
+### Stage 3: Agent search and ontological growth
 
 - Add snippets from parsed body text to search results.
 - Add `context search`.
@@ -672,7 +678,7 @@ machine schemas should present only the canonical shape.
 - Add local-first `search semantic` and embedding index commands.
 - Add richer graph query patterns and graph export formats.
 
-### Phase 4: Stronger safety and transactions
+### Stage 4: Stronger safety and transactions
 
 - Preflight all multi-file operations before writes.
 - Add operation journals or backups for broad rewrites.

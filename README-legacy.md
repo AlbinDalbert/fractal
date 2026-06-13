@@ -1,3 +1,9 @@
+# Fractal Legacy Notes
+
+Archived design notes. This file describes older `.frac`/binary-format thinking and is **not** the current Fractal product direction. The active project is the HTML-backed Fractal engine described in `README.md` and `docs/format-contract.md`.
+
+---
+
 # Fractal
 A minimalist text file format with some additional capabilities.
 

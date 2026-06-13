@@ -168,12 +168,33 @@ impl PageDocument {
             return Err("body node is not an element".into());
         };
         let mut attributes = element.attributes.borrow_mut();
-        if attributes.contains("data-fractal-theme") {
+        if attributes.get("data-fractal-theme") == Some(theme) {
             return Ok(false);
         }
 
         attributes.insert("data-fractal-theme", theme.to_string());
         Ok(true)
+    }
+
+    pub(crate) fn unwrap_manual_links(&self) -> usize {
+        let links = self
+            .document
+            .select("a[href]")
+            .expect("static selector should parse")
+            .filter(|element| !element.attributes.borrow().contains("data-fractal-link"))
+            .map(|element| element.as_node().clone())
+            .collect::<Vec<_>>();
+        let count = links.len();
+
+        for link in links {
+            let children = link.children().collect::<Vec<_>>();
+            for child in children {
+                link.insert_before(child);
+            }
+            link.detach();
+        }
+
+        count
     }
 
     pub(crate) fn ensure_single_notes_section(&self) -> Result<bool> {
@@ -437,6 +458,35 @@ impl PageDocument {
         updated
     }
 
+    pub(crate) fn unwrap_generated_page_hrefs(&self, from_page: &str, target_page: &str) -> usize {
+        let links = self
+            .document
+            .select("a[href]")
+            .expect("static selector should parse")
+            .filter(|element| {
+                let attributes = element.attributes.borrow();
+                attributes.get("data-fractal-link") == Some("page")
+                    && attributes
+                        .get("href")
+                        .and_then(|href| resolve_page_href(from_page, href))
+                        .as_deref()
+                        == Some(target_page)
+            })
+            .map(|element| element.as_node().clone())
+            .collect::<Vec<_>>();
+        let count = links.len();
+
+        for link in links {
+            let children = link.children().collect::<Vec<_>>();
+            for child in children {
+                link.insert_before(child);
+            }
+            link.detach();
+        }
+
+        count
+    }
+
     pub(crate) fn rewrite_relative_page_hrefs_for_move(
         &self,
         old_page: &str,
@@ -476,7 +526,7 @@ impl PageDocument {
         updated
     }
 
-    fn element_text(&self, selector: &str) -> Option<String> {
+    pub(crate) fn element_text(&self, selector: &str) -> Option<String> {
         self.document
             .select_first(selector)
             .ok()

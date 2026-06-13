@@ -16,6 +16,7 @@ use crate::types::{
     OperationEvent, OperationReport, PageDeletePreflight, PageRename, PageRenamePreflight,
     PageSource, ProjectManifest, Theme,
 };
+use crate::validation::validate_page_html_for_project;
 use crate::Result;
 use std::fs;
 use std::path::Path;
@@ -288,13 +289,15 @@ pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Ope
 
     let mut report = OperationReport::new();
     report.push(OperationEvent::PageLinksAffected {
-        page: preflight.page,
+        page: preflight.page.clone(),
         backlinks: preflight.backlinks,
         outlinks: preflight.outlinks,
     });
     report.push(OperationEvent::DeletedPage {
         path: preflight.path,
     });
+
+    report.extend(unwrap_deleted_page_links(root, &preflight.page)?);
 
     if let Some(default_page) = preflight.replacement_default_page {
         manifest.default_page = format!("{PAGES_DIR}/{default_page}");
@@ -405,6 +408,9 @@ pub fn write_page_source(
     load_manifest(root)?;
 
     let page = resolve_existing_page(root, page.as_ref())?;
+    let relative_page = page_relative_path(root, &page)?;
+    let page_path = relative_page.to_string_lossy().replace('\\', "/");
+    validate_page_html_for_project(root, &page_path, html.as_ref())?;
     fs::write(&page, html.as_ref())?;
 
     let generated = build_index(root)?;
@@ -432,6 +438,32 @@ fn manifest_default_page_path(root: &Path, manifest: &ProjectManifest) -> Result
     Ok(page_relative_path(root, Path::new(&manifest.default_page))?
         .to_string_lossy()
         .replace('\\', "/"))
+}
+
+fn unwrap_deleted_page_links(root: &Path, deleted_path: &str) -> Result<OperationReport> {
+    let pages_dir = root.join(PAGES_DIR);
+    let mut page_paths = Vec::new();
+    collect_page_paths(&pages_dir, &pages_dir, &mut page_paths)?;
+    page_paths.sort();
+
+    let mut report = OperationReport::new();
+    for page_path in page_paths.into_iter().filter(|path| is_html_path(path)) {
+        let page = pages_dir.join(&page_path);
+        let html = fs::read_to_string(&page)?;
+        let document = PageDocument::parse(&html);
+        let updated = document.unwrap_generated_page_hrefs(&page_path, deleted_path);
+        if updated == 0 {
+            continue;
+        }
+
+        fs::write(&page, document.to_html()?)?;
+        report.push(OperationEvent::UpdatedPageLinks {
+            page,
+            count: updated,
+        });
+    }
+
+    Ok(report)
 }
 
 fn rewrite_renamed_page_links(

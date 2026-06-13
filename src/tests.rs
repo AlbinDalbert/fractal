@@ -426,11 +426,14 @@ fn validate_page_metadata_rejects_missing_notes_section() {
     let root = temp_dir("validate-notes");
     fs::create_dir_all(root.path()).expect("create temp dir");
     let page = root.join("page.html");
-    fs::write(
-            &page,
-            "<html><head><meta name=\"fractal:version\" content=\"0.1\" /><meta name=\"fractal:summary\" content=\"Short page summary here.\" /><meta name=\"fractal:tags\" content=\"rust, graphs, parsing\" /></head><body></body></html>",
-        )
-        .expect("write page");
+    let html = render_page_document(
+        "page",
+        "<p>body</p>",
+        Theme::Dark,
+        "../.fractal/style.css".to_string(),
+    )
+    .replace("    <section data-fractal-notes>\n    </section>\n", "");
+    fs::write(&page, html).expect("write page");
 
     let error = validate_page_metadata(&page).expect_err("missing notes section should fail");
     assert!(error.to_string().contains("missing notes section"));
@@ -441,21 +444,17 @@ fn validate_page_metadata_rejects_duplicate_notes_sections() {
     let root = temp_dir("validate-duplicate-notes");
     fs::create_dir_all(root.path()).expect("create temp dir");
     let page = root.join("page.html");
-    fs::write(
-        &page,
-        r#"<html>
-  <head>
-    <meta name="fractal:version" content="0.1">
-    <meta name="fractal:summary" content="Short page summary here.">
-    <meta name="fractal:tags" content="rust, graphs, parsing">
-  </head>
-  <body>
-    <section data-fractal-notes></section>
-    <section data-fractal-notes></section>
-  </body>
-</html>"#,
+    let html = render_page_document(
+        "page",
+        "<p>body</p>",
+        Theme::Dark,
+        "../.fractal/style.css".to_string(),
     )
-    .expect("write page");
+    .replace(
+        "    <section data-fractal-notes>\n    </section>",
+        "    <section data-fractal-notes>\n    </section>\n    <section data-fractal-notes></section>",
+    );
+    fs::write(&page, html).expect("write page");
 
     let error = validate_page_metadata(&page).expect_err("duplicate notes sections should fail");
     assert!(error.to_string().contains("duplicate notes section"));
@@ -466,22 +465,17 @@ fn validate_page_metadata_rejects_malformed_note_ids() {
     let root = temp_dir("validate-note-id");
     fs::create_dir_all(root.path()).expect("create temp dir");
     let page = root.join("page.html");
-    fs::write(
-        &page,
-        r#"<html>
-  <head>
-    <meta name="fractal:version" content="0.1">
-    <meta name="fractal:summary" content="Short page summary here.">
-    <meta name="fractal:tags" content="rust, graphs, parsing">
-  </head>
-  <body>
-    <section data-fractal-notes>
-      <aside id="Rust" data-fractal-note></aside>
-    </section>
-  </body>
-</html>"#,
+    let html = render_page_document(
+        "page",
+        "<p>body</p>",
+        Theme::Dark,
+        "../.fractal/style.css".to_string(),
     )
-    .expect("write page");
+    .replace(
+        "    <section data-fractal-notes>\n    </section>",
+        "    <section data-fractal-notes>\n      <aside id=\"Rust\" data-fractal-note><p>bad</p></aside>\n    </section>",
+    );
+    fs::write(&page, html).expect("write page");
 
     let error = validate_page_metadata(&page).expect_err("malformed note id should fail");
     assert!(error.to_string().contains("malformed note id"));
@@ -492,22 +486,165 @@ fn validate_page_metadata_allows_custom_summary_and_tags() {
     let root = temp_dir("validate-custom-meta");
     fs::create_dir_all(root.path()).expect("create temp dir");
     let page = root.join("page.html");
-    fs::write(
-        &page,
-        r#"<html>
-  <head>
-    <meta name="fractal:version" content="0.1">
-    <meta name="fractal:summary" content="A custom project summary.">
-    <meta name="fractal:tags" content="personal, custom">
-  </head>
-  <body>
-    <section data-fractal-notes></section>
-  </body>
-</html>"#,
+    let html = render_page_document(
+        "page",
+        "<p>body</p>",
+        Theme::Dark,
+        "../.fractal/style.css".to_string(),
     )
-    .expect("write page");
+    .replace(
+        "content=\"Short page summary here.\"",
+        "content=\"A custom project summary.\"",
+    )
+    .replace(
+        "content=\"rust, graphs, parsing\"",
+        "content=\"personal, custom\"",
+    );
+    fs::write(&page, html).expect("write page");
 
     validate_page_metadata(&page).expect("custom metadata should validate");
+}
+
+#[test]
+fn validate_project_rejects_extra_fractal_meta_tags() {
+    let project = TestProject::new("validate-extra-fractal-meta");
+    let html = render_page_document(
+        "Home",
+        "<p>body</p>",
+        Theme::Dark,
+        "../.fractal/style.css".to_string(),
+    )
+    .replace(
+        "    <link rel=\"stylesheet\" href=\"../.fractal/style.css\">",
+        "    <meta name=\"fractal:custom\" content=\"nope\">\n    <link rel=\"stylesheet\" href=\"../.fractal/style.css\">",
+    );
+    project.write_page("index.html", html);
+
+    let error =
+        validate_project(project.root(), false).expect_err("extra fractal meta should fail");
+    assert!(error.to_string().contains("unsupported Fractal meta tag"));
+}
+
+#[test]
+fn validate_project_rejects_title_heading_mismatch() {
+    let project = TestProject::new("validate-title-heading-mismatch");
+    let html = render_page_document(
+        "Home",
+        "<p>body</p>",
+        Theme::Dark,
+        "../.fractal/style.css".to_string(),
+    )
+    .replace("<h1>Home</h1>", "<h1>Other</h1>");
+    project.write_page("index.html", html);
+
+    let error = validate_project(project.root(), false).expect_err("mismatched title should fail");
+    assert!(error.to_string().contains("title and main heading differ"));
+}
+
+#[test]
+fn validate_project_rejects_unsupported_body_elements_and_manual_links() {
+    let project = TestProject::new("validate-body-contract");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p><span>bad</span></p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let error = validate_project(project.root(), false).expect_err("unsupported span should fail");
+    assert!(error
+        .to_string()
+        .contains("unsupported Fractal body element"));
+
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p><a href=\"missing.html\">Manual</a></p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let error = validate_project(project.root(), false).expect_err("manual link should fail");
+    assert!(error
+        .to_string()
+        .contains("manual link is not valid Fractal"));
+}
+
+#[test]
+fn validate_project_rejects_broken_generated_links() {
+    let project = TestProject::new("validate-broken-generated-link");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p><a href=\"missing.html\" data-fractal-link=\"page\">Missing</a></p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let error =
+        validate_project(project.root(), false).expect_err("missing generated target should fail");
+    assert!(error
+        .to_string()
+        .contains("generated page link target is missing"));
+}
+
+#[test]
+fn validate_fix_repairs_simple_contract_drift_and_unwraps_manual_links() {
+    let project = TestProject::new("validate-fix-contract-drift");
+    let html = render_page_document(
+        "Home",
+        "<p><a href=\"missing.html\">Manual</a></p>",
+        Theme::Light,
+        "wrong.css".to_string(),
+    )
+    .replace("    <title>Home</title>\n", "");
+    project.write_page("index.html", html);
+
+    validate_project(project.root(), true).expect("fix simple drift");
+
+    let fixed =
+        fs::read_to_string(project.pages_dir().join("index.html")).expect("read fixed page");
+    assert!(fixed.contains("<title>Home</title>"));
+    assert!(fixed.contains("href=\"../.fractal/style.css\""));
+    assert!(fixed.contains("data-fractal-theme=\"dark\""));
+    assert!(!fixed.contains("<a href=\"missing.html\""));
+    assert!(fixed.contains("Manual"));
+}
+
+#[test]
+fn write_page_source_rejects_invalid_fractal_html_before_saving() {
+    let project = TestProject::new("write-source-validates");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p>original</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    let invalid = render_page_document(
+        "Home",
+        "<p><span>invalid</span></p>",
+        Theme::Dark,
+        "../.fractal/style.css".to_string(),
+    );
+
+    let error = write_page_source(project.root(), Path::new("index"), invalid)
+        .expect_err("invalid source should fail");
+    assert!(error
+        .to_string()
+        .contains("unsupported Fractal body element"));
+    assert!(fs::read_to_string(project.pages_dir().join("index.html"))
+        .expect("read original page")
+        .contains("original"));
 }
 
 #[test]
@@ -791,7 +928,7 @@ fn editor_page_api_lists_pages_and_returns_detail_data() {
     let project = TestProject::new("editor-page-api");
     let home = render_page_document(
         "Home",
-        "<p><a href=\"rust.html\">Rust</a> and Java.</p>",
+        "<p><a href=\"rust.html\" data-fractal-link=\"page\">Rust</a> and Java.</p>",
         Theme::Dark,
         "../.fractal/style.css".to_string(),
     );
@@ -802,7 +939,7 @@ fn editor_page_api_lists_pages_and_returns_detail_data() {
         "rust.html",
         render_page_document(
             "Rust",
-            "<p><a href=\"index.html\">Home</a></p>",
+            "<p><a href=\"index.html\" data-fractal-link=\"page\">Home</a></p>",
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
@@ -841,10 +978,8 @@ fn editor_page_api_lists_pages_and_returns_detail_data() {
 
     let detail = editor_page_detail(project.root(), Path::new("index")).expect("page detail");
     assert_eq!(detail.source.path, "index.html");
-    assert!(detail
-        .source
-        .html
-        .contains("<a href=\"rust.html\">Rust</a>"));
+    assert!(detail.source.html.contains("href=\"rust.html\""));
+    assert!(detail.source.html.contains("data-fractal-link=\"page\""));
     assert!(detail.body_html.contains("Java"));
     assert_eq!(detail.metadata.title, "Home");
     assert_eq!(
@@ -876,7 +1011,7 @@ fn project_summary_reports_validation_counts_and_generated_freshness() {
     let project = TestProject::new("project-summary");
     let home = render_page_document(
         "Home",
-        "<p><a href=\"rust.html\">Rust</a></p>",
+        "<p><a href=\"rust.html\" data-fractal-link=\"page\">Rust</a></p>",
         Theme::Dark,
         "../.fractal/style.css".to_string(),
     );
@@ -958,7 +1093,10 @@ fn safe_editor_page_update_mutates_owned_fields_and_rebuilds_index() {
         Path::new("index"),
         EditorPageUpdate {
             title: Some("Home Base".to_string()),
-            body_html: Some("<p><a href=\"rust.html\">Rust</a> updated.</p>".to_string()),
+            body_html: Some(
+                "<p><a href=\"rust.html\" data-fractal-link=\"page\">Rust</a> updated.</p>"
+                    .to_string(),
+            ),
             summary: Some("Local project home".to_string()),
             tags: Some(vec![
                 "Projects".to_string(),
@@ -1056,7 +1194,7 @@ fn preflight_rename_page_reports_affected_state_without_writing() {
         "index.html",
         render_page_document(
             "Home",
-            "<p><a href=\"rust.html\">Rust</a></p>",
+            "<p><a href=\"rust.html\" data-fractal-link=\"page\">Rust</a></p>",
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
@@ -1065,7 +1203,7 @@ fn preflight_rename_page_reports_affected_state_without_writing() {
         "links.html",
         render_page_document(
             "Links",
-            "<p><a href=\"index.html\">Home</a></p>",
+            "<p><a href=\"index.html\" data-fractal-link=\"page\">Home</a></p>",
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
@@ -1129,8 +1267,8 @@ fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
         "index.html",
         render_page_document(
             "Home",
-            r#"<p><a href="links.html">Links</a></p>
-      <p><a href="index.html#intro">Self</a></p>"#,
+            r#"<p><a href="links.html" data-fractal-link="page">Links</a></p>
+      <p><a href="index.html#intro" data-fractal-link="page">Self</a></p>"#,
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
@@ -1139,8 +1277,8 @@ fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
         "links.html",
         render_page_document(
             "Links",
-            r#"<p><a href="index.html#intro">Home</a></p>
-      <p><a href="https://example.com/index.html">External</a></p>"#,
+            r#"<p><a href="index.html#intro" data-fractal-link="page">Home</a></p>
+      <p>External</p>"#,
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
@@ -1149,7 +1287,7 @@ fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
         "folder/topic.html",
         render_page_document(
             "Topic",
-            r#"<p><a href="../index.html?view=1">Home query</a></p>"#,
+            r#"<p><a href="../index.html?view=1" data-fractal-link="page">Home query</a></p>"#,
             Theme::Dark,
             "../../.fractal/style.css".to_string(),
         ),
@@ -1201,7 +1339,7 @@ fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
     let links_html =
         fs::read_to_string(project.pages_dir().join("links.html")).expect("read links");
     assert!(links_html.contains("href=\"folder/home.html#intro\""));
-    assert!(links_html.contains("href=\"https://example.com/index.html\""));
+    assert!(links_html.contains("<p>External</p>"));
     let topic_html =
         fs::read_to_string(project.pages_dir().join("folder/topic.html")).expect("read topic");
     assert!(topic_html.contains("href=\"home.html?view=1\""));
@@ -1268,7 +1406,7 @@ fn preflight_delete_page_reports_default_and_links_without_writing() {
         "index.html",
         render_page_document(
             "Home",
-            "<p><a href=\"rust.html\">Rust</a></p>",
+            "<p><a href=\"rust.html\" data-fractal-link=\"page\">Rust</a></p>",
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
@@ -1277,7 +1415,7 @@ fn preflight_delete_page_reports_default_and_links_without_writing() {
         "rust.html",
         render_page_document(
             "Rust",
-            "<p><a href=\"java.html\">Java</a></p>",
+            "<p><a href=\"java.html\" data-fractal-link=\"page\">Java</a></p>",
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
@@ -1323,7 +1461,7 @@ fn delete_page_removes_file_rebuilds_generated_data_and_reports_links() {
         "index.html",
         render_page_document(
             "Home",
-            "<p><a href=\"rust.html\">Rust</a></p>",
+            "<p><a href=\"rust.html\" data-fractal-link=\"page\">Rust</a></p>",
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
@@ -1332,7 +1470,7 @@ fn delete_page_removes_file_rebuilds_generated_data_and_reports_links() {
         "rust.html",
         render_page_document(
             "Rust",
-            "<p><a href=\"java.html\">Java</a></p>",
+            "<p><a href=\"java.html\" data-fractal-link=\"page\">Java</a></p>",
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
