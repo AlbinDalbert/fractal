@@ -50,7 +50,7 @@ Generated links are applied only by explicit sync. Ordinary saves and safe mutat
 
 Use `build_index` when files changed outside the safe mutation APIs and the editor wants fresh index/graph data without rewriting page HTML. This is appropriate after external filesystem edits, asset changes under `pages/`, or raw source writes where generated-link rewriting should not happen yet.
 
-Use `validate_project` as the health gate. Editors should validate when opening a project, after imports or raw source writes, before export/publish workflows, and after detecting external file changes that may have broken Fractal structure. `validate_project(root, true)` may repair missing Fractal scaffold and page markers; safe mutation calls are expected to preserve those markers without needing a repair pass.
+Use `validate_project` as the health gate. Editors should validate when opening a project, after imports or raw source writes, before export/publish workflows, and after detecting external file changes that may have broken Fractal structure. `validate_project(root, true)` may repair missing Fractal scaffold, page markers, and internal links whose hidden `href` target is not visible in the link text; safe mutation calls are expected to preserve those markers without needing a repair pass.
 
 Raw source APIs remain escape hatches. `read_page_source` and `write_page_source` are available for inspection and advanced tools; `write_page_source` validates candidate HTML before saving and rebuilds generated data if accepted. Callers should still prefer safe mutation APIs for ordinary edits.
 
@@ -58,7 +58,7 @@ Raw source APIs remain escape hatches. `read_page_source` and `write_page_source
 
 Fractal treats links as generated project structure, not as something users should have to maintain by hand. The current rule is intentionally strict: a link can be inferred only from a known, unique label in the project index.
 
-Page labels are derived from page titles and filename stems. Matching is normalized and case-insensitive, so `Rust`, `rust`, and `RUST` are the same label for linking and validation purposes. Two pages may not expose the same label, even if they are stored in different folders. Creating or importing a page with a duplicate label should fail before writing the new page, and manually-added duplicates should make validation or indexing fail.
+Page labels are derived from page titles and filename stems. Matching is normalized and case-insensitive, so `Rust`, `rust`, and `RUST` are the same label for linking and validation purposes. Two pages may not expose the same label, even if they are stored in different folders. Creating or importing a page with a duplicate label should fail before writing the new page, and manually-added duplicates should make validation or indexing fail. A page link is only valid when its visible text identifies the target by one of these labels; the `href` is not allowed to become a hidden second source of truth.
 
 Unknown prose is not an unresolved link candidate. If a word or phrase does not match a known page label or page-local note trigger, Fractal leaves it as ordinary text.
 
@@ -128,8 +128,8 @@ my-project/
 ## What works today
 
 - `init` creates the project folder, manifest, starter stylesheet, and starter page.
-- `validate` checks the project structure and enforces the current strict Fractal page contract. Pages must have exactly one direct `<main>` and exactly one direct notes section outside `<main>`, matching `<title>`/first `<main h1>`, exactly the required `fractal:*` meta tags, the exact generated stylesheet href for their depth, a body theme matching the manifest, valid note IDs, allowed body/note elements only, generated links that resolve, and no manual links or extra `fractal:*` metadata. It also rejects ambiguous duplicate page labels. HTML extraction for validation is parser-backed, so it is not tied to Fractal's generated indentation or attribute quoting.
-- `validate --fix` adds or repairs safe Fractal-owned scaffold pieces before validating: `.fractal/`, `.fractal/style.css`, `pages/`, the configured default page, missing required page meta tags, the generated stylesheet link, the body theme marker, missing title/heading pairs when one side can be inferred, and the notes section. It also merges duplicate notes sections while preserving their child content and unwraps simple manual links into plain text.
+- `validate` checks the project structure and enforces the current strict Fractal page contract. Pages must have exactly one direct `<main>` and exactly one direct notes section outside `<main>`, matching `<title>`/first `<main h1>`, exactly the required `fractal:*` meta tags, the exact generated stylesheet href for their depth, a body theme matching the manifest, valid note IDs, allowed body/note elements only, generated links that resolve, generated page-link text that identifies the target title or filename stem, and no manual links or extra `fractal:*` metadata. It also rejects ambiguous duplicate page labels. HTML extraction for validation is parser-backed, so it is not tied to Fractal's generated indentation or attribute quoting.
+- `validate --fix` adds or repairs safe Fractal-owned scaffold pieces before validating: `.fractal/`, `.fractal/style.css`, `pages/`, the configured default page, missing required page meta tags, the generated stylesheet link, the body theme marker, missing title/heading pairs when one side can be inferred, and the notes section. It also merges duplicate notes sections while preserving their child content, unwraps simple manual links into plain text, and rewrites mismatched internal page links as visible prose plus the target title in parentheses.
 - `import` reads a markdown file, converts basic headings and paragraphs into a minimal HTML page under `pages/`, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
 - `export` converts basic headings and paragraphs from an existing Fractal HTML page to markdown at the requested output path.
 - `index build` generates `.fractal/index.json` with every file under `pages/`, page entries for HTML files, page titles, all page meta tags whose names start with `fractal:`, notes, and links. It also generates `.fractal/graph.json` with page/note nodes, graph edges, and per-page backlinks/outlinks.
@@ -192,7 +192,7 @@ After note links are applied, `sync` uses the project index for project-scope li
 <a href="subpage.html" data-fractal-link="page">Subpage</a>
 ```
 
-Generated links are marked with `data-fractal-link`, so rerunning `sync` can replace Fractal-managed links. Manual `<a>` links are not part of valid Fractal pages yet; `validate` rejects them and `validate --fix` may unwrap simple manual links into plain text.
+Generated links are marked with `data-fractal-link`, so rerunning `sync` can replace Fractal-managed links. Manual `<a>` links are not part of valid Fractal pages yet; `validate` rejects them, and it rejects generated page links whose visible text does not match the target page title or filename stem. `validate --fix` may unwrap simple manual links into plain text; for internal page links such as `<a href="rust.html">the language</a>`, repair rewrites the prose to `the language (Rust)` so a later sync can infer the visible `Rust` label.
 
 `.fractal/index.json` and `.fractal/graph.json` are generated data and include schema versions. They can be regenerated with `fractal index build` or `fractal sync`; graph query commands reject unsupported graph versions rather than guessing.
 

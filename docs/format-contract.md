@@ -125,10 +125,11 @@ Validation requires:
 - every `<a>` to have `data-fractal-link`
 - every generated link to have `href`
 - `data-fractal-link="page"` links to resolve to a known project page
+- page-link text to identify that target by one of its implicit labels, currently the page title or filename stem, case-insensitively
 - `data-fractal-link="note"` links to resolve to a note in the same page
 - link scopes other than `page` and `note` to be rejected
 
-Manual links are invalid during normal validation. `validate --fix` may unwrap simple manual links into plain text while preserving their text content.
+Manual links are invalid during normal validation. Manual internal page links whose text points at one existing page but names another are reported as label/target mismatches rather than accepted as hidden `href` truth. `validate --fix` may unwrap simple manual links into plain text while preserving their text content; when a manual or generated internal page link points to an existing target but its text does not identify that target, repair unwraps the link and appends the target title in parentheses so a later sync can infer the visible page label.
 
 ## Repair Contract
 
@@ -147,6 +148,7 @@ Manual links are invalid during normal validation. `validate --fix` may unwrap s
 - merge duplicate notes sections while preserving child content
 - restore missing title/heading pairs when one side can be inferred
 - unwrap simple manual links into plain text
+- rewrite manual or generated internal page links with mismatched text as plain text plus the target title in parentheses
 
 Repairs should not guess at arbitrary user intent or convert arbitrary HTML into Fractal.
 

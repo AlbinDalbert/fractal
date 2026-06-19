@@ -31,6 +31,14 @@ pub(crate) fn page_link_labels(path: &str, title: &str) -> [String; 2] {
     [normalize_link_label(title), page_label_from_path(path)]
 }
 
+pub(crate) fn page_link_text_matches(path: &str, title: &str, text: &str) -> bool {
+    let text_key = link_label_key(text);
+    !text_key.is_empty()
+        && page_link_labels(path, title)
+            .into_iter()
+            .any(|label| link_label_key(&label) == text_key)
+}
+
 pub(crate) fn normalize_link_label(label: &str) -> String {
     label.split_whitespace().collect::<Vec<_>>().join(" ")
 }

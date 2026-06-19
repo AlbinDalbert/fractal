@@ -3,7 +3,10 @@ use crate::document::render::{
     default_stylesheet, render_page_document, required_meta_tags, stylesheet_href,
 };
 use crate::document::PageDocument;
-use crate::graph::links::{normalize_link_label, resolve_page_href};
+use crate::graph::links::{
+    is_external_href, link_label_key, normalize_link_label, page_link_labels,
+    page_link_text_matches, resolve_page_href,
+};
 use crate::index::{build_project_index, ensure_page_labels_available_for};
 use crate::project::constants::{INDEX_PAGE, MANIFEST_FILE, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR};
 use crate::project::paths::{collect_page_paths, is_html_path, load_manifest};
@@ -48,6 +51,7 @@ pub fn validate_project(root: impl AsRef<Path>, fix: bool) -> Result<OperationRe
     collect_page_paths(&pages_dir, &pages_dir, &mut page_paths)?;
     page_paths.sort();
     let known_page_paths = known_html_page_paths(&page_paths);
+    let known_page_titles = known_page_titles(&pages_dir, &page_paths)?;
 
     for page_path in &page_paths {
         if !is_html_path(page_path) {
@@ -55,7 +59,13 @@ pub fn validate_project(root: impl AsRef<Path>, fix: bool) -> Result<OperationRe
         }
 
         let page = pages_dir.join(page_path);
-        validate_project_page(&page, page_path, manifest.theme, &known_page_paths)?;
+        validate_project_page(
+            &page,
+            page_path,
+            manifest.theme,
+            &known_page_paths,
+            &known_page_titles,
+        )?;
     }
 
     build_project_index(root)?;
@@ -112,6 +122,7 @@ fn fix_project(root: &Path) -> Result<OperationReport> {
     let mut page_paths = Vec::new();
     collect_page_paths(&pages_dir, &pages_dir, &mut page_paths)?;
     page_paths.sort();
+    let known_page_titles = known_page_titles(&pages_dir, &page_paths)?;
 
     for page_path in page_paths {
         if !is_html_path(&page_path) {
@@ -119,7 +130,7 @@ fn fix_project(root: &Path) -> Result<OperationReport> {
         }
 
         let page = pages_dir.join(&page_path);
-        if fix_page(&page, &page_path, manifest.theme)? {
+        if fix_page(&page, &page_path, manifest.theme, &known_page_titles)? {
             report.push(OperationEvent::Fixed { path: page });
         }
     }
@@ -152,10 +163,23 @@ pub(crate) fn validate_page_html_for_project(
     let known_page_paths = known_html_page_paths(&page_paths);
     let document = PageDocument::parse(html);
     let display_path = pages_dir.join(page_path);
+    let mut known_page_titles = known_page_titles(&pages_dir, &page_paths)?;
+    known_page_titles.insert(
+        page_path.to_string(),
+        document
+            .title()
+            .unwrap_or_else(|| page_title_from_path(page_path)),
+    );
 
     validate_page_structure(&display_path, page_path, manifest.theme, &document)?;
     validate_note_ids(&display_path, &document)?;
-    validate_generated_links(&display_path, page_path, &document, &known_page_paths)?;
+    validate_generated_links(
+        &display_path,
+        page_path,
+        &document,
+        &known_page_paths,
+        &known_page_titles,
+    )?;
 
     let title = document
         .title()
@@ -170,15 +194,27 @@ fn validate_project_page(
     page_path: &str,
     theme: Theme,
     known_page_paths: &BTreeSet<String>,
+    known_page_titles: &BTreeMap<String, String>,
 ) -> Result<()> {
     let document = PageDocument::from_path(page)?;
     validate_page_structure(page, page_path, theme, &document)?;
     validate_note_ids(page, &document)?;
-    validate_generated_links(page, page_path, &document, known_page_paths)?;
+    validate_generated_links(
+        page,
+        page_path,
+        &document,
+        known_page_paths,
+        known_page_titles,
+    )?;
     Ok(())
 }
 
-fn fix_page(page: &Path, page_path: &str, theme: Theme) -> Result<bool> {
+fn fix_page(
+    page: &Path,
+    page_path: &str,
+    theme: Theme,
+    known_page_titles: &BTreeMap<String, String>,
+) -> Result<bool> {
     let document = PageDocument::from_path(page)?;
     let mut changed = false;
 
@@ -200,7 +236,7 @@ fn fix_page(page: &Path, page_path: &str, theme: Theme) -> Result<bool> {
         changed = true;
     }
 
-    if document.unwrap_manual_links() > 0 {
+    if document.repair_invalid_links(page_path, known_page_titles) > 0 {
         changed = true;
     }
 
@@ -548,9 +584,6 @@ fn validate_allowed_body_content(page: &Path, root: &NodeRef, requires_h1: bool)
         if name == "h1" {
             return Err(format!("unexpected h1 in {}", page.display()).into());
         }
-        if name == "a" && !element.attributes.borrow().contains("data-fractal-link") {
-            return Err(format!("manual link is not valid Fractal in {}", page.display()).into());
-        }
         if !is_allowed_body_element(&name) {
             return Err(format!(
                 "unsupported Fractal body element in {}: <{name}>",
@@ -625,6 +658,7 @@ fn validate_generated_links(
     page_path: &str,
     document: &PageDocument,
     known_page_paths: &BTreeSet<String>,
+    known_page_titles: &BTreeMap<String, String>,
 ) -> Result<()> {
     let note_ids = document
         .notes()
@@ -638,11 +672,15 @@ fn validate_generated_links(
         .expect("static selector should parse")
     {
         let attributes = element.attributes.borrow();
-        let Some(scope) = attributes.get("data-fractal-link") else {
-            return Err(format!("manual link is not valid Fractal in {}", page.display()).into());
-        };
+        let scope = attributes.get("data-fractal-link");
         let Some(href) = attributes.get("href") else {
             return Err(format!("generated link is missing href in {}", page.display()).into());
+        };
+        let text = normalize_link_label(&element.text_contents());
+
+        let Some(scope) = scope else {
+            validate_manual_link(page, page_path, href, &text, known_page_titles)?;
+            return Err(format!("manual link is not valid Fractal in {}", page.display()).into());
         };
 
         match scope {
@@ -661,6 +699,14 @@ fn validate_generated_links(
                     )
                     .into());
                 }
+                validate_page_link_text(
+                    page,
+                    "generated",
+                    href,
+                    &text,
+                    &target,
+                    known_page_titles,
+                )?;
             }
             "note" => {
                 let Some(note_id) = href.strip_prefix('#') else {
@@ -689,6 +735,66 @@ fn validate_generated_links(
     }
 
     Ok(())
+}
+
+fn validate_manual_link(
+    page: &Path,
+    page_path: &str,
+    href: &str,
+    text: &str,
+    known_page_titles: &BTreeMap<String, String>,
+) -> Result<()> {
+    if href.starts_with('#') || is_external_href(href) {
+        return Ok(());
+    }
+
+    let Some(target) = resolve_page_href(page_path, href) else {
+        return Ok(());
+    };
+    if !known_page_titles.contains_key(&target) {
+        return Ok(());
+    }
+
+    validate_page_link_text(page, "manual", href, text, &target, known_page_titles)
+}
+
+fn validate_page_link_text(
+    page: &Path,
+    kind: &str,
+    href: &str,
+    text: &str,
+    target: &str,
+    known_page_titles: &BTreeMap<String, String>,
+) -> Result<()> {
+    let Some(title) = known_page_titles.get(target) else {
+        return Ok(());
+    };
+    if page_link_text_matches(target, title, text) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "{kind} page link text does not identify its target in {}: `{}` -> {href} (expected {})",
+        page.display(),
+        text,
+        expected_page_labels(target, title)
+    )
+    .into())
+}
+
+fn expected_page_labels(path: &str, title: &str) -> String {
+    let mut labels = Vec::new();
+    let mut seen = BTreeSet::new();
+    for label in page_link_labels(path, title) {
+        let label = normalize_link_label(&label);
+        if label.is_empty() {
+            continue;
+        }
+        if seen.insert(link_label_key(&label)) {
+            labels.push(format!("`{label}`"));
+        }
+    }
+    labels.join(" or ")
 }
 
 fn single_node(page: &Path, document: &PageDocument, selector: &str) -> Result<NodeRef> {
@@ -727,6 +833,25 @@ fn known_html_page_paths(page_paths: &[String]) -> BTreeSet<String> {
         .filter(|path| is_html_path(path))
         .cloned()
         .collect()
+}
+
+fn known_page_titles(pages_dir: &Path, page_paths: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut titles = BTreeMap::new();
+
+    for page_path in page_paths.iter().filter(|path| is_html_path(path)) {
+        let page = pages_dir.join(page_path);
+        if !page.is_file() {
+            continue;
+        }
+
+        let document = PageDocument::from_path(&page)?;
+        let title = document
+            .title()
+            .unwrap_or_else(|| page_title_from_path(page_path));
+        titles.insert(page_path.clone(), title);
+    }
+
+    Ok(titles)
 }
 
 fn meaningful_children(node: &NodeRef) -> Vec<NodeRef> {

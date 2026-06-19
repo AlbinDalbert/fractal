@@ -596,6 +596,84 @@ fn validate_project_rejects_broken_generated_links() {
 }
 
 #[test]
+fn validate_project_rejects_page_links_whose_text_does_not_match_the_target() {
+    let project = TestProject::new("validate-mismatched-page-link-text");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p><a href=\"rust.html\" data-fractal-link=\"page\">the language</a></p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "rust.html",
+        render_page_document(
+            "Rust",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let error = validate_project(project.root(), false)
+        .expect_err("mismatched generated link text should fail");
+    assert!(error
+        .to_string()
+        .contains("generated page link text does not identify its target"));
+    assert!(error.to_string().contains("expected `Rust`"));
+
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p><a href=\"rust.html\">the language</a></p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let error =
+        validate_project(project.root(), false).expect_err("mismatched manual link should fail");
+    assert!(error
+        .to_string()
+        .contains("manual page link text does not identify its target"));
+}
+
+#[test]
+fn validate_fix_rewrites_mismatched_internal_links_to_visible_target_labels() {
+    let project = TestProject::new("validate-fix-mismatched-page-links");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            r#"<p><a href="rust.html">the language</a></p>
+      <p><a href="rust.html" data-fractal-link="page">systems language</a></p>"#,
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "rust.html",
+        render_page_document(
+            "Rust",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    validate_project(project.root(), true).expect("fix mismatched internal links");
+
+    let fixed =
+        fs::read_to_string(project.pages_dir().join("index.html")).expect("read fixed index page");
+    assert!(!fixed.contains("href=\"rust.html\""));
+    assert!(fixed.contains("the language (Rust)"));
+    assert!(fixed.contains("systems language (Rust)"));
+}
+
+#[test]
 fn validate_fix_repairs_simple_contract_drift_and_unwraps_manual_links() {
     let project = TestProject::new("validate-fix-contract-drift");
     let html = render_page_document(
@@ -1268,7 +1346,7 @@ fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
         render_page_document(
             "Home",
             r#"<p><a href="links.html" data-fractal-link="page">Links</a></p>
-      <p><a href="index.html#intro" data-fractal-link="page">Self</a></p>"#,
+      <p><a href="index.html#intro" data-fractal-link="page">Home</a></p>"#,
             Theme::Dark,
             "../.fractal/style.css".to_string(),
         ),
@@ -1287,7 +1365,7 @@ fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
         "folder/topic.html",
         render_page_document(
             "Topic",
-            r#"<p><a href="../index.html?view=1" data-fractal-link="page">Home query</a></p>"#,
+            r#"<p><a href="../index.html?view=1" data-fractal-link="page">Home</a></p>"#,
             Theme::Dark,
             "../../.fractal/style.css".to_string(),
         ),

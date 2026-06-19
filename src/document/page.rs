@@ -1,6 +1,7 @@
 use crate::document::html::{escape_html, escape_html_attribute};
 use crate::graph::links::{
-    inferred_link_scope, normalize_link_label, note_label_from_id, relative_href, resolve_page_href,
+    inferred_link_scope, is_external_href, normalize_link_label, note_label_from_id,
+    page_link_text_matches, relative_href, resolve_page_href,
 };
 use crate::types::{LinkEntry, NoteEntry};
 use crate::Result;
@@ -176,25 +177,66 @@ impl PageDocument {
         Ok(true)
     }
 
-    pub(crate) fn unwrap_manual_links(&self) -> usize {
+    pub(crate) fn repair_invalid_links(
+        &self,
+        page_path: &str,
+        known_page_titles: &BTreeMap<String, String>,
+    ) -> usize {
         let links = self
             .document
             .select("a[href]")
             .expect("static selector should parse")
-            .filter(|element| !element.attributes.borrow().contains("data-fractal-link"))
             .map(|element| element.as_node().clone())
             .collect::<Vec<_>>();
-        let count = links.len();
+        let mut repaired = 0;
 
         for link in links {
-            let children = link.children().collect::<Vec<_>>();
-            for child in children {
-                link.insert_before(child);
+            let Some(element) = link.as_element() else {
+                continue;
+            };
+            let attributes = element.attributes.borrow();
+            let href = attributes.get("href").unwrap_or_default().to_string();
+            let scope = attributes.get("data-fractal-link").map(str::to_string);
+            drop(attributes);
+
+            let text = normalize_link_label(&link.text_contents());
+            let target = (!href.starts_with('#') && !is_external_href(&href))
+                .then(|| resolve_page_href(page_path, &href))
+                .flatten()
+                .and_then(|target_path| {
+                    known_page_titles
+                        .get(&target_path)
+                        .map(|title| (target_path, title.clone()))
+                });
+
+            let should_unwrap = match (scope.as_deref(), target.as_ref()) {
+                (None, _) => true,
+                (Some("page"), Some((target_path, title))) => {
+                    !page_link_text_matches(target_path, title, &text)
+                }
+                _ => false,
+            };
+
+            if !should_unwrap {
+                continue;
             }
-            link.detach();
+
+            let suffix = target
+                .as_ref()
+                .filter(|(target_path, title)| !page_link_text_matches(target_path, title, &text))
+                .map(|(_, title)| {
+                    if text.is_empty() {
+                        title.clone()
+                    } else {
+                        format!(" ({title})")
+                    }
+                });
+
+            unwrap_link_node(&link, suffix.as_deref());
+            repaired += 1;
         }
 
-        count
+        repaired
     }
 
     pub(crate) fn ensure_single_notes_section(&self) -> Result<bool> {
@@ -593,6 +635,17 @@ fn direct_child_element(parent: &NodeRef, name: &str) -> Option<NodeRef> {
     parent
         .children()
         .find(|child| is_element_named(child, name))
+}
+
+fn unwrap_link_node(link: &NodeRef, suffix: Option<&str>) {
+    let children = link.children().collect::<Vec<_>>();
+    for child in children {
+        link.insert_before(child);
+    }
+    if let Some(suffix) = suffix {
+        link.insert_before(NodeRef::new_text(suffix));
+    }
+    link.detach();
 }
 
 fn replace_children_with_text(node: &NodeRef, text: &str) {
