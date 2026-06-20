@@ -10,8 +10,8 @@ use crate::io::markdown::{html_to_markdown, markdown_to_html};
 use crate::project::constants::{GRAPH_VERSION, INDEX_VERSION, MANIFEST_VERSION};
 use crate::project::paths::{collect_page_paths, resolve_page_destination};
 use crate::project::{
-    add_note, build_index, create_directory, create_page, delete_page, editor_page_detail,
-    export_page, extract_page_text, graph_backlinks_report, graph_notes_report,
+    add_note, build_index, create_directory, create_page, delete_directory, delete_page,
+    editor_page_detail, export_page, extract_page_text, graph_backlinks_report, graph_notes_report,
     graph_outlinks_report, graph_related_report, import_markdown, init_project_at,
     list_editor_pages, load_project_index, load_project_manifest, new_page, page_backlinks,
     page_metadata, page_metadata_report, page_notes, page_outlinks, patch_note,
@@ -117,14 +117,8 @@ fn temp_dir(name: &str) -> TestDir {
 
 fn required_meta() -> BTreeMap<String, String> {
     [
-        (
-            "fractal:summary".to_string(),
-            "Short page summary here.".to_string(),
-        ),
-        (
-            "fractal:tags".to_string(),
-            "rust, graphs, parsing".to_string(),
-        ),
+        ("fractal:summary".to_string(), "".to_string()),
+        ("fractal:tags".to_string(), "".to_string()),
         ("fractal:version".to_string(), "0.1".to_string()),
     ]
     .into_iter()
@@ -180,7 +174,7 @@ fn init_project_at_uses_explicit_destination_and_project_name() {
         report.events,
         vec![OperationEvent::Created { path: root.clone() }]
     );
-    assert!(root.join("pages/index.html").is_file());
+    assert!(!root.join("pages/index.html").exists());
     assert!(root.join(".fractal/style.css").is_file());
     assert_eq!(
         load_project_manifest(&root)
@@ -220,8 +214,8 @@ fn page_renderer_includes_required_meta_tags() {
     );
 
     assert!(html.contains("<meta name=\"fractal:version\" content=\"0.1\" />"));
-    assert!(html.contains("<meta name=\"fractal:summary\" content=\"Short page summary here.\" />"));
-    assert!(html.contains("<meta name=\"fractal:tags\" content=\"rust, graphs, parsing\" />"));
+    assert!(html.contains("<meta name=\"fractal:summary\" content=\"\" />"));
+    assert!(html.contains("<meta name=\"fractal:tags\" content=\"\" />"));
     assert!(html.contains("<link rel=\"stylesheet\" href=\"../.fractal/style.css\">"));
     assert!(html.contains("<body data-fractal-theme=\"dark\">"));
     assert!(html.contains("<section data-fractal-notes>"));
@@ -803,8 +797,8 @@ fn validate_fix_merges_duplicate_notes_sections() {
     <meta charset="utf-8">
     <title>index</title>
     <meta name="fractal:version" content="0.1">
-    <meta name="fractal:summary" content="Short page summary here.">
-    <meta name="fractal:tags" content="rust, graphs, parsing">
+    <meta name="fractal:summary" content="">
+    <meta name="fractal:tags" content="">
   </head>
   <body>
     <main><h1>index</h1></main>
@@ -1124,24 +1118,16 @@ fn editor_page_api_lists_pages_and_returns_detail_data() {
             EditorPageListEntry {
                 path: "index.html".to_string(),
                 title: "Home".to_string(),
-                summary: Some("Short page summary here.".to_string()),
-                tags: vec![
-                    "rust".to_string(),
-                    "graphs".to_string(),
-                    "parsing".to_string()
-                ],
+                summary: None,
+                tags: vec![],
                 backlink_count: 1,
                 outlink_count: 1,
             },
             EditorPageListEntry {
                 path: "rust.html".to_string(),
                 title: "Rust".to_string(),
-                summary: Some("Short page summary here.".to_string()),
-                tags: vec![
-                    "rust".to_string(),
-                    "graphs".to_string(),
-                    "parsing".to_string()
-                ],
+                summary: None,
+                tags: vec![],
                 backlink_count: 1,
                 outlink_count: 1,
             },
@@ -1650,6 +1636,50 @@ fn rename_page_rejects_label_collision_before_writing() {
 }
 
 #[test]
+fn delete_directory_removes_nested_pages_and_rebuilds_index() {
+    let project = TestProject::new("delete-directory");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p><a href=\"folder/rust.html\" data-fractal-link=\"page\">Rust</a></p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "folder/rust.html",
+        render_page_document(
+            "Rust",
+            "<p>body</p>",
+            Theme::Dark,
+            "../../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let report = delete_directory(project.root(), Path::new("folder"), true)
+        .expect("delete directory recursively");
+
+    assert!(!project.pages_dir().join("folder").exists());
+    assert!(report.events.iter().any(|event| matches!(
+        event,
+        OperationEvent::DeletedDirectory { path } if path.ends_with("pages/folder")
+    )));
+    assert!(fs::read_to_string(project.pages_dir().join("index.html"))
+        .expect("read index")
+        .contains("<p>Rust</p>"));
+    let index = load_project_index(project.root()).expect("load index");
+    assert_eq!(
+        index
+            .pages
+            .iter()
+            .map(|page| page.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["index.html"]
+    );
+}
+
+#[test]
 fn preflight_delete_page_reports_default_and_links_without_writing() {
     let project = TestProject::new("preflight-delete-page");
     project.write_page(
@@ -2100,18 +2130,8 @@ fn reset_page_metadata_restores_generated_defaults() {
     reset_page_metadata(project.root(), Path::new("index")).expect("reset metadata");
 
     let metadata = page_metadata(project.root(), Path::new("index")).expect("read metadata");
-    assert_eq!(
-        metadata.summary,
-        Some("Short page summary here.".to_string())
-    );
-    assert_eq!(
-        metadata.tags,
-        vec![
-            "rust".to_string(),
-            "graphs".to_string(),
-            "parsing".to_string()
-        ]
-    );
+    assert_eq!(metadata.summary, None);
+    assert_eq!(metadata.tags, Vec::<String>::new());
 }
 
 #[test]
@@ -2129,7 +2149,7 @@ fn page_metadata_report_prints_editor_friendly_summary() {
 
     assert_eq!(
         page_metadata_report(project.root(), Path::new("index")).expect("metadata report"),
-        "index.html\ntitle: index\nsummary: Short page summary here.\ntags: rust, graphs, parsing\n"
+        "index.html\ntitle: index\nsummary: (none)\ntags: (none)\n"
     );
 }
 
@@ -2143,8 +2163,8 @@ fn note_mutation_handles_ordinary_html_formatting() {
   <HEAD>
     <TITLE>Index</TITLE>
     <meta content="0.1" name="fractal:version">
-    <meta content="Short page summary here." name="fractal:summary">
-    <meta content="rust, graphs, parsing" name="fractal:tags">
+    <meta content="" name="fractal:summary">
+    <meta content="" name="fractal:tags">
   </HEAD>
   <BODY>
     <main><p>Java and Rust are both mentioned.</p></main>
@@ -2378,8 +2398,8 @@ fn sync_links_ordinary_html_without_touching_manual_or_code_links() {
   <HEAD>
     <TITLE>Home</TITLE>
     <meta content="0.1" name="fractal:version">
-    <meta content="Short page summary here." name="fractal:summary">
-    <meta content="rust, graphs, parsing" name="fractal:tags">
+    <meta content="" name="fractal:summary">
+    <meta content="" name="fractal:tags">
   </HEAD>
   <BODY>
     <MAIN>

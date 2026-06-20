@@ -13,10 +13,10 @@ pub use crate::graph::{
 pub use crate::index::search::{search_project, search_report};
 pub use crate::index::{build_index, load_project_index};
 pub use crate::ops::{
-    create_directory, create_page, delete_page, export_page, extract_page_text, import_markdown,
-    init_project, init_project_at, load_project_manifest, new_page, preflight_delete_page,
-    preflight_rename_page, project_summary, read_page_source, rename_page, sync_project,
-    write_page_source,
+    create_directory, create_page, delete_directory, delete_page, export_page, extract_page_text,
+    import_markdown, init_project, init_project_at, load_project_manifest, new_page,
+    preflight_delete_page, preflight_rename_page, project_summary, read_page_source, rename_page,
+    sync_project, write_page_source,
 };
 pub use crate::ops::{
     editor_page_detail, list_editor_pages, set_page_title, update_editor_page, update_page_body,

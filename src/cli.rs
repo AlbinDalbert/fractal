@@ -1,10 +1,10 @@
 use crate::project::{
-    add_note, build_index, delete_page, editor_page_detail, export_page, graph_backlinks_report,
-    graph_neighbors_report, graph_notes_report, graph_orphans_report, graph_outlinks_report,
-    graph_page_report, graph_related_report, import_markdown, init_project_at, list_editor_pages,
-    neighbor_pages, new_page, patch_note, read_page_source, remove_note, rename_page,
-    repair_project, search_report, sync_project, update_editor_page, validate_project,
-    EditorPageUpdate, OperationEvent, OperationReport, PageRename,
+    add_note, build_index, delete_directory, delete_page, editor_page_detail, export_page,
+    graph_backlinks_report, graph_neighbors_report, graph_notes_report, graph_orphans_report,
+    graph_outlinks_report, graph_page_report, graph_related_report, import_markdown,
+    init_project_at, list_editor_pages, neighbor_pages, new_page, patch_note, read_page_source,
+    remove_note, rename_page, repair_project, search_report, sync_project, update_editor_page,
+    validate_project, EditorPageUpdate, OperationEvent, OperationReport, PageRename,
 };
 use crate::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -207,6 +207,15 @@ enum PageCommand {
     /// Delete a page.
     Delete {
         page: PathBuf,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Delete a folder under pages/.
+    DeleteFolder {
+        folder: PathBuf,
+        /// Delete the folder and all files/pages inside it.
+        #[arg(long)]
+        recursive: bool,
         #[arg(long)]
         yes: bool,
     },
@@ -496,6 +505,17 @@ pub fn run() -> Result<()> {
                 let report = delete_page(&root, &page)?;
                 print_report_result(output_format, "page.delete", &root, &report)
             }
+            PageCommand::DeleteFolder {
+                folder,
+                recursive,
+                yes,
+            } => {
+                if !yes {
+                    return Err("page delete-folder requires --yes".into());
+                }
+                let report = delete_directory(&root, &folder, recursive)?;
+                print_report_result(output_format, "page.delete_folder", &root, &report)
+            }
             PageCommand::Source { command } => match command {
                 PageSourceCommand::Read { page } => {
                     let source = read_page_source(&root, &page)?;
@@ -683,6 +703,9 @@ fn print_operation_report(report: &OperationReport) -> Result<()> {
                 println!("exported {} -> {}", page.display(), output.display());
             }
             OperationEvent::DeletedPage { path } => println!("deleted page {}", path.display()),
+            OperationEvent::DeletedDirectory { path } => {
+                println!("deleted directory {}", path.display())
+            }
             OperationEvent::Fixed { path } => println!("fixed {}", path.display()),
             OperationEvent::Imported {
                 source,

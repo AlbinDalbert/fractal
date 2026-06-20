@@ -48,12 +48,14 @@ pub fn validate_project(root: impl AsRef<Path>) -> Result<OperationReport> {
         )));
     }
 
-    let default_page = root.join(&manifest.default_page);
-    if !default_page.is_file() {
-        return Err(FractalError::invalid_project(format!(
-            "missing default page: {}",
-            default_page.display()
-        )));
+    if !manifest.default_page.trim().is_empty() {
+        let default_page = root.join(&manifest.default_page);
+        if !default_page.is_file() {
+            return Err(FractalError::invalid_project(format!(
+                "missing default page: {}",
+                default_page.display()
+            )));
+        }
     }
 
     let mut page_paths = Vec::new();
@@ -128,35 +130,32 @@ fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
         report.push(OperationEvent::Fixed { path: stylesheet });
     }
 
-    let default_page = root.join(&manifest.default_page);
-    if !default_page.is_file() {
-        if mode.writes() {
-            if let Some(parent) = default_page.parent() {
-                fs::create_dir_all(parent)?;
+    if !manifest.default_page.trim().is_empty() {
+        let default_page = root.join(&manifest.default_page);
+        if !default_page.is_file() {
+            if mode.writes() {
+                if let Some(parent) = default_page.parent() {
+                    fs::create_dir_all(parent)?;
+                }
             }
-        }
 
-        let title = default_page
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or(&manifest.project_name);
-        let page_path = default_page
-            .strip_prefix(&pages_dir)
-            .unwrap_or_else(|_| Path::new(INDEX_PAGE));
-        if mode.writes() {
-            fs::write(
-                &default_page,
-                render_page_document(
-                    title,
-                    "<p>Fractal project scaffold.</p>",
-                    manifest.theme,
-                    stylesheet_href(page_path),
-                ),
-            )?;
+            let title = default_page
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or(&manifest.project_name);
+            let page_path = default_page
+                .strip_prefix(&pages_dir)
+                .unwrap_or_else(|_| Path::new(INDEX_PAGE));
+            if mode.writes() {
+                fs::write(
+                    &default_page,
+                    render_page_document(title, "", manifest.theme, stylesheet_href(page_path)),
+                )?;
+            }
+            report.push(OperationEvent::Fixed {
+                path: default_page.clone(),
+            });
         }
-        report.push(OperationEvent::Fixed {
-            path: default_page.clone(),
-        });
     }
 
     if !pages_dir.is_dir() {

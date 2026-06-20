@@ -6,7 +6,7 @@ use crate::index::ensure_page_labels_available_for;
 use crate::index::{build_index, build_project_index, ensure_page_labels_available};
 use crate::io::markdown::{html_to_markdown, markdown_to_html};
 use crate::project::constants::{
-    INDEX_PAGE, MANIFEST_FILE, MANIFEST_VERSION, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR,
+    MANIFEST_FILE, MANIFEST_VERSION, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR,
 };
 use crate::project::paths::{
     collect_page_paths, is_html_path, load_manifest, page_destination_from_title,
@@ -34,7 +34,6 @@ pub fn init_project_at(
     let project_name = project_name.as_ref();
     let workspace_dir = root.join(WORKSPACE_DIR);
     let pages_dir = root.join(PAGES_DIR);
-    let index_page = pages_dir.join(INDEX_PAGE);
     let manifest_path = root.join(MANIFEST_FILE);
 
     if root.exists() {
@@ -50,21 +49,12 @@ pub fn init_project_at(
     let manifest = ProjectManifest {
         project_name: project_name.to_string(),
         version: MANIFEST_VERSION,
-        default_page: format!("{PAGES_DIR}/{INDEX_PAGE}"),
+        default_page: String::new(),
         theme: Theme::default(),
     };
 
     fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
     fs::write(workspace_dir.join(STYLE_FILE), default_stylesheet())?;
-    fs::write(
-        &index_page,
-        render_page_document(
-            project_name,
-            "<p>Fractal project scaffold.</p>",
-            Theme::default(),
-            stylesheet_href(Path::new(INDEX_PAGE)),
-        ),
-    )?;
 
     Ok(OperationReport::from_event(OperationEvent::Created {
         path: root.to_path_buf(),
@@ -114,7 +104,7 @@ pub fn create_directory(
 
 pub fn create_page(root: impl AsRef<Path>, page: PageCreate) -> Result<OperationReport> {
     let root = root.as_ref();
-    let manifest = load_manifest(root)?;
+    let mut manifest = load_manifest(root)?;
     let title = normalize_page_title(&page.title)?;
     let directory = page.directory.as_deref().unwrap_or_else(|| Path::new(""));
     let directory_path = resolve_directory_destination(root, directory)?;
@@ -140,13 +130,16 @@ pub fn create_page(root: impl AsRef<Path>, page: PageCreate) -> Result<Operation
 
     fs::write(
         &destination,
-        render_page_document(
-            &title,
-            "<p>New Fractal page.</p>",
-            manifest.theme,
-            stylesheet_href(relative_page),
-        ),
+        render_page_document(&title, "", manifest.theme, stylesheet_href(relative_page)),
     )?;
+    if manifest.default_page.trim().is_empty() {
+        manifest.default_page = format!("{PAGES_DIR}/{relative_page_string}");
+        fs::write(
+            root.join(MANIFEST_FILE),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+    }
+
     let generated = build_index(root)?;
     let mut report = OperationReport::from_event(OperationEvent::Created { path: destination });
     report.extend(generated);
@@ -388,6 +381,78 @@ pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Ope
 
     if let Some(default_page) = preflight.replacement_default_page {
         manifest.default_page = format!("{PAGES_DIR}/{default_page}");
+        let manifest_path = root.join(MANIFEST_FILE);
+        fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+        report.push(OperationEvent::UpdatedProjectManifest {
+            path: manifest_path,
+        });
+    }
+
+    report.extend(build_index(root)?);
+    Ok(report)
+}
+
+pub fn delete_directory(
+    root: impl AsRef<Path>,
+    directory: impl AsRef<Path>,
+    recursive: bool,
+) -> Result<OperationReport> {
+    let root = root.as_ref();
+    let mut manifest = load_manifest(root)?;
+    let relative_directory =
+        crate::project::paths::normalize_page_directory_path(directory.as_ref())?;
+    if relative_directory.as_os_str().is_empty() {
+        return Err(FractalError::invalid_input(
+            "cannot delete the pages root directory",
+        ));
+    }
+
+    let pages_dir = root.join(PAGES_DIR);
+    let directory_path = pages_dir.join(&relative_directory);
+    if !directory_path.is_dir() {
+        return Err(FractalError::not_found(format!(
+            "directory does not exist: {}",
+            directory_path.display()
+        )));
+    }
+
+    let mut deleted_pages = Vec::new();
+    collect_page_paths(&directory_path, &directory_path, &mut deleted_pages)?;
+    deleted_pages.sort();
+    let directory_prefix = relative_directory.to_string_lossy().replace('\\', "/");
+    let deleted_pages = deleted_pages
+        .into_iter()
+        .filter(|path| is_html_path(path))
+        .map(|path| format!("{directory_prefix}/{path}"))
+        .collect::<Vec<_>>();
+
+    if recursive {
+        fs::remove_dir_all(&directory_path)?;
+    } else {
+        fs::remove_dir(&directory_path)?;
+    }
+
+    let mut report = OperationReport::new();
+    report.push(OperationEvent::DeletedDirectory {
+        path: directory_path,
+    });
+
+    for deleted_page in &deleted_pages {
+        report.extend(unwrap_deleted_page_links(root, deleted_page)?);
+    }
+
+    let default_page = manifest_default_page_path(root, &manifest).ok();
+    if default_page.as_deref().is_some_and(|path| {
+        path == directory_prefix || path.starts_with(&format!("{directory_prefix}/"))
+    }) {
+        let mut remaining_pages = Vec::new();
+        collect_page_paths(&pages_dir, &pages_dir, &mut remaining_pages)?;
+        remaining_pages.sort();
+        manifest.default_page = remaining_pages
+            .into_iter()
+            .find(|path| is_html_path(path))
+            .map(|path| format!("{PAGES_DIR}/{path}"))
+            .unwrap_or_default();
         let manifest_path = root.join(MANIFEST_FILE);
         fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
         report.push(OperationEvent::UpdatedProjectManifest {

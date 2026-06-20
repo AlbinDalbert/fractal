@@ -51,6 +51,9 @@ pub enum OperationEvent {
     DeletedPage {
         path: PathBuf,
     },
+    DeletedDirectory {
+        path: PathBuf,
+    },
     Fixed {
         path: PathBuf,
     },
