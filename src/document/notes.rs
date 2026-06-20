@@ -1,9 +1,10 @@
 use crate::document::html::escape_html;
 use crate::document::PageDocument;
 use crate::index::build_index;
+use crate::io::fs::atomic_write;
 use crate::project::paths::resolve_existing_page;
 use crate::types::{OperationEvent, OperationReport};
-use crate::Result;
+use crate::{FractalError, Result};
 use kuchiki::NodeRef;
 use std::fs;
 use std::path::Path;
@@ -21,11 +22,13 @@ pub fn add_note(
 
     let document = PageDocument::parse(&html);
     if document.note_node(&note_id).is_some() {
-        return Err(format!("note already exists: {note_id}").into());
+        return Err(FractalError::already_exists(format!(
+            "note already exists: {note_id}"
+        )));
     }
 
     let html = insert_note_into_document(&html, &render_note_aside(&note_id, content))?;
-    fs::write(&page, html)?;
+    atomic_write(&page, html)?;
     let generated = build_index(root)?;
     let mut report = OperationReport::from_event(OperationEvent::AddedNote { page, note_id });
     report.extend(generated);
@@ -42,7 +45,7 @@ pub fn remove_note(
     let note_id = note_id_from_trigger(trigger)?;
     let html = fs::read_to_string(&page)?;
     let html = remove_note_from_document(&html, &note_id)?;
-    fs::write(&page, html)?;
+    atomic_write(&page, html)?;
     let generated = build_index(root)?;
     let mut report = OperationReport::from_event(OperationEvent::RemovedNote { page, note_id });
     report.extend(generated);
@@ -60,7 +63,7 @@ pub fn patch_note(
     let note_id = note_id_from_trigger(trigger)?;
     let html = fs::read_to_string(&page)?;
     let html = patch_note_in_document(&html, &note_id, content)?;
-    fs::write(&page, html)?;
+    atomic_write(&page, html)?;
     let generated = build_index(root)?;
     let mut report = OperationReport::from_event(OperationEvent::PatchedNote { page, note_id });
     report.extend(generated);
@@ -92,7 +95,9 @@ pub(crate) fn note_id_from_trigger(trigger: &str) -> Result<String> {
 
     let slug = slug.trim_matches('-').to_string();
     if slug.is_empty() {
-        return Err("trigger must contain at least one letter or number".into());
+        return Err(FractalError::invalid_input(
+            "trigger must contain at least one letter or number",
+        ));
     }
 
     Ok(format!("note-{slug}"))
@@ -129,7 +134,7 @@ fn remove_note_from_document(html: &str, note_id: &str) -> Result<String> {
     document.single_notes_section()?;
     let note = document
         .note_node(note_id)
-        .ok_or_else(|| format!("note does not exist: {note_id}"))?;
+        .ok_or_else(|| FractalError::not_found(format!("note does not exist: {note_id}")))?;
     note.detach();
 
     document.to_html()
@@ -140,7 +145,7 @@ fn patch_note_in_document(html: &str, note_id: &str, content: &str) -> Result<St
     document.single_notes_section()?;
     let note = document
         .note_node(note_id)
-        .ok_or_else(|| format!("note does not exist: {note_id}"))?;
+        .ok_or_else(|| FractalError::not_found(format!("note does not exist: {note_id}")))?;
     let replacement = parse_note_aside(&render_note_aside(note_id, content))?;
 
     note.insert_before(replacement);
@@ -154,7 +159,9 @@ fn parse_note_aside(note: &str) -> Result<NodeRef> {
     let aside = document
         .document
         .select_first("aside[data-fractal-note]")
-        .map_err(|_| "note markup must contain a data-fractal-note aside")?
+        .map_err(|_| {
+            FractalError::invalid_input("note markup must contain a data-fractal-note aside")
+        })?
         .as_node()
         .clone();
     aside.detach();

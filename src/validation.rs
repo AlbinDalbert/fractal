@@ -8,6 +8,7 @@ use crate::graph::links::{
     page_link_text_matches, resolve_page_href,
 };
 use crate::index::ensure_page_labels_available_for;
+use crate::io::fs::atomic_write;
 use crate::project::constants::{INDEX_PAGE, MANIFEST_FILE, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR};
 use crate::project::paths::{collect_page_paths, is_html_path, load_manifest};
 use crate::types::{OperationEvent, OperationReport, Theme};
@@ -125,7 +126,7 @@ fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
     let stylesheet = workspace_dir.join(STYLE_FILE);
     if !stylesheet.is_file() {
         if mode.writes() {
-            fs::write(&stylesheet, default_stylesheet())?;
+            atomic_write(&stylesheet, default_stylesheet())?;
         }
         report.push(OperationEvent::Fixed { path: stylesheet });
     }
@@ -147,7 +148,7 @@ fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
                 .strip_prefix(&pages_dir)
                 .unwrap_or_else(|_| Path::new(INDEX_PAGE));
             if mode.writes() {
-                fs::write(
+                atomic_write(
                     &default_page,
                     render_page_document(title, "", manifest.theme, stylesheet_href(page_path)),
                 )?;
@@ -213,9 +214,9 @@ pub(crate) fn validate_page_html_for_project(
         &known_page_titles,
     )?;
 
-    let title = document
-        .title()
-        .ok_or_else(|| format!("missing page title in {}", display_path.display()))?;
+    let title = document.title().ok_or_else(|| {
+        FractalError::invalid_project(format!("missing page title in {}", display_path.display()))
+    })?;
     ensure_page_labels_available_for(root, Some(page_path), page_path, &title)?;
 
     Ok(())
@@ -306,7 +307,7 @@ fn fix_page(
     }
 
     if changed && mode.writes() {
-        fs::write(page, document.to_html()?)?;
+        atomic_write(page, document.to_html()?)?;
     }
 
     Ok(changed)
@@ -492,9 +493,10 @@ fn validate_required_meta(page: &Path, document: &PageDocument) -> Result<()> {
             continue;
         }
         if !allowed.contains_key(name) {
-            return Err(
-                format!("unsupported Fractal meta tag in {}: {name}", page.display()).into(),
-            );
+            return Err(FractalError::invalid_project(format!(
+                "unsupported Fractal meta tag in {}: {name}",
+                page.display()
+            )));
         }
 
         let Some(content) = attributes.get("content") else {
@@ -517,9 +519,10 @@ fn validate_required_meta(page: &Path, document: &PageDocument) -> Result<()> {
             )));
         };
         if values.len() != 1 {
-            return Err(
-                format!("duplicate required meta tag in {}: {name}", page.display()).into(),
-            );
+            return Err(FractalError::invalid_project(format!(
+                "duplicate required meta tag in {}: {name}",
+                page.display()
+            )));
         }
         if name == "fractal:version" && values[0] != expected_content {
             return Err(FractalError::invalid_project(format!(
@@ -846,13 +849,12 @@ fn validate_page_link_text(
         return Ok(());
     }
 
-    Err(format!(
+    Err(FractalError::invalid_project(format!(
         "{kind} page link text does not identify its target in {}: `{}` -> {href} (expected {})",
         page.display(),
         text,
         expected_page_labels(target, title)
-    )
-    .into())
+    )))
 }
 
 fn expected_page_labels(path: &str, title: &str) -> String {
@@ -885,12 +887,11 @@ fn single_node(page: &Path, document: &PageDocument, selector: &str) -> Result<N
             "missing {label} in {}",
             page.display()
         ))),
-        _ => Err(format!(
+        _ => Err(FractalError::invalid_project(format!(
             "duplicate {label} in {}: {} found",
             page.display(),
             nodes.len()
-        )
-        .into()),
+        ))),
     }
 }
 

@@ -1,8 +1,8 @@
 # Fractal
 
-`fractal` is a reset-in-progress CLI for a file-backed knowledge base / graph engine.
+`fractal` is a reset-in-progress Rust engine and CLI for a file-backed knowledge base / graph format.
 
-This repo is currently focused on one thing: locking down the first useful command surface and project layout before the deeper format and graph behavior are rebuilt.
+This repo is currently focused on one thing: locking down the first useful crate API, format contract, and project layout before deeper graph behavior and CLI ergonomics are rebuilt.
 
 ## Project direction
 
@@ -10,7 +10,7 @@ Fractal is meant to be better tooling, engine infrastructure, and user experienc
 
 Fractal is the engine, not an end-user interface. This crate should focus on the durable file format, project layout, indexing, graph construction, linking, metadata, import/export, search, and programmatic command surface that other tools can build on. A separate UI can consume Fractal data later, but this project should not take on interactive application UI concerns.
 
-The page format is HTML by design. Fractal can impose a strict project structure and strict page conventions, but the user's actual files should remain resilient: if the tool breaks or disappears, the pages are still inspectable, editable, and renderable by ordinary browsers on almost any device. HTML also avoids making Fractal responsible for a custom rendering engine, and gives the project a richer and more consistent rendering target than markdown.
+The page format is HTML-backed by design, but Fractal is not arbitrary HTML. HTML is the storage/rendering substrate in roughly the same way DOCX borrows XML: inspectable with common tools, but governed by Fractal's stricter format contract. Fractal avoids owning a custom renderer while still getting a richer and more consistent rendering target than markdown.
 
 The current Fractal format contract is documented in [`docs/format-contract.md`](docs/format-contract.md). Treat that file as the short-form contract for what validation is expected to enforce.
 
@@ -64,7 +64,7 @@ Unknown prose is not an unresolved link candidate. If a word or phrase does not 
 
 ## Current CLI surface
 
-The CLI migration has started toward the canonical resource/action grammar from `CLI-PROPOSITION.md`:
+The CLI is functional but not yet ergonomically designed. Treat the crate-root Rust API as the primary surface for applications; the CLI migration has only started toward the canonical resource/action grammar from `CLI-PROPOSITION.md`:
 
 ```text
 fractal [--project <root>] [--format human|json] [--json] <resource> <action> ...
@@ -113,7 +113,6 @@ my-project/
 │   └── style.css
 ├── fractal.json
 └── pages/
-    └── index.html
 ```
 
 `.fractal/` stores project-owned generated/support files. `style.css` is created during `init`; generated project data such as indexes and graph data also lives there.
@@ -127,11 +126,11 @@ my-project/
 
 ## What works today
 
-- `init` creates the project folder, manifest, starter stylesheet, and starter page.
+- `init` creates the project folder, manifest, starter stylesheet, and empty `pages/` directory. It does not create a starter page.
 - `validate` checks the project structure and enforces the current strict Fractal page contract. Pages must have exactly one direct `<main>` and exactly one direct notes section outside `<main>`, matching `<title>`/first `<main h1>`, exactly the required `fractal:*` meta tags, the exact generated stylesheet href for their depth, a body theme matching the manifest, valid note IDs, allowed body/note elements only, generated links that resolve, generated page-link text that identifies the target title or filename stem, and no manual links or extra `fractal:*` metadata. It warns about ambiguous duplicate page labels for existing files. Creating new duplicate page labels is rejected; behavior with pre-existing duplicates is otherwise undefined for now. HTML extraction for validation is parser-backed, so it is not tied to Fractal's generated indentation or attribute quoting.
 - `repair` adds or repairs safe Fractal-owned scaffold pieces before validating: `.fractal/`, `.fractal/style.css`, `pages/`, the configured default page, missing required page meta tags, the generated stylesheet link, the body theme marker, missing title/heading pairs when one side can be inferred, and the notes section. It also merges duplicate notes sections while preserving their child content, unwraps simple manual links into plain text, and rewrites mismatched generated internal page-link text to the visible target title.
-- `import` reads a markdown file, converts basic headings and paragraphs into a minimal HTML page under `pages/`, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
-- `export` converts basic headings and paragraphs from an existing Fractal HTML page to markdown at the requested output path.
+- `import` reads a markdown file, converts only basic headings and paragraphs into a minimal HTML page under `pages/`, and rebuilds `.fractal/index.json` and `.fractal/graph.json`. This is an import stub, not real markdown support yet.
+- `export` converts only basic headings and paragraphs from an existing Fractal HTML page to markdown at the requested output path. This is an export stub, not real markdown support yet.
 - `index build` generates `.fractal/index.json` with every file under `pages/`, page entries for HTML files, page titles, all page meta tags whose names start with `fractal:`, notes, and links. It also generates `.fractal/graph.json` with page/note nodes, graph edges, and per-page backlinks/outlinks.
 - `search <query>` reads `.fractal/index.json` and searches page titles, summaries, tags, note labels, and link text. Query words may match across different indexed fields on the same page.
 - `graph page <page/path>` reads `.fractal/graph.json` and prints the page's backlinks and outlinks. The page path may be relative to `pages/`, include `pages/`, and omit `.html`.
@@ -142,21 +141,21 @@ my-project/
 - `graph orphans` reads `.fractal/graph.json` and lists pages with no backlinks.
 - `sync` rebuilds `.fractal/index.json` and `.fractal/graph.json`, updates each page's note links inside its own `<main>`, then links remaining matching page-title/page-stem text against the project index. It rebuilds both generated data files again after the page rewrites so generated links are reflected.
 - `page new` / `page create` creates a new HTML page from the requested title, normalizes that title to a lowercase kebab-case filename under `pages/`, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
-- `page <page/path> extract` prints compact text extracted from the page's `<main>`.
-- `page <page/path> meta show/set-summary/set-tags/reset` reads and mutates Fractal-owned page metadata using parser-backed HTML operations, normalizes comma-separated or repeated tags, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
-- `page <page/path> note add/remove/patch` mutates notes in the requested page using parser-backed HTML operations and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
+- Library API: `extract_page_text` returns compact text extracted from the page's `<main>`.
+- Library API: `page_metadata`, `set_page_summary`, `set_page_tags`, and `reset_page_metadata` read and mutate Fractal-owned page metadata using parser-backed HTML operations, normalize comma-separated or repeated tags, and rebuild `.fractal/index.json` and `.fractal/graph.json`.
+- Library API and CLI: note mutations add/remove/patch notes in the requested page using parser-backed HTML operations and rebuild `.fractal/index.json` and `.fractal/graph.json`.
 - Library API: `list_editor_pages` and `editor_page_detail` provide editor sidebars, page inspectors, and link panels without requiring clients to manually combine index and graph files. Editor link details include Fractal-resolved page/note targets so UI clients do not have to reimplement href resolution.
 - Library API: `update_editor_page`, `set_page_title`, and `update_page_body` provide parser-backed mutations for Fractal-owned editor fields, repair invalid editor-submitted links back to readable text, validate the resulting Fractal HTML, and rebuild generated data.
 - Library API: `write_page_source` validates candidate raw HTML before saving, leaves the original file untouched on validation failure, and rebuilds generated data when accepted.
-- Library API: `rename_page` changes a page path and/or title after preflighting the unique label contract, updates the default page manifest entry when needed, updates the page stylesheet link for its new depth, and rebuilds generated data. This is not exposed by the current CLI yet.
-- Library API: `delete_page` removes a page, reports its affected backlinks/outlinks, unwraps Fractal-generated links to the deleted page, promotes a replacement default page when deleting the current default, and rebuilds generated data. This is not exposed by the current CLI yet.
+- Library API: `rename_page` changes a page path and/or title after preflighting the unique label contract, updates the default page manifest entry when needed, updates the page stylesheet link for its new depth, and rebuilds generated data.
+- Library API: `delete_page` removes a page, reports its affected backlinks/outlinks, unwraps Fractal-generated links to the deleted page, promotes a replacement default page when deleting the current default, and rebuilds generated data.
 
 All generated pages currently include these required meta tags:
 
 ```html
 <meta name="fractal:version" content="0.1" />
-<meta name="fractal:summary" content="Short page summary here." />
-<meta name="fractal:tags" content="rust, graphs, parsing" />
+<meta name="fractal:summary" content="" />
+<meta name="fractal:tags" content="" />
 ```
 
 Generated pages also link to `.fractal/style.css` and set the manifest theme on the body:
@@ -203,7 +202,7 @@ Generated links are marked with `data-fractal-link`, so rerunning `sync` can rep
 - `contains_note`, `links_to_note`, and `links_to_page` edges
 - per-page `outlinks` and `backlinks` for page-to-page edges
 
-The `import` and `export` flows currently support only markdown headings (`#` through `######`) and plain paragraphs.
+The `import` and `export` flows currently support only markdown headings (`#` through `######`) and plain paragraphs. They are placeholders for the long-term import/export contract, not full markdown compatibility.
 
 ## Repo notes
 

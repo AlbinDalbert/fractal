@@ -4,9 +4,10 @@ use crate::graph::links::{
     is_linkable_label, link_label_key, normalize_link_label, page_link_labels, relative_href,
 };
 use crate::index::{build_project_index, write_generated_project_data};
+use crate::io::fs::atomic_write;
 use crate::project::constants::PAGES_DIR;
 use crate::types::{OperationEvent, OperationReport, ProjectIndex};
-use crate::Result;
+use crate::{FractalError, Result};
 use kuchiki::NodeRef;
 use std::collections::BTreeSet;
 use std::fs;
@@ -25,7 +26,7 @@ pub fn sync_project(root: impl AsRef<Path>) -> Result<OperationReport> {
         let html = fs::read_to_string(&path)?;
         let updated = sync_page_links(&html, &page.path, &initial_index)?;
         if updated != html {
-            fs::write(&path, updated)?;
+            atomic_write(&path, updated)?;
             synced += 1;
             report.push(OperationEvent::Synced { path });
         }
@@ -44,7 +45,7 @@ pub(crate) fn sync_page_links(html: &str, page_path: &str, index: &ProjectIndex)
     let main = document
         .document
         .select_first("main")
-        .map_err(|_| "missing main section in page")?
+        .map_err(|_| FractalError::invalid_project("missing main section in page"))?
         .as_node()
         .clone();
     let note_candidates = note_link_candidates(html);

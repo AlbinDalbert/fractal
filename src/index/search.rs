@@ -3,7 +3,7 @@ use crate::document::PageDocument;
 use crate::index::load_project_index;
 use crate::project::constants::PAGES_DIR;
 use crate::types::{PageEntry, SearchMatch, SearchResult};
-use crate::Result;
+use crate::{FractalError, Result};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -58,7 +58,7 @@ fn query_terms(query: &str) -> Result<Vec<String>> {
         .collect::<Vec<_>>();
 
     if terms.is_empty() {
-        return Err("search query cannot be empty".into());
+        return Err(FractalError::invalid_input("search query cannot be empty"));
     }
 
     Ok(terms)

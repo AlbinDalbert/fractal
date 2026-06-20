@@ -4,6 +4,7 @@ use crate::graph::build_project_graph;
 use crate::graph::links::{normalize_link_label, page_label_from_path, relative_href};
 use crate::index::ensure_page_labels_available_for;
 use crate::index::{build_index, build_project_index, ensure_page_labels_available};
+use crate::io::fs::atomic_write;
 use crate::io::markdown::{html_to_markdown, markdown_to_html};
 use crate::project::constants::{
     MANIFEST_FILE, MANIFEST_VERSION, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR,
@@ -53,8 +54,8 @@ pub fn init_project_at(
         theme: Theme::default(),
     };
 
-    fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
-    fs::write(workspace_dir.join(STYLE_FILE), default_stylesheet())?;
+    atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+    atomic_write(workspace_dir.join(STYLE_FILE), default_stylesheet())?;
 
     Ok(OperationReport::from_event(OperationEvent::Created {
         path: root.to_path_buf(),
@@ -128,13 +129,13 @@ pub fn create_page(root: impl AsRef<Path>, page: PageCreate) -> Result<Operation
     let relative_page_string = relative_page.to_string_lossy().replace('\\', "/");
     ensure_page_labels_available(root, &relative_page_string, &title)?;
 
-    fs::write(
+    atomic_write(
         &destination,
         render_page_document(&title, "", manifest.theme, stylesheet_href(relative_page)),
     )?;
     if manifest.default_page.trim().is_empty() {
         manifest.default_page = format!("{PAGES_DIR}/{relative_page_string}");
-        fs::write(
+        atomic_write(
             root.join(MANIFEST_FILE),
             serde_json::to_string_pretty(&manifest)?,
         )?;
@@ -194,7 +195,9 @@ pub fn preflight_rename_page(
     let path_changed = source != destination;
 
     if !path_changed && rename.title.is_none() {
-        return Err("rename requires a new page path, a new title, or both".into());
+        return Err(FractalError::invalid_input(
+            "rename requires a new page path, a new title, or both",
+        ));
     }
 
     ensure_page_labels_available_for(root, Some(&source_page), &destination_page, &title)?;
@@ -226,7 +229,9 @@ pub fn preflight_rename_page(
         .pages
         .into_iter()
         .find(|entry| entry.path == source_page)
-        .ok_or_else(|| format!("page not found in graph: {source_page}"))?;
+        .ok_or_else(|| {
+            FractalError::not_found(format!("page not found in graph: {source_page}"))
+        })?;
 
     Ok(PageRenamePreflight {
         source_page: source_page.clone(),
@@ -274,7 +279,7 @@ pub fn rename_page(
     if preflight.path_changed {
         fs::rename(&preflight.source_path, &preflight.destination_path)?;
     }
-    fs::write(&preflight.destination_path, updated_html)?;
+    atomic_write(&preflight.destination_path, updated_html)?;
 
     let mut report = OperationReport::new();
     if preflight.path_changed {
@@ -314,7 +319,7 @@ pub fn rename_page(
     if preflight.updates_default_page {
         manifest.default_page = format!("{PAGES_DIR}/{}", preflight.destination_page);
         let manifest_path = root.join(MANIFEST_FILE);
-        fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+        atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
         report.push(OperationEvent::UpdatedProjectManifest {
             path: manifest_path,
         });
@@ -339,7 +344,7 @@ pub fn preflight_delete_page(
         .pages
         .into_iter()
         .find(|entry| entry.path == page_path)
-        .ok_or_else(|| format!("page not found in graph: {page_path}"))?;
+        .ok_or_else(|| FractalError::not_found(format!("page not found in graph: {page_path}")))?;
     let remaining_pages = index
         .pages
         .iter()
@@ -348,7 +353,9 @@ pub fn preflight_delete_page(
     let deleting_default = manifest_default_page_path(root, &manifest)? == page_path;
 
     if remaining_pages.is_empty() {
-        return Err("cannot delete the only page in a project".into());
+        return Err(FractalError::invalid_input(
+            "cannot delete the only page in a project",
+        ));
     }
 
     Ok(PageDeletePreflight {
@@ -382,7 +389,7 @@ pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Ope
     if let Some(default_page) = preflight.replacement_default_page {
         manifest.default_page = format!("{PAGES_DIR}/{default_page}");
         let manifest_path = root.join(MANIFEST_FILE);
-        fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+        atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
         report.push(OperationEvent::UpdatedProjectManifest {
             path: manifest_path,
         });
@@ -454,7 +461,7 @@ pub fn delete_directory(
             .map(|path| format!("{PAGES_DIR}/{path}"))
             .unwrap_or_default();
         let manifest_path = root.join(MANIFEST_FILE);
-        fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+        atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
         report.push(OperationEvent::UpdatedProjectManifest {
             path: manifest_path,
         });
@@ -473,14 +480,19 @@ pub fn import_markdown(
 
     let source = source.as_ref();
     if source.extension().and_then(|ext| ext.to_str()) != Some("md") {
-        return Err(format!("expected a markdown file: {}", source.display()).into());
+        return Err(FractalError::invalid_input(format!(
+            "expected a markdown file: {}",
+            source.display()
+        )));
     }
 
     let markdown = fs::read_to_string(source)?;
     let stem = source
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .ok_or("could not derive page name from source file")?;
+        .ok_or_else(|| {
+            FractalError::invalid_input("could not derive page name from source file")
+        })?;
     let destination = resolve_page_destination(root, Path::new(stem))?;
     if destination.exists() {
         return Err(FractalError::already_exists(format!(
@@ -498,7 +510,7 @@ pub fn import_markdown(
         fs::create_dir_all(parent)?;
     }
 
-    fs::write(
+    atomic_write(
         &destination,
         render_page_document(
             &title,
@@ -535,7 +547,7 @@ pub fn export_page(
     }
 
     let html = fs::read_to_string(&page)?;
-    fs::write(output, html_to_markdown(&html))?;
+    atomic_write(output, html_to_markdown(&html))?;
     Ok(OperationReport::from_event(OperationEvent::Exported {
         page,
         output: output.to_path_buf(),
@@ -566,7 +578,7 @@ pub fn write_page_source(
     let relative_page = page_relative_path(root, &page)?;
     let page_path = relative_page.to_string_lossy().replace('\\', "/");
     validate_page_html_for_project(root, &page_path, html.as_ref())?;
-    fs::write(&page, html.as_ref())?;
+    atomic_write(&page, html.as_ref())?;
 
     let generated = build_index(root)?;
     let mut report = OperationReport::from_event(OperationEvent::SavedPage { path: page });
@@ -584,7 +596,7 @@ pub fn extract_page_text(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Resu
 fn normalize_page_title(title: &str) -> Result<String> {
     let title = normalize_link_label(title);
     if title.is_empty() {
-        return Err("page title cannot be empty".into());
+        return Err(FractalError::invalid_input("page title cannot be empty"));
     }
     Ok(title)
 }
@@ -611,7 +623,7 @@ fn unwrap_deleted_page_links(root: &Path, deleted_path: &str) -> Result<Operatio
             continue;
         }
 
-        fs::write(&page, document.to_html()?)?;
+        atomic_write(&page, document.to_html()?)?;
         report.push(OperationEvent::UpdatedPageLinks {
             page,
             count: updated,
@@ -641,7 +653,7 @@ fn rewrite_renamed_page_link_text(
             continue;
         }
 
-        fs::write(&page, document.to_html()?)?;
+        atomic_write(&page, document.to_html()?)?;
         report.push(OperationEvent::UpdatedPageLinks {
             page,
             count: updated,
@@ -672,7 +684,7 @@ fn rewrite_renamed_page_links(
             continue;
         }
 
-        fs::write(&page, document.to_html()?)?;
+        atomic_write(&page, document.to_html()?)?;
         report.push(OperationEvent::UpdatedPageLinks {
             page,
             count: updated,

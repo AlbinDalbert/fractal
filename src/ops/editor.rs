@@ -5,6 +5,7 @@ use crate::document::PageDocument;
 use crate::graph::build_project_graph;
 use crate::graph::links::{normalize_link_label, page_link_text_matches, resolve_page_href};
 use crate::index::{build_index, build_project_index, ensure_page_labels_available_for};
+use crate::io::fs::atomic_write;
 use crate::ops::page::rename_page;
 use crate::project::paths::{page_relative_path, resolve_existing_page};
 use crate::types::{
@@ -12,7 +13,7 @@ use crate::types::{
     LinkEntry, OperationEvent, OperationReport, PageMetadata, PageRename, PageSource,
 };
 use crate::validation::{known_page_titles_for_candidate, validate_page_html_for_project};
-use crate::Result;
+use crate::{FractalError, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -31,9 +32,12 @@ pub fn list_editor_pages(root: impl AsRef<Path>) -> Result<Vec<EditorPageListEnt
         .pages
         .into_iter()
         .map(|page| {
-            let graph_page = graph_pages
-                .get(&page.path)
-                .ok_or_else(|| format!("missing graph entry for page: {}", page.path))?;
+            let graph_page = graph_pages.get(&page.path).ok_or_else(|| {
+                FractalError::invalid_project(format!(
+                    "missing graph entry for page: {}",
+                    page.path
+                ))
+            })?;
             Ok(EditorPageListEntry {
                 path: page.path,
                 title: page.title,
@@ -68,12 +72,12 @@ pub fn editor_page_detail(
         .pages
         .into_iter()
         .find(|entry| entry.path == path)
-        .ok_or_else(|| format!("page not found in index: {path}"))?;
+        .ok_or_else(|| FractalError::not_found(format!("page not found in index: {path}")))?;
     let graph_entry = graph
         .pages
         .into_iter()
         .find(|entry| entry.path == path)
-        .ok_or_else(|| format!("page not found in graph: {path}"))?;
+        .ok_or_else(|| FractalError::not_found(format!("page not found in graph: {path}")))?;
 
     let metadata = PageMetadata {
         path: path.clone(),
@@ -172,7 +176,7 @@ pub fn update_editor_page(
     if !report.events.is_empty() {
         let html = document.to_html()?;
         validate_page_html_for_project(root, &path, &html)?;
-        fs::write(&page, html)?;
+        atomic_write(&page, html)?;
     }
 
     report.extend(build_index(root)?);
@@ -265,7 +269,7 @@ fn editor_link_details(
 fn normalize_editor_title(title: &str) -> Result<String> {
     let title = normalize_link_label(title);
     if title.is_empty() {
-        return Err("page title cannot be empty".into());
+        return Err(FractalError::invalid_input("page title cannot be empty"));
     }
     Ok(title)
 }

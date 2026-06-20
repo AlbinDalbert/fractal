@@ -1,12 +1,12 @@
-use crate::project::{
+use crate::{
     add_note, build_index, delete_directory, delete_page, editor_page_detail, export_page,
     graph_backlinks_report, graph_neighbors_report, graph_notes_report, graph_orphans_report,
     graph_outlinks_report, graph_page_report, graph_related_report, import_markdown,
     init_project_at, list_editor_pages, neighbor_pages, new_page, patch_note, read_page_source,
     remove_note, rename_page, repair_project, search_report, sync_project, update_editor_page,
-    validate_project, EditorPageUpdate, OperationEvent, OperationReport, PageRename,
+    validate_project, EditorPageUpdate, FractalError, OperationEvent, OperationReport, PageRename,
+    Result,
 };
-use crate::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -312,8 +312,8 @@ struct ReportData {
 
 #[derive(Debug, Serialize)]
 struct ContextPageData {
-    page: crate::project::EditorPageDetail,
-    neighbors: Vec<crate::project::GraphNeighborPage>,
+    page: crate::EditorPageDetail,
+    neighbors: Vec<crate::GraphNeighborPage>,
     budget: Option<usize>,
 }
 
@@ -408,7 +408,11 @@ pub fn run() -> Result<()> {
         Command::Search { command, query } => {
             let query = match command {
                 Some(SearchCommand::Text { query }) => query,
-                None => query.ok_or("missing search query; use `fractal search text <query>`")?,
+                None => query.ok_or_else(|| {
+                    FractalError::invalid_input(
+                        "missing search query; use `fractal search text <query>`",
+                    )
+                })?,
             };
             print_text_or_json(
                 output_format,
@@ -500,7 +504,7 @@ pub fn run() -> Result<()> {
             }
             PageCommand::Delete { page, yes } => {
                 if !yes {
-                    return Err("page delete requires --yes".into());
+                    return Err(FractalError::invalid_input("page delete requires --yes"));
                 }
                 let report = delete_page(&root, &page)?;
                 print_report_result(output_format, "page.delete", &root, &report)
@@ -511,7 +515,9 @@ pub fn run() -> Result<()> {
                 yes,
             } => {
                 if !yes {
-                    return Err("page delete-folder requires --yes".into());
+                    return Err(FractalError::invalid_input(
+                        "page delete-folder requires --yes",
+                    ));
                 }
                 let report = delete_directory(&root, &folder, recursive)?;
                 print_report_result(output_format, "page.delete_folder", &root, &report)
@@ -571,9 +577,11 @@ pub fn run() -> Result<()> {
         Command::Import { command, source } => {
             let source = match command {
                 Some(ImportCommand::Markdown { source }) => source,
-                None => {
-                    source.ok_or("missing import source; use `fractal import markdown <source>`")?
-                }
+                None => source.ok_or_else(|| {
+                    FractalError::invalid_input(
+                        "missing import source; use `fractal import markdown <source>`",
+                    )
+                })?,
             };
             let report = import_markdown(&root, &source)?;
             print_report_result(output_format, "import.markdown", &root, &report)
@@ -586,12 +594,16 @@ pub fn run() -> Result<()> {
             let (page, output) = match command {
                 Some(ExportCommand::Markdown { page, to }) => (page, to),
                 None => (
-                    page.ok_or(
-                        "missing export page; use `fractal export markdown <page> --to <path>`",
-                    )?,
-                    output.ok_or(
-                        "missing export output; use `fractal export markdown <page> --to <path>`",
-                    )?,
+                    page.ok_or_else(|| {
+                        FractalError::invalid_input(
+                            "missing export page; use `fractal export markdown <page> --to <path>`",
+                        )
+                    })?,
+                    output.ok_or_else(|| {
+                        FractalError::invalid_input(
+                            "missing export output; use `fractal export markdown <page> --to <path>`",
+                        )
+                    })?,
                 ),
             };
             let report = export_page(&root, &page, &output)?;

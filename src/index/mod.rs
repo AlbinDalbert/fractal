@@ -5,6 +5,7 @@ use crate::graph::build_project_graph;
 use crate::graph::links::{
     link_label_key, normalize_link_label, page_label_from_path, page_link_labels,
 };
+use crate::io::fs::atomic_write;
 use crate::project::constants::{GRAPH_FILE, INDEX_FILE, INDEX_VERSION, PAGES_DIR, WORKSPACE_DIR};
 use crate::project::paths::{collect_page_paths, file_kind, is_html_path, load_manifest};
 use crate::types::{
@@ -130,14 +131,14 @@ pub(crate) fn write_generated_project_data(
 
 fn write_project_index(root: &Path, index: &ProjectIndex) -> Result<OperationEvent> {
     let index_path = root.join(WORKSPACE_DIR).join(INDEX_FILE);
-    fs::write(&index_path, serde_json::to_string_pretty(index)?)?;
+    atomic_write(&index_path, serde_json::to_string_pretty(index)?)?;
 
     Ok(OperationEvent::Built { path: index_path })
 }
 
 fn write_project_graph(root: &Path, graph: &ProjectGraph) -> Result<OperationEvent> {
     let graph_path = root.join(WORKSPACE_DIR).join(GRAPH_FILE);
-    fs::write(&graph_path, serde_json::to_string_pretty(graph)?)?;
+    atomic_write(&graph_path, serde_json::to_string_pretty(graph)?)?;
 
     Ok(OperationEvent::Built { path: graph_path })
 }

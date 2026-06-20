@@ -1,7 +1,7 @@
 use crate::document::html::{escape_html, escape_html_attribute};
 use crate::graph::links::{normalize_link_label, note_label_from_id};
 use crate::types::NoteEntry;
-use crate::Result;
+use crate::{FractalError, Result};
 use kuchiki::traits::*;
 use kuchiki::NodeRef;
 use std::collections::BTreeMap;
@@ -42,9 +42,14 @@ impl PageDocument {
     pub(crate) fn single_notes_section(&self) -> Result<NodeRef> {
         let sections = self.notes_sections();
         match sections.as_slice() {
-            [] => Err("missing notes section in page".into()),
+            [] => Err(FractalError::invalid_project(
+                "missing notes section in page",
+            )),
             [section] => Ok(section.clone()),
-            _ => Err(format!("multiple notes sections in page: {}", sections.len()).into()),
+            _ => Err(FractalError::invalid_project(format!(
+                "multiple notes sections in page: {}",
+                sections.len()
+            ))),
         }
     }
 
@@ -163,7 +168,7 @@ impl PageDocument {
     pub(crate) fn ensure_body_theme(&self, theme: &str) -> Result<bool> {
         let body = self.body_node()?;
         let Some(element) = body.as_element() else {
-            return Err("body node is not an element".into());
+            return Err(FractalError::invalid_project("body node is not an element"));
         };
         let mut attributes = element.attributes.borrow_mut();
         if attributes.get("data-fractal-theme") == Some(theme) {
@@ -382,7 +387,7 @@ impl PageDocument {
         Ok(self
             .document
             .select_first("head")
-            .map_err(|_| "missing head in page")?
+            .map_err(|_| FractalError::invalid_project("missing head in page"))?
             .as_node()
             .clone())
     }
@@ -391,7 +396,7 @@ impl PageDocument {
         Ok(self
             .document
             .select_first("body")
-            .map_err(|_| "missing body in page")?
+            .map_err(|_| FractalError::invalid_project("missing body in page"))?
             .as_node()
             .clone())
     }
@@ -400,7 +405,7 @@ impl PageDocument {
         Ok(self
             .document
             .select_first("main")
-            .map_err(|_| "missing main section in page")?
+            .map_err(|_| FractalError::invalid_project("missing main section in page"))?
             .as_node()
             .clone())
     }
@@ -411,7 +416,7 @@ fn parse_document_node(html: &str, selector: &str) -> Result<NodeRef> {
     let node = document
         .document
         .select_first(selector)
-        .map_err(|_| format!("markup must contain `{selector}`"))?
+        .map_err(|_| FractalError::invalid_input(format!("markup must contain `{selector}`")))?
         .as_node()
         .clone();
     node.detach();

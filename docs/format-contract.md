@@ -6,7 +6,7 @@ Status: Phase 1 contract baseline. Some edge decisions are intentionally called 
 
 ## Fractal vs HTML
 
-Fractal pages are HTML-backed so they remain inspectable and renderable with ordinary tools. That does not mean arbitrary HTML is valid Fractal.
+Fractal pages are HTML-backed so they can reuse common HTML parsers and browser rendering. That does not mean arbitrary HTML is valid Fractal; HTML is the substrate, not the product contract.
 
 Normal Fractal changes should go through the Rust crate API or CLI operations. Raw source access exists as an escape hatch, but candidate HTML must still validate as Fractal before it is saved through `write_page_source`.
 
@@ -18,13 +18,13 @@ A valid project root contains:
 - `.fractal/`
 - `.fractal/style.css`
 - `pages/`
-- the manifest's configured default page
+- the manifest's configured default page, when `default_page` is non-empty
 
 The manifest currently contains:
 
 - `project_name`
 - `version`, currently `1`
-- `default_page`, normally under `pages/`
+- `default_page`, empty for a page-less project or normally under `pages/` once pages exist
 - `theme`, currently `dark` or `light`
 
 `.fractal/index.json` and `.fractal/graph.json` are generated data. They are rebuildable cache files, not hand-authored source files. They are schema-versioned and should be regenerated with `fractal index build`, `fractal sync`, or the corresponding library operations.
@@ -106,7 +106,7 @@ Note body content follows the same allowed content subset as normal page body co
 
 ## Link Contract
 
-Fractal currently supports generated links only.
+Fractal currently supports generated links only. Project-page links are inferred from unique page title labels; users should not have to maintain ordinary intra-project HTML links by hand.
 
 Generated page links must look like:
 
@@ -129,7 +129,7 @@ Validation requires:
 - `data-fractal-link="note"` links to resolve to a note in the same page
 - link scopes other than `page` and `note` to be rejected
 
-Manual links are invalid during normal validation. Manual internal page links whose text points at one existing page but names another are reported as label/target mismatches rather than accepted as hidden `href` truth. `repair` may unwrap simple manual links into plain text while preserving their text content. When a generated internal page link points to an existing target but its text does not identify that target, repair keeps the generated link and rewrites its visible text to the target title.
+Manual links are invalid during normal validation. Manual internal page links whose text points at one existing page but names another are reported as label/target mismatches rather than accepted as hidden `href` truth. `repair` may unwrap simple manual links into plain text while preserving their text content. When a generated internal page link points to an existing target but its text does not identify that target, repair keeps the generated link and rewrites its visible text to the target title. External web links are not first-class Fractal links in the current contract.
 
 ## Repair Contract
 
@@ -148,7 +148,8 @@ Manual links are invalid during normal validation. Manual internal page links wh
 - merge duplicate notes sections while preserving child content
 - restore missing title/heading pairs when one side can be inferred
 - unwrap simple manual links into plain text
-- rewrite manual or generated internal page links with mismatched text as plain text plus the target title in parentheses
+- unwrap simple manual links into plain text
+- rewrite generated internal page links with mismatched text to the target title
 
 Repairs should not guess at arbitrary user intent or convert arbitrary HTML into Fractal.
 
@@ -166,7 +167,7 @@ These are not blockers for the Phase 1 baseline, but they should be resolved bef
 - Decide whether additional stylesheet links should remain tolerated or validation should require exactly one Fractal stylesheet link.
 - Decide whether a tiny safe inline formatting set such as `strong`, `em`, and `br` should become valid Fractal.
 - Tighten list semantics if desired: validation currently focuses on allowed elements and list children, but the contract should eventually be explicit about whether `li` may appear only inside `ul`/`ol`.
-- Move all page-writing operations behind the Phase 2 mutation/write layer and validate generated HTML consistently before writes.
+- Finish the Phase 2 mutation/write layer: single-file writes now use atomic replacement, but multi-file operations still need stronger transaction/preflight behavior.
 
 
 ## Page titles and slugs

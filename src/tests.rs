@@ -9,7 +9,9 @@ use crate::graph::{
 use crate::io::markdown::{html_to_markdown, markdown_to_html};
 use crate::project::constants::{GRAPH_VERSION, INDEX_VERSION, MANIFEST_VERSION};
 use crate::project::paths::{collect_page_paths, resolve_page_destination};
-use crate::project::{
+use crate::validation::validate_page_metadata;
+use crate::FractalErrorCode;
+use crate::{
     add_note, build_index, create_directory, create_page, delete_directory, delete_page,
     editor_page_detail, export_page, extract_page_text, graph_backlinks_report, graph_notes_report,
     graph_outlinks_report, graph_related_report, import_markdown, init_project_at,
@@ -24,8 +26,6 @@ use crate::project::{
     NoteEntry, OperationEvent, PageCreate, PageEntry, PageGraphEntry, PageRename, ProjectGraph,
     ProjectIndex, ProjectManifest, SearchMatch, SearchResult, Theme,
 };
-use crate::validation::validate_page_metadata;
-use crate::FractalErrorCode;
 use std::collections::BTreeMap;
 use std::fs;
 use std::ops::Deref;
@@ -516,6 +516,7 @@ fn validate_project_rejects_extra_fractal_meta_tags() {
     project.write_page("index.html", html);
 
     let error = validate_project(project.root()).expect_err("extra fractal meta should fail");
+    assert_eq!(error.code, FractalErrorCode::InvalidProject);
     assert!(error.to_string().contains("unsupported Fractal meta tag"));
 }
 
@@ -549,6 +550,7 @@ fn validate_project_rejects_unsupported_body_elements_and_manual_links() {
     );
 
     let error = validate_project(project.root()).expect_err("unsupported span should fail");
+    assert_eq!(error.code, FractalErrorCode::InvalidProject);
     assert!(error
         .to_string()
         .contains("unsupported Fractal body element"));
@@ -1963,6 +1965,9 @@ fn add_note_creates_notes_section_in_requested_page() {
     );
 
     add_note(project.root(), Path::new("index"), "java", "my note text").expect("add note");
+    let error = add_note(project.root(), Path::new("index"), "java", "duplicate")
+        .expect_err("duplicate note should fail");
+    assert_eq!(error.code, FractalErrorCode::AlreadyExists);
 
     let html = fs::read_to_string(project.pages_dir().join("index.html")).expect("read page");
     let document = PageDocument::parse(&html);

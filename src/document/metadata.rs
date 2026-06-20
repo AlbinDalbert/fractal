@@ -1,6 +1,7 @@
 use crate::document::PageDocument;
 use crate::graph::links::normalize_link_label;
 use crate::index::build_index;
+use crate::io::fs::atomic_write;
 use crate::project::constants::{DEFAULT_SUMMARY, DEFAULT_TAGS};
 use crate::project::paths::{page_relative_path, resolve_existing_page};
 use crate::types::{OperationEvent, OperationReport, PageMetadata};
@@ -93,7 +94,7 @@ fn update_page_meta(
 
     let changed = document.set_meta_tag(name, content)?;
     if changed {
-        fs::write(&page, document.to_html()?)?;
+        atomic_write(&page, document.to_html()?)?;
     }
 
     let generated = build_index(root)?;
