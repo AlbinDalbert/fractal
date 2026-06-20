@@ -103,7 +103,7 @@ fn update_page_meta(
     }
 
     report.extend(build_index(root)?);
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub(crate) fn summary_from_meta(meta: &BTreeMap<String, String>) -> Option<String> {

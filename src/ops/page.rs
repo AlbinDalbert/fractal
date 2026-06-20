@@ -57,11 +57,10 @@ pub fn init_project_at(
     atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
     atomic_write(workspace_dir.join(STYLE_FILE), default_stylesheet())?;
 
-    Ok(OperationReport::from_event(
-        OperationEvent::ProjectCreated {
-            path: root.to_path_buf(),
-        },
-    ))
+    Ok(OperationReport::from_event(OperationEvent::ProjectCreated {
+        path: root.to_path_buf(),
+    })
+    .relative_to(root))
 }
 
 pub fn load_project_manifest(root: impl AsRef<Path>) -> Result<ProjectManifest> {
@@ -100,9 +99,10 @@ pub fn create_directory(
     }
 
     fs::create_dir(&destination)?;
-    Ok(OperationReport::from_event(
-        OperationEvent::DirectoryCreated { path: destination },
-    ))
+    Ok(
+        OperationReport::from_event(OperationEvent::DirectoryCreated { path: destination })
+            .relative_to(root),
+    )
 }
 
 pub fn create_page(root: impl AsRef<Path>, page: PageCreate) -> Result<OperationReport> {
@@ -150,7 +150,7 @@ pub fn create_page(root: impl AsRef<Path>, page: PageCreate) -> Result<Operation
         report.push(OperationEvent::ManifestUpdated { path });
     }
     report.extend(generated);
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<OperationReport> {
@@ -332,7 +332,7 @@ pub fn rename_page(
     }
 
     report.extend(build_index(root)?);
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub fn preflight_delete_page(
@@ -402,7 +402,7 @@ pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Ope
     }
 
     report.extend(build_index(root)?);
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub fn delete_directory(
@@ -447,10 +447,13 @@ pub fn delete_directory(
 
     let mut report = OperationReport::new();
     report.push(OperationEvent::DirectoryDeleted {
-        path: directory_path,
+        path: directory_path.clone(),
     });
 
     for deleted_page in &deleted_pages {
+        report.push(OperationEvent::PageDeleted {
+            path: pages_dir.join(deleted_page),
+        });
         report.extend(unwrap_deleted_page_links(root, deleted_page)?);
     }
 
@@ -474,7 +477,7 @@ pub fn delete_directory(
     }
 
     report.extend(build_index(root)?);
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub fn import_markdown(
@@ -531,7 +534,7 @@ pub fn import_markdown(
         destination,
     });
     report.extend(generated);
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub fn export_page(
@@ -557,7 +560,8 @@ pub fn export_page(
     Ok(OperationReport::from_event(OperationEvent::PageExported {
         page,
         output: output.to_path_buf(),
-    }))
+    })
+    .relative_to(root))
 }
 
 pub fn read_page_source(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<PageSource> {
@@ -589,7 +593,7 @@ pub fn write_page_source(
     let generated = build_index(root)?;
     let mut report = OperationReport::from_event(OperationEvent::PageSourceUpdated { page });
     report.extend(generated);
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub fn extract_page_text(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<String> {
@@ -636,7 +640,7 @@ fn unwrap_deleted_page_links(root: &Path, deleted_path: &str) -> Result<Operatio
         });
     }
 
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 fn rewrite_renamed_page_link_text(
@@ -666,7 +670,7 @@ fn rewrite_renamed_page_link_text(
         });
     }
 
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 fn rewrite_renamed_page_links(
@@ -697,5 +701,5 @@ fn rewrite_renamed_page_links(
         });
     }
 
-    Ok(report)
+    Ok(report.relative_to(root))
 }

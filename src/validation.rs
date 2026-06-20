@@ -86,18 +86,19 @@ pub fn validate_project(root: impl AsRef<Path>) -> Result<OperationReport> {
         project_name: manifest.project_name,
         manifest_path,
     });
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub fn repair_project(root: impl AsRef<Path>) -> Result<OperationReport> {
     let root = root.as_ref();
     let mut report = fix_project(root, RepairMode::Write)?;
     report.extend(validate_project(root)?);
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub fn preflight_repair_project(root: impl AsRef<Path>) -> Result<OperationReport> {
-    fix_project(root.as_ref(), RepairMode::DryRun)
+    let root = root.as_ref();
+    Ok(fix_project(root, RepairMode::DryRun)?.relative_to(root))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,7 +165,7 @@ fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
     }
 
     if !pages_dir.is_dir() {
-        return Ok(report);
+        return Ok(report.relative_to(root));
     }
 
     let mut page_paths = Vec::new();
@@ -186,7 +187,7 @@ fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
         }
     }
 
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 #[cfg(test)]

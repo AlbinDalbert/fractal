@@ -1,7 +1,7 @@
 use crate::FractalError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OperationReport {
@@ -29,6 +29,14 @@ impl OperationReport {
 
     pub fn summary(&self) -> OperationSummary {
         OperationSummary::from_events(&self.events)
+    }
+
+    pub fn relative_to(mut self, root: impl AsRef<Path>) -> Self {
+        let root = root.as_ref();
+        for event in &mut self.events {
+            event.relative_to(root);
+        }
+        self
     }
 }
 
@@ -254,6 +262,77 @@ pub enum OperationEvent {
     Warning {
         message: String,
     },
+}
+
+impl OperationEvent {
+    fn relative_to(&mut self, root: &Path) {
+        match self {
+            OperationEvent::ProjectCreated { path }
+            | OperationEvent::DirectoryCreated { path }
+            | OperationEvent::PageCreated { path }
+            | OperationEvent::PageDeleted { path }
+            | OperationEvent::DirectoryDeleted { path }
+            | OperationEvent::NoteAdded { page: path, .. }
+            | OperationEvent::NoteRemoved { page: path, .. }
+            | OperationEvent::NoteUpdated { page: path, .. }
+            | OperationEvent::PageContentUpdated { page: path }
+            | OperationEvent::PageTitleUpdated { page: path, .. }
+            | OperationEvent::PageMetadataUpdated { page: path, .. }
+            | OperationEvent::PageLinksRewritten { page: path, .. }
+            | OperationEvent::PageSourceUpdated { page: path }
+            | OperationEvent::ManifestUpdated { path }
+            | OperationEvent::ProjectRepaired { path, .. }
+            | OperationEvent::GeneratedIndexBuilt { path }
+            | OperationEvent::GeneratedGraphBuilt { path }
+            | OperationEvent::ProjectValidated {
+                manifest_path: path,
+                ..
+            } => relativize_path(path, root),
+            OperationEvent::PageImported {
+                source,
+                destination,
+            } => {
+                relativize_path(source, root);
+                relativize_path(destination, root);
+            }
+            OperationEvent::PageExported { page, output } => {
+                relativize_path(page, root);
+                relativize_path(output, root);
+            }
+            OperationEvent::PageMoved { from, to } => {
+                relativize_path(from, root);
+                relativize_path(to, root);
+            }
+            OperationEvent::PageLinkImpact { .. }
+            | OperationEvent::SyncCompleted { .. }
+            | OperationEvent::Warning { .. } => {}
+        }
+    }
+}
+
+fn relativize_path(path: &mut PathBuf, root: &Path) {
+    if path.as_os_str().is_empty() {
+        return;
+    }
+
+    if let Ok(relative) = path.strip_prefix(root) {
+        *path = non_empty_relative_path(relative);
+        return;
+    }
+
+    if let Ok(root) = root.canonicalize() {
+        if let Ok(relative) = path.strip_prefix(root) {
+            *path = non_empty_relative_path(relative);
+        }
+    }
+}
+
+fn non_empty_relative_path(path: &Path) -> PathBuf {
+    if path.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        path.to_path_buf()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

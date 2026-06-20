@@ -32,7 +32,7 @@ pub fn add_note(
     let generated = build_index(root)?;
     let mut report = OperationReport::from_event(OperationEvent::NoteAdded { page, note_id });
     report.extend(generated);
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub fn remove_note(
@@ -49,7 +49,7 @@ pub fn remove_note(
     let generated = build_index(root)?;
     let mut report = OperationReport::from_event(OperationEvent::NoteRemoved { page, note_id });
     report.extend(generated);
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub fn patch_note(
@@ -67,7 +67,7 @@ pub fn patch_note(
     let generated = build_index(root)?;
     let mut report = OperationReport::from_event(OperationEvent::NoteUpdated { page, note_id });
     report.extend(generated);
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub(crate) fn note_id_from_trigger(trigger: &str) -> Result<String> {

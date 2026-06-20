@@ -172,7 +172,9 @@ fn init_project_at_uses_explicit_destination_and_project_name() {
 
     assert_eq!(
         report.events,
-        vec![OperationEvent::ProjectCreated { path: root.clone() }]
+        vec![OperationEvent::ProjectCreated {
+            path: PathBuf::from(".")
+        }]
     );
     assert!(!root.join("pages/index.html").exists());
     assert!(root.join(".fractal/style.css").is_file());
@@ -682,7 +684,7 @@ fn validate_fix_repairs_simple_contract_drift_and_unwraps_manual_links() {
     let preflight = preflight_repair_project(project.root()).expect("preflight simple drift");
     assert!(preflight.events.iter().any(|event| matches!(
         event,
-        OperationEvent::ProjectRepaired { path, applied: false } if path.ends_with("pages/index.html")
+        OperationEvent::ProjectRepaired { path, applied: false } if path == Path::new("pages/index.html")
     )));
     let preflight_summary = preflight.summary();
     assert!(!preflight_summary.source_changed);
@@ -951,7 +953,7 @@ fn new_page_rebuilds_index() {
     );
 
     let report = new_page(project.root(), Path::new("secondpage")).expect("create new page");
-    let created_page = project.pages_dir().join("secondpage.html");
+    let created_page = PathBuf::from("pages/secondpage.html");
     assert_eq!(
         report.events.first(),
         Some(&OperationEvent::PageCreated {
@@ -1022,7 +1024,7 @@ fn create_directory_then_create_page_in_directory() {
     assert_eq!(
         report.events,
         vec![OperationEvent::DirectoryCreated {
-            path: project.pages_dir().join("research")
+            path: PathBuf::from("pages/research")
         }]
     );
 
@@ -1558,20 +1560,22 @@ fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
 
     let source = project.pages_dir().join("index.html");
     let destination = project.pages_dir().join("folder/home.html");
+    let source_report_path = PathBuf::from("pages/index.html");
+    let destination_report_path = PathBuf::from("pages/folder/home.html");
     assert!(!source.exists());
     assert!(destination.is_file());
     assert!(report.events.iter().any(|event| {
         matches!(
             event,
             OperationEvent::PageMoved { from, to }
-                if from == &source && to == &destination
+                if from == &source_report_path && to == &destination_report_path
         )
     }));
     assert!(report.events.iter().any(|event| {
         matches!(
             event,
             OperationEvent::PageTitleUpdated { page, title }
-                if page == &destination && title == "Home Base"
+                if page == &destination_report_path && title == "Home Base"
         )
     }));
     assert!(report
@@ -1586,8 +1590,8 @@ fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
     assert!(summary.source_changed);
     assert!(summary.generated_changed);
     assert!(summary.manifest_changed);
-    assert_eq!(summary.moved_paths[0].from, source);
-    assert_eq!(summary.moved_paths[0].to, destination);
+    assert_eq!(summary.moved_paths[0].from, source_report_path);
+    assert_eq!(summary.moved_paths[0].to, destination_report_path);
 
     let html = fs::read_to_string(&destination).expect("read moved page");
     assert!(html.contains("<title>Home Base</title>"));
@@ -1686,8 +1690,27 @@ fn delete_directory_removes_nested_pages_and_rebuilds_index() {
     assert!(!project.pages_dir().join("folder").exists());
     assert!(report.events.iter().any(|event| matches!(
         event,
-        OperationEvent::DirectoryDeleted { path } if path.ends_with("pages/folder")
+        OperationEvent::DirectoryDeleted { path } if path == Path::new("pages/folder")
     )));
+    assert!(report.events.iter().any(|event| matches!(
+        event,
+        OperationEvent::PageDeleted { path } if path == Path::new("pages/folder/rust.html")
+    )));
+    let summary = report.summary();
+    assert_eq!(
+        summary.deleted_paths,
+        vec![
+            PathBuf::from("pages/folder"),
+            PathBuf::from("pages/folder/rust.html")
+        ]
+    );
+    assert_eq!(
+        summary.pages_changed,
+        vec![
+            PathBuf::from("pages/folder/rust.html"),
+            PathBuf::from("pages/index.html")
+        ]
+    );
     assert!(fs::read_to_string(project.pages_dir().join("index.html"))
         .expect("read index")
         .contains("<p>Rust</p>"));
@@ -1809,7 +1832,7 @@ fn delete_page_removes_file_rebuilds_generated_data_and_reports_links() {
                 }]
         )
     }));
-    let deleted_page = project.pages_dir().join("rust.html");
+    let deleted_page = PathBuf::from("pages/rust.html");
     assert!(report.events.iter().any(|event| {
         matches!(
             event,

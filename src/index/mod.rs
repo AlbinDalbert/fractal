@@ -126,7 +126,7 @@ pub(crate) fn write_generated_project_data(
     let mut report = OperationReport::new();
     report.push(write_project_index(root, index)?);
     report.push(write_project_graph(root, &build_project_graph(index))?);
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 fn write_project_index(root: &Path, index: &ProjectIndex) -> Result<OperationEvent> {

@@ -40,7 +40,7 @@ pub fn sync_project(root: impl AsRef<Path>) -> Result<OperationReport> {
     report.push(OperationEvent::SyncCompleted {
         pages_updated: synced,
     });
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub(crate) fn sync_page_links(

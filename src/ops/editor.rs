@@ -180,7 +180,7 @@ pub fn update_editor_page(
     }
 
     report.extend(build_index(root)?);
-    Ok(report)
+    Ok(report.relative_to(root))
 }
 
 pub fn set_page_title(
