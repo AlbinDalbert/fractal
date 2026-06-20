@@ -7,7 +7,7 @@ use crate::types::{
     GraphEdge, GraphNeighborPage, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage,
     LinkEntry, PageGraphEntry, ProjectGraph, ProjectIndex,
 };
-use crate::Result;
+use crate::{FractalError, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -97,22 +97,20 @@ pub fn load_project_graph(root: impl AsRef<Path>) -> Result<ProjectGraph> {
     load_manifest(root)?;
     let graph_path = root.join(WORKSPACE_DIR).join(GRAPH_FILE);
     if !graph_path.is_file() {
-        return Err(format!(
+        return Err(FractalError::not_found(format!(
             "missing graph file: {}. Run `fractal index build` or `fractal sync` first.",
             graph_path.display()
-        )
-        .into());
+        )));
     }
 
     let graph: ProjectGraph = serde_json::from_str(&fs::read_to_string(&graph_path)?)?;
     if graph.version != GRAPH_VERSION {
-        return Err(format!(
+        return Err(FractalError::unsupported_version(format!(
             "unsupported graph version in {}: {} (expected {})",
             graph_path.display(),
             graph.version,
             GRAPH_VERSION
-        )
-        .into());
+        )));
     }
 
     Ok(graph)
@@ -125,7 +123,7 @@ pub fn graph_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Page
         .pages
         .into_iter()
         .find(|entry| entry.path == page_path)
-        .ok_or_else(|| format!("page not found in graph: {page_path}").into())
+        .ok_or_else(|| FractalError::not_found(format!("page not found in graph: {page_path}")))
 }
 
 pub fn orphan_pages(root: impl AsRef<Path>) -> Result<Vec<PageGraphEntry>> {
@@ -188,7 +186,9 @@ pub fn neighbor_pages(
         .map(|entry| (entry.path.clone(), entry))
         .collect::<BTreeMap<_, _>>();
     if !pages.contains_key(&page_path) {
-        return Err(format!("page not found in graph: {page_path}").into());
+        return Err(FractalError::not_found(format!(
+            "page not found in graph: {page_path}"
+        )));
     }
 
     let mut visited = BTreeSet::from([page_path.clone()]);

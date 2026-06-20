@@ -12,7 +12,7 @@ use std::path::Path;
 pub fn project_summary(root: impl AsRef<Path>) -> Result<ProjectSummary> {
     let root = root.as_ref();
     let manifest = load_manifest(root)?;
-    let validation_error = validate_project(root, false).err();
+    let validation_error = validate_project(root).err();
     let index = build_project_index(root).ok();
     let graph = index.as_ref().map(build_project_graph);
 

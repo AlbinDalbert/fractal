@@ -3,8 +3,8 @@ use crate::project::{
     graph_neighbors_report, graph_notes_report, graph_orphans_report, graph_outlinks_report,
     graph_page_report, graph_related_report, import_markdown, init_project_at, list_editor_pages,
     neighbor_pages, new_page, patch_note, read_page_source, remove_note, rename_page,
-    search_report, sync_project, update_editor_page, validate_project, EditorPageUpdate,
-    OperationEvent, OperationReport, PageRename,
+    repair_project, search_report, sync_project, update_editor_page, validate_project,
+    EditorPageUpdate, OperationEvent, OperationReport, PageRename,
 };
 use crate::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -111,12 +111,9 @@ enum Command {
     /// Legacy alias for `project init <path> --name <path>`.
     #[command(hide = true)]
     Init { project_name: String },
-    /// Legacy alias for `project validate` or `project repair`.
+    /// Legacy alias for `project validate`.
     #[command(hide = true)]
-    Validate {
-        #[arg(long)]
-        fix: bool,
-    },
+    Validate,
     /// Legacy alias for `project sync`.
     #[command(hide = true)]
     Sync,
@@ -337,11 +334,11 @@ pub fn run() -> Result<()> {
                 print_report_result(output_format, "project.init", &root, &report)
             }
             ProjectCommand::Validate => {
-                let report = validate_project(&root, false)?;
+                let report = validate_project(&root)?;
                 print_report_result(output_format, "project.validate", &root, &report)
             }
             ProjectCommand::Repair => {
-                let report = validate_project(&root, true)?;
+                let report = repair_project(&root)?;
                 print_report_result(output_format, "project.repair", &root, &report)
             }
             ProjectCommand::Sync => {
@@ -596,18 +593,9 @@ pub fn run() -> Result<()> {
             let report = init_project_at(&path, &project_name)?;
             print_report_result(output_format, "project.init", &root, &report)
         }
-        Command::Validate { fix } => {
-            let report = validate_project(&root, fix)?;
-            print_report_result(
-                output_format,
-                if fix {
-                    "project.repair"
-                } else {
-                    "project.validate"
-                },
-                &root,
-                &report,
-            )
+        Command::Validate => {
+            let report = validate_project(&root)?;
+            print_report_result(output_format, "project.validate", &root, &report)
         }
         Command::Sync => {
             let report = sync_project(&root)?;
@@ -748,6 +736,7 @@ fn print_operation_report(report: &OperationReport) -> Result<()> {
                 project_name,
                 manifest_path.display()
             ),
+            OperationEvent::Warning { message } => println!("warning: {message}"),
         }
     }
     Ok(())

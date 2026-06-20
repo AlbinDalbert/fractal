@@ -7,22 +7,19 @@ use crate::graph::links::{
     is_external_href, link_label_key, normalize_link_label, page_link_labels,
     page_link_text_matches, resolve_page_href,
 };
-use crate::index::{build_project_index, ensure_page_labels_available_for};
+use crate::index::ensure_page_labels_available_for;
 use crate::project::constants::{INDEX_PAGE, MANIFEST_FILE, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR};
 use crate::project::paths::{collect_page_paths, is_html_path, load_manifest};
 use crate::types::{OperationEvent, OperationReport, Theme};
-use crate::Result;
+use crate::{FractalError, Result};
 use kuchiki::NodeRef;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-pub fn validate_project(root: impl AsRef<Path>, fix: bool) -> Result<OperationReport> {
+pub fn validate_project(root: impl AsRef<Path>) -> Result<OperationReport> {
     let root = root.as_ref();
     let mut report = OperationReport::new();
-    if fix {
-        report.extend(fix_project(root)?);
-    }
 
     let manifest_path = root.join(MANIFEST_FILE);
     let workspace_dir = root.join(WORKSPACE_DIR);
@@ -30,21 +27,33 @@ pub fn validate_project(root: impl AsRef<Path>, fix: bool) -> Result<OperationRe
     let manifest = load_manifest(root)?;
 
     if !workspace_dir.is_dir() {
-        return Err(format!("missing workspace directory: {}", workspace_dir.display()).into());
+        return Err(FractalError::invalid_project(format!(
+            "missing workspace directory: {}",
+            workspace_dir.display()
+        )));
     }
 
     let stylesheet = workspace_dir.join(STYLE_FILE);
     if !stylesheet.is_file() {
-        return Err(format!("missing stylesheet: {}", stylesheet.display()).into());
+        return Err(FractalError::invalid_project(format!(
+            "missing stylesheet: {}",
+            stylesheet.display()
+        )));
     }
 
     if !pages_dir.is_dir() {
-        return Err(format!("missing pages directory: {}", pages_dir.display()).into());
+        return Err(FractalError::invalid_project(format!(
+            "missing pages directory: {}",
+            pages_dir.display()
+        )));
     }
 
     let default_page = root.join(&manifest.default_page);
     if !default_page.is_file() {
-        return Err(format!("missing default page: {}", default_page.display()).into());
+        return Err(FractalError::invalid_project(format!(
+            "missing default page: {}",
+            default_page.display()
+        )));
     }
 
     let mut page_paths = Vec::new();
@@ -68,12 +77,19 @@ pub fn validate_project(root: impl AsRef<Path>, fix: bool) -> Result<OperationRe
         )?;
     }
 
-    build_project_index(root)?;
+    report.extend(warn_duplicate_page_labels(&known_page_titles));
 
     report.push(OperationEvent::ValidProject {
         project_name: manifest.project_name,
         manifest_path,
     });
+    Ok(report)
+}
+
+pub fn repair_project(root: impl AsRef<Path>) -> Result<OperationReport> {
+    let root = root.as_ref();
+    let mut report = fix_project(root)?;
+    report.extend(validate_project(root)?);
     Ok(report)
 }
 
@@ -154,22 +170,11 @@ pub(crate) fn validate_page_html_for_project(
 ) -> Result<()> {
     let manifest = load_manifest(root)?;
     let pages_dir = root.join(PAGES_DIR);
-    let mut page_paths = Vec::new();
-    collect_page_paths(&pages_dir, &pages_dir, &mut page_paths)?;
-    if !page_paths.iter().any(|path| path == page_path) {
-        page_paths.push(page_path.to_string());
-    }
-    page_paths.sort();
+    let page_paths = page_paths_for_candidate(root, page_path)?;
     let known_page_paths = known_html_page_paths(&page_paths);
     let document = PageDocument::parse(html);
     let display_path = pages_dir.join(page_path);
-    let mut known_page_titles = known_page_titles(&pages_dir, &page_paths)?;
-    known_page_titles.insert(
-        page_path.to_string(),
-        document
-            .title()
-            .unwrap_or_else(|| page_title_from_path(page_path)),
-    );
+    let known_page_titles = known_page_titles_for_candidate(root, page_path, &document)?;
 
     validate_page_structure(&display_path, page_path, manifest.theme, &document)?;
     validate_note_ids(&display_path, &document)?;
@@ -187,6 +192,34 @@ pub(crate) fn validate_page_html_for_project(
     ensure_page_labels_available_for(root, Some(page_path), page_path, &title)?;
 
     Ok(())
+}
+
+fn warn_duplicate_page_labels(known_page_titles: &BTreeMap<String, String>) -> OperationReport {
+    let mut report = OperationReport::new();
+    let mut owners = BTreeMap::<String, String>::new();
+
+    for (path, title) in known_page_titles {
+        for label in page_link_labels(path, title) {
+            let label = normalize_link_label(&label);
+            if label.is_empty() {
+                continue;
+            }
+            let key = link_label_key(&label);
+            if let Some(existing_path) = owners.get(&key) {
+                if existing_path != path {
+                    report.push(OperationEvent::Warning {
+                        message: format!(
+                            "duplicate page label `{label}` for {existing_path} and {path}; behavior is undefined"
+                        ),
+                    });
+                }
+            } else {
+                owners.insert(key, path.clone());
+            }
+        }
+    }
+
+    report
 }
 
 fn validate_project_page(
@@ -294,12 +327,11 @@ fn validate_page_structure(
 fn validate_head_children(page: &Path, head: &NodeRef) -> Result<()> {
     for child in meaningful_children(head) {
         let Some(element) = child.as_element() else {
-            return Err(format!(
+            return Err(FractalError::invalid_project(format!(
                 "invalid direct head child in {}: {}",
                 page.display(),
                 node_label(&child)
-            )
-            .into());
+            )));
         };
         let name = element.name.local.to_string();
         match name.as_str() {
@@ -311,19 +343,17 @@ fn validate_head_children(page: &Path, head: &NodeRef) -> Result<()> {
                     .split_whitespace()
                     .any(|token| token.eq_ignore_ascii_case("stylesheet"))
                 {
-                    return Err(format!(
+                    return Err(FractalError::invalid_project(format!(
                         "unsupported Fractal head link in {}: rel={rel}",
                         page.display()
-                    )
-                    .into());
+                    )));
                 }
             }
             _ => {
-                return Err(format!(
+                return Err(FractalError::invalid_project(format!(
                     "unsupported Fractal head element in {}: <{name}>",
                     page.display()
-                )
-                .into())
+                )));
             }
         }
     }
@@ -345,27 +375,24 @@ fn validate_body_children(page: &Path, body: &NodeRef) -> Result<()> {
             continue;
         }
 
-        return Err(format!(
+        return Err(FractalError::invalid_project(format!(
             "invalid direct body child in {}: {}",
             page.display(),
             node_label(&child)
-        )
-        .into());
+        )));
     }
 
     if main_count != 1 {
-        return Err(format!(
+        return Err(FractalError::invalid_project(format!(
             "expected exactly one direct main child in {}: found {main_count}",
             page.display()
-        )
-        .into());
+        )));
     }
     if notes_count != 1 {
-        return Err(format!(
+        return Err(FractalError::invalid_project(format!(
             "expected exactly one direct notes section in {}: found {notes_count}",
             page.display()
-        )
-        .into());
+        )));
     }
 
     Ok(())
@@ -375,40 +402,46 @@ fn validate_title_contract(page: &Path, document: &PageDocument, main: &NodeRef)
     let title = single_node(page, document, "title")?;
     let title_text = normalize_link_label(&title.text_contents());
     if title_text.is_empty() {
-        return Err(format!("page title cannot be empty in {}", page.display()).into());
+        return Err(FractalError::invalid_project(format!(
+            "page title cannot be empty in {}",
+            page.display()
+        )));
     }
 
     let children = meaningful_children(main);
     let Some(first_child) = children.first() else {
-        return Err(format!("missing main heading in {}", page.display()).into());
+        return Err(FractalError::invalid_project(format!(
+            "missing main heading in {}",
+            page.display()
+        )));
     };
     if !is_element_named(first_child, "h1") {
-        return Err(format!(
+        return Err(FractalError::invalid_project(format!(
             "main heading must be the first meaningful child in {}",
             page.display()
-        )
-        .into());
+        )));
     }
 
     let h1_count = select_nodes(document, "main h1").len();
     if h1_count != 1 {
-        return Err(format!(
+        return Err(FractalError::invalid_project(format!(
             "expected exactly one main h1 in {}: found {h1_count}",
             page.display()
-        )
-        .into());
+        )));
     }
 
     let heading_text = normalize_link_label(&first_child.text_contents());
     if heading_text.is_empty() {
-        return Err(format!("main heading cannot be empty in {}", page.display()).into());
+        return Err(FractalError::invalid_project(format!(
+            "main heading cannot be empty in {}",
+            page.display()
+        )));
     }
     if title_text != heading_text {
-        return Err(format!(
+        return Err(FractalError::invalid_project(format!(
             "title and main heading differ in {}: `{title_text}` != `{heading_text}`",
             page.display()
-        )
-        .into());
+        )));
     }
 
     Ok(())
@@ -437,11 +470,10 @@ fn validate_required_meta(page: &Path, document: &PageDocument) -> Result<()> {
         }
 
         let Some(content) = attributes.get("content") else {
-            return Err(format!(
+            return Err(FractalError::invalid_project(format!(
                 "missing content for required meta tag in {}: {name}",
                 page.display()
-            )
-            .into());
+            )));
         };
         found
             .entry(name.to_string())
@@ -451,7 +483,10 @@ fn validate_required_meta(page: &Path, document: &PageDocument) -> Result<()> {
 
     for (name, expected_content) in allowed {
         let Some(values) = found.get(name) else {
-            return Err(format!("missing required meta tag in {}: {name}", page.display()).into());
+            return Err(FractalError::invalid_project(format!(
+                "missing required meta tag in {}: {name}",
+                page.display()
+            )));
         };
         if values.len() != 1 {
             return Err(
@@ -459,13 +494,12 @@ fn validate_required_meta(page: &Path, document: &PageDocument) -> Result<()> {
             );
         }
         if name == "fractal:version" && values[0] != expected_content {
-            return Err(format!(
+            return Err(FractalError::invalid_project(format!(
                 "unsupported page format version in {}: {} (expected {})",
                 page.display(),
                 values[0],
                 expected_content
-            )
-            .into());
+            )));
         }
     }
 
@@ -486,11 +520,10 @@ fn validate_stylesheet(page: &Path, page_path: &str, head: &NodeRef) -> Result<(
         });
 
     if !has_expected {
-        return Err(format!(
+        return Err(FractalError::invalid_project(format!(
             "missing exact Fractal stylesheet link in {}: expected {expected}",
             page.display()
-        )
-        .into());
+        )));
     }
 
     Ok(())
@@ -498,16 +531,18 @@ fn validate_stylesheet(page: &Path, page_path: &str, head: &NodeRef) -> Result<(
 
 fn validate_body_theme(page: &Path, theme: Theme, body: &NodeRef) -> Result<()> {
     let Some(element) = body.as_element() else {
-        return Err(format!("body node is not an element in {}", page.display()).into());
+        return Err(FractalError::invalid_project(format!(
+            "body node is not an element in {}",
+            page.display()
+        )));
     };
     let attributes = element.attributes.borrow();
     let expected = theme.as_str();
     if attributes.get("data-fractal-theme") != Some(expected) {
-        return Err(format!(
+        return Err(FractalError::invalid_project(format!(
             "body theme mismatch in {}: expected {expected}",
             page.display()
-        )
-        .into());
+        )));
     }
 
     Ok(())
@@ -516,12 +551,11 @@ fn validate_body_theme(page: &Path, theme: Theme, body: &NodeRef) -> Result<()> 
 fn validate_notes_section(page: &Path, notes_section: &NodeRef) -> Result<()> {
     for child in meaningful_children(notes_section) {
         if !is_fractal_note_aside(&child) {
-            return Err(format!(
+            return Err(FractalError::invalid_project(format!(
                 "invalid notes section child in {}: {}",
                 page.display(),
                 node_label(&child)
-            )
-            .into());
+            )));
         }
         validate_allowed_body_content(page, &child, false)?;
     }
@@ -540,24 +574,32 @@ fn validate_note_ids(page: &Path, document: &PageDocument) -> Result<()> {
     {
         let node = element.as_node().clone();
         if node.parent() != Some(notes_section.clone()) {
-            return Err(format!(
+            return Err(FractalError::invalid_project(format!(
                 "note must be a direct child of the notes section in {}",
                 page.display()
-            )
-            .into());
+            )));
         }
 
         let attributes = element.attributes.borrow();
         let Some(id) = attributes.get("id") else {
-            return Err(format!("missing note id in {}", page.display()).into());
+            return Err(FractalError::invalid_project(format!(
+                "missing note id in {}",
+                page.display()
+            )));
         };
 
         if !is_valid_note_id(id) {
-            return Err(format!("malformed note id in {}: {id}", page.display()).into());
+            return Err(FractalError::invalid_project(format!(
+                "malformed note id in {}: {id}",
+                page.display()
+            )));
         }
 
         if !seen.insert(id.to_string()) {
-            return Err(format!("duplicate note id in {}: {id}", page.display()).into());
+            return Err(FractalError::invalid_project(format!(
+                "duplicate note id in {}: {id}",
+                page.display()
+            )));
         }
     }
 
@@ -582,14 +624,16 @@ fn validate_allowed_body_content(page: &Path, root: &NodeRef, requires_h1: bool)
             continue;
         }
         if name == "h1" {
-            return Err(format!("unexpected h1 in {}", page.display()).into());
+            return Err(FractalError::invalid_project(format!(
+                "unexpected h1 in {}",
+                page.display()
+            )));
         }
         if !is_allowed_body_element(&name) {
-            return Err(format!(
+            return Err(FractalError::invalid_project(format!(
                 "unsupported Fractal body element in {}: <{name}>",
                 page.display()
-            )
-            .into());
+            )));
         }
     }
 
@@ -607,25 +651,26 @@ fn validate_direct_content_children(page: &Path, root: &NodeRef, requires_h1: bo
             .map(|node| is_element_named(node, "h1"))
             .unwrap_or(false)
     {
-        return Err(format!("missing first main h1 in {}", page.display()).into());
+        return Err(FractalError::invalid_project(format!(
+            "missing first main h1 in {}",
+            page.display()
+        )));
     }
 
     for child in children.into_iter().skip(start) {
         let Some(element) = child.as_element() else {
-            return Err(format!(
+            return Err(FractalError::invalid_project(format!(
                 "unsupported direct content node in {}: {}",
                 page.display(),
                 node_label(&child)
-            )
-            .into());
+            )));
         };
         let name = element.name.local.to_string();
         if !is_allowed_body_element(&name) {
-            return Err(format!(
+            return Err(FractalError::invalid_project(format!(
                 "unsupported direct Fractal body element in {}: <{name}>",
                 page.display()
-            )
-            .into());
+            )));
         }
     }
 
@@ -640,12 +685,11 @@ fn validate_list_children(page: &Path, root: &NodeRef) -> Result<()> {
     {
         for child in meaningful_children(&list) {
             if !is_element_named(&child, "li") {
-                return Err(format!(
+                return Err(FractalError::invalid_project(format!(
                     "list children must be li elements in {}: {}",
                     page.display(),
                     node_label(&child)
-                )
-                .into());
+                )));
             }
         }
     }
@@ -674,30 +718,34 @@ fn validate_generated_links(
         let attributes = element.attributes.borrow();
         let scope = attributes.get("data-fractal-link");
         let Some(href) = attributes.get("href") else {
-            return Err(format!("generated link is missing href in {}", page.display()).into());
+            return Err(FractalError::invalid_project(format!(
+                "generated link is missing href in {}",
+                page.display()
+            )));
         };
         let text = normalize_link_label(&element.text_contents());
 
         let Some(scope) = scope else {
-            validate_manual_link(page, page_path, href, &text, known_page_titles)?;
-            return Err(format!("manual link is not valid Fractal in {}", page.display()).into());
+            diagnose_manual_link_target(page, page_path, href, &text, known_page_titles)?;
+            return Err(FractalError::invalid_project(format!(
+                "manual link is not valid Fractal in {}",
+                page.display()
+            )));
         };
 
         match scope {
             "page" => {
                 let Some(target) = resolve_page_href(page_path, href) else {
-                    return Err(format!(
+                    return Err(FractalError::invalid_project(format!(
                         "generated page link does not resolve in {}: {href}",
                         page.display()
-                    )
-                    .into());
+                    )));
                 };
                 if !known_page_paths.contains(&target) {
-                    return Err(format!(
+                    return Err(FractalError::invalid_project(format!(
                         "generated page link target is missing in {}: {href}",
                         page.display()
-                    )
-                    .into());
+                    )));
                 }
                 validate_page_link_text(
                     page,
@@ -710,26 +758,23 @@ fn validate_generated_links(
             }
             "note" => {
                 let Some(note_id) = href.strip_prefix('#') else {
-                    return Err(format!(
+                    return Err(FractalError::invalid_project(format!(
                         "generated note link must target a page-local note in {}: {href}",
                         page.display()
-                    )
-                    .into());
+                    )));
                 };
                 if !note_ids.contains(note_id) {
-                    return Err(format!(
+                    return Err(FractalError::invalid_project(format!(
                         "generated note link target is missing in {}: {href}",
                         page.display()
-                    )
-                    .into());
+                    )));
                 }
             }
             _ => {
-                return Err(format!(
+                return Err(FractalError::invalid_project(format!(
                     "unsupported generated link scope in {}: {scope}",
                     page.display()
-                )
-                .into())
+                )));
             }
         }
     }
@@ -737,7 +782,7 @@ fn validate_generated_links(
     Ok(())
 }
 
-fn validate_manual_link(
+fn diagnose_manual_link_target(
     page: &Path,
     page_path: &str,
     href: &str,
@@ -808,7 +853,10 @@ fn single_node(page: &Path, document: &PageDocument, selector: &str) -> Result<N
 
     match nodes.as_slice() {
         [node] => Ok(node.clone()),
-        [] => Err(format!("missing {label} in {}", page.display()).into()),
+        [] => Err(FractalError::invalid_project(format!(
+            "missing {label} in {}",
+            page.display()
+        ))),
         _ => Err(format!(
             "duplicate {label} in {}: {} found",
             page.display(),
@@ -825,6 +873,36 @@ fn select_nodes(document: &PageDocument, selector: &str) -> Vec<NodeRef> {
         .expect("static selector should parse")
         .map(|element| element.as_node().clone())
         .collect()
+}
+
+pub(crate) fn known_page_titles_for_candidate(
+    root: &Path,
+    page_path: &str,
+    document: &PageDocument,
+) -> Result<BTreeMap<String, String>> {
+    let pages_dir = root.join(PAGES_DIR);
+    let page_paths = page_paths_for_candidate(root, page_path)?;
+    let mut titles = known_page_titles(&pages_dir, &page_paths)?;
+
+    titles.insert(
+        page_path.to_string(),
+        document
+            .title()
+            .unwrap_or_else(|| page_title_from_path(page_path)),
+    );
+
+    Ok(titles)
+}
+
+fn page_paths_for_candidate(root: &Path, page_path: &str) -> Result<Vec<String>> {
+    let pages_dir = root.join(PAGES_DIR);
+    let mut page_paths = Vec::new();
+    collect_page_paths(&pages_dir, &pages_dir, &mut page_paths)?;
+    if !page_paths.iter().any(|path| path == page_path) {
+        page_paths.push(page_path.to_string());
+    }
+    page_paths.sort();
+    Ok(page_paths)
 }
 
 fn known_html_page_paths(page_paths: &[String]) -> BTreeSet<String> {

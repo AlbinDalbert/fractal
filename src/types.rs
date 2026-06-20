@@ -104,6 +104,9 @@ pub enum OperationEvent {
         project_name: String,
         manifest_path: PathBuf,
     },
+    Warning {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -198,7 +201,7 @@ pub struct EditorPageDetail {
     pub body_html: String,
     pub metadata: PageMetadata,
     pub notes: Vec<EditorNoteDetail>,
-    pub links: Vec<LinkEntry>,
+    pub links: Vec<EditorLinkDetail>,
     pub backlinks: Vec<GraphPageLink>,
     pub outlinks: Vec<GraphPageLink>,
 }
@@ -208,6 +211,15 @@ pub struct EditorNoteDetail {
     pub id: String,
     pub label: String,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditorLinkDetail {
+    pub href: String,
+    pub text: String,
+    pub scope: String,
+    pub target_page: Option<String>,
+    pub target_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

@@ -21,10 +21,10 @@ pub use crate::ops::{
     editor_page_detail, list_editor_pages, set_page_title, update_editor_page, update_page_body,
 };
 pub use crate::types::{
-    EditorNoteDetail, EditorPageDetail, EditorPageListEntry, EditorPageUpdate, FileEntry,
-    GraphEdge, GraphNeighborPage, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage,
-    LinkEntry, NoteEntry, OperationEvent, OperationReport, PageDeletePreflight, PageEntry,
-    PageGraphEntry, PageMetadata, PageRename, PageRenamePreflight, PageSource, ProjectGraph,
-    ProjectIndex, ProjectManifest, ProjectSummary, SearchMatch, SearchResult, Theme,
+    EditorLinkDetail, EditorNoteDetail, EditorPageDetail, EditorPageListEntry, EditorPageUpdate,
+    FileEntry, GraphEdge, GraphNeighborPage, GraphNode, GraphNoteLink, GraphPageLink,
+    GraphRelatedPage, LinkEntry, NoteEntry, OperationEvent, OperationReport, PageDeletePreflight,
+    PageEntry, PageGraphEntry, PageMetadata, PageRename, PageRenamePreflight, PageSource,
+    ProjectGraph, ProjectIndex, ProjectManifest, ProjectSummary, SearchMatch, SearchResult, Theme,
 };
-pub use crate::validation::validate_project;
+pub use crate::validation::{repair_project, validate_project};

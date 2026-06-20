@@ -1,9 +1,6 @@
 use crate::document::html::{escape_html, escape_html_attribute};
-use crate::graph::links::{
-    inferred_link_scope, is_external_href, normalize_link_label, note_label_from_id,
-    page_link_text_matches, relative_href, resolve_page_href,
-};
-use crate::types::{LinkEntry, NoteEntry};
+use crate::graph::links::{normalize_link_label, note_label_from_id};
+use crate::types::NoteEntry;
 use crate::Result;
 use kuchiki::traits::*;
 use kuchiki::NodeRef;
@@ -177,68 +174,6 @@ impl PageDocument {
         Ok(true)
     }
 
-    pub(crate) fn repair_invalid_links(
-        &self,
-        page_path: &str,
-        known_page_titles: &BTreeMap<String, String>,
-    ) -> usize {
-        let links = self
-            .document
-            .select("a[href]")
-            .expect("static selector should parse")
-            .map(|element| element.as_node().clone())
-            .collect::<Vec<_>>();
-        let mut repaired = 0;
-
-        for link in links {
-            let Some(element) = link.as_element() else {
-                continue;
-            };
-            let attributes = element.attributes.borrow();
-            let href = attributes.get("href").unwrap_or_default().to_string();
-            let scope = attributes.get("data-fractal-link").map(str::to_string);
-            drop(attributes);
-
-            let text = normalize_link_label(&link.text_contents());
-            let target = (!href.starts_with('#') && !is_external_href(&href))
-                .then(|| resolve_page_href(page_path, &href))
-                .flatten()
-                .and_then(|target_path| {
-                    known_page_titles
-                        .get(&target_path)
-                        .map(|title| (target_path, title.clone()))
-                });
-
-            let should_unwrap = match (scope.as_deref(), target.as_ref()) {
-                (None, _) => true,
-                (Some("page"), Some((target_path, title))) => {
-                    !page_link_text_matches(target_path, title, &text)
-                }
-                _ => false,
-            };
-
-            if !should_unwrap {
-                continue;
-            }
-
-            let suffix = target
-                .as_ref()
-                .filter(|(target_path, title)| !page_link_text_matches(target_path, title, &text))
-                .map(|(_, title)| {
-                    if text.is_empty() {
-                        title.clone()
-                    } else {
-                        format!(" ({title})")
-                    }
-                });
-
-            unwrap_link_node(&link, suffix.as_deref());
-            repaired += 1;
-        }
-
-        repaired
-    }
-
     pub(crate) fn ensure_single_notes_section(&self) -> Result<bool> {
         let sections = self.notes_sections();
         match sections.as_slice() {
@@ -304,7 +239,8 @@ impl PageDocument {
     }
 
     pub(crate) fn set_title(&self, title: &str) -> Result<bool> {
-        let before = self.to_html()?;
+        let mut changed = self.element_text("title").as_deref() != Some(title)
+            || self.element_text("main h1").as_deref() != Some(title);
 
         match self.document.select_first("title").ok() {
             Some(title_element) => replace_children_with_text(title_element.as_node(), title),
@@ -316,6 +252,7 @@ impl PageDocument {
                     "title",
                 )?);
                 head.append(NodeRef::new_text("\n  "));
+                changed = true;
             }
         }
 
@@ -327,14 +264,15 @@ impl PageDocument {
                     &main,
                     parse_document_node(&format!("<h1>{}</h1>", escape_html(title)), "h1")?,
                 );
+                changed = true;
             }
         }
 
-        Ok(before != self.to_html()?)
+        Ok(changed)
     }
 
     pub(crate) fn set_main_body_html(&self, body_html: &str) -> Result<bool> {
-        let before = self.to_html()?;
+        let before = self.main_body_html()?;
         let main = self.main_node()?;
         let heading = direct_child_element(&main, "h1")
             .or_else(|| {
@@ -362,7 +300,7 @@ impl PageDocument {
         }
         main.append(NodeRef::new_text("\n    "));
 
-        Ok(before != self.to_html()?)
+        Ok(before != body_html)
     }
 
     pub(crate) fn title(&self) -> Option<String> {
@@ -431,141 +369,6 @@ impl PageDocument {
         }
 
         notes
-    }
-
-    pub(crate) fn links(&self) -> Vec<LinkEntry> {
-        let mut links = Vec::new();
-
-        for element in self
-            .document
-            .select("a[href]")
-            .expect("static selector should parse")
-        {
-            let attributes = element.attributes.borrow();
-            let Some(href) = attributes.get("href") else {
-                continue;
-            };
-
-            let text = normalize_link_label(&element.text_contents());
-            if text.is_empty() {
-                continue;
-            }
-
-            let scope = attributes
-                .get("data-fractal-link")
-                .map(str::to_string)
-                .unwrap_or_else(|| inferred_link_scope(href).to_string());
-
-            links.push(LinkEntry {
-                href: href.to_string(),
-                text,
-                scope,
-            });
-        }
-
-        links
-    }
-
-    pub(crate) fn rewrite_page_hrefs(
-        &self,
-        from_page: &str,
-        old_target: &str,
-        new_href: &str,
-    ) -> usize {
-        let mut updated = 0;
-
-        for element in self
-            .document
-            .select("a[href]")
-            .expect("static selector should parse")
-        {
-            let mut attributes = element.attributes.borrow_mut();
-            let Some(href) = attributes.get("href") else {
-                continue;
-            };
-
-            if resolve_page_href(from_page, href).as_deref() != Some(old_target) {
-                continue;
-            }
-
-            let rewritten = rewrite_href_path(href, new_href);
-            if rewritten == href {
-                continue;
-            }
-
-            attributes.insert("href", rewritten);
-            updated += 1;
-        }
-
-        updated
-    }
-
-    pub(crate) fn unwrap_generated_page_hrefs(&self, from_page: &str, target_page: &str) -> usize {
-        let links = self
-            .document
-            .select("a[href]")
-            .expect("static selector should parse")
-            .filter(|element| {
-                let attributes = element.attributes.borrow();
-                attributes.get("data-fractal-link") == Some("page")
-                    && attributes
-                        .get("href")
-                        .and_then(|href| resolve_page_href(from_page, href))
-                        .as_deref()
-                        == Some(target_page)
-            })
-            .map(|element| element.as_node().clone())
-            .collect::<Vec<_>>();
-        let count = links.len();
-
-        for link in links {
-            let children = link.children().collect::<Vec<_>>();
-            for child in children {
-                link.insert_before(child);
-            }
-            link.detach();
-        }
-
-        count
-    }
-
-    pub(crate) fn rewrite_relative_page_hrefs_for_move(
-        &self,
-        old_page: &str,
-        new_page: &str,
-    ) -> usize {
-        let mut updated = 0;
-
-        for element in self
-            .document
-            .select("a[href]")
-            .expect("static selector should parse")
-        {
-            let mut attributes = element.attributes.borrow_mut();
-            let Some(href) = attributes.get("href") else {
-                continue;
-            };
-            if href.starts_with('#') {
-                continue;
-            }
-
-            let Some(mut target) = resolve_page_href(old_page, href) else {
-                continue;
-            };
-            if target == old_page {
-                target = new_page.to_string();
-            }
-
-            let rewritten = rewrite_href_path(href, &relative_href(new_page, &target));
-            if rewritten == href {
-                continue;
-            }
-
-            attributes.insert("href", rewritten);
-            updated += 1;
-        }
-
-        updated
     }
 
     pub(crate) fn element_text(&self, selector: &str) -> Option<String> {
@@ -637,17 +440,6 @@ fn direct_child_element(parent: &NodeRef, name: &str) -> Option<NodeRef> {
         .find(|child| is_element_named(child, name))
 }
 
-fn unwrap_link_node(link: &NodeRef, suffix: Option<&str>) {
-    let children = link.children().collect::<Vec<_>>();
-    for child in children {
-        link.insert_before(child);
-    }
-    if let Some(suffix) = suffix {
-        link.insert_before(NodeRef::new_text(suffix));
-    }
-    link.detach();
-}
-
 fn replace_children_with_text(node: &NodeRef, text: &str) {
     for child in node.children().collect::<Vec<_>>() {
         child.detach();
@@ -661,14 +453,6 @@ fn prepend_child(parent: &NodeRef, child: NodeRef) {
     } else {
         parent.append(child);
     }
-}
-
-fn rewrite_href_path(href: &str, path: &str) -> String {
-    let suffix_start = href
-        .char_indices()
-        .find_map(|(index, character)| matches!(character, '?' | '#').then_some(index))
-        .unwrap_or(href.len());
-    format!("{}{}", path, &href[suffix_start..])
 }
 
 fn normalize_extracted_text(text: &str) -> String {

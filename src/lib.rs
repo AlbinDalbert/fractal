@@ -1,14 +1,14 @@
 #[cfg(feature = "cli")]
 pub mod cli;
-mod document;
+pub mod document;
 mod error;
-mod graph;
-mod index;
+pub mod graph;
+pub mod index;
 mod io;
-mod ops;
+pub mod ops;
 pub mod project;
 mod types;
-mod validation;
+pub mod validation;
 
 pub use error::{FractalError, FractalErrorCode};
 

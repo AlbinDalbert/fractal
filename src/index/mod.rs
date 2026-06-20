@@ -10,7 +10,7 @@ use crate::project::paths::{collect_page_paths, file_kind, is_html_path, load_ma
 use crate::types::{
     FileEntry, OperationEvent, OperationReport, PageEntry, ProjectGraph, ProjectIndex,
 };
-use crate::Result;
+use crate::{FractalError, Result};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -26,22 +26,20 @@ pub fn load_project_index(root: impl AsRef<Path>) -> Result<ProjectIndex> {
     load_manifest(root)?;
     let index_path = root.join(WORKSPACE_DIR).join(INDEX_FILE);
     if !index_path.is_file() {
-        return Err(format!(
+        return Err(FractalError::not_found(format!(
             "missing index file: {}. Run `fractal index build` or `fractal sync` first.",
             index_path.display()
-        )
-        .into());
+        )));
     }
 
     let index: ProjectIndex = serde_json::from_str(&fs::read_to_string(&index_path)?)?;
     if index.version != INDEX_VERSION {
-        return Err(format!(
+        return Err(FractalError::unsupported_version(format!(
             "unsupported index version in {}: {} (expected {})",
             index_path.display(),
             index.version,
             INDEX_VERSION
-        )
-        .into());
+        )));
     }
 
     Ok(index)
@@ -54,11 +52,17 @@ pub(crate) fn build_project_index(root: &Path) -> Result<ProjectIndex> {
     let pages_dir = root.join(PAGES_DIR);
 
     if !workspace_dir.is_dir() {
-        return Err(format!("missing workspace directory: {}", workspace_dir.display()).into());
+        return Err(FractalError::invalid_project(format!(
+            "missing workspace directory: {}",
+            workspace_dir.display()
+        )));
     }
 
     if !pages_dir.is_dir() {
-        return Err(format!("missing pages directory: {}", pages_dir.display()).into());
+        return Err(FractalError::invalid_project(format!(
+            "missing pages directory: {}",
+            pages_dir.display()
+        )));
     }
 
     let mut paths = Vec::new();
@@ -171,11 +175,10 @@ fn validate_unique_page_labels(pages: &[PageEntry]) -> Result<()> {
             let key = link_label_key(&label);
             if let Some((existing_label, existing_path)) = owners.get(&key) {
                 if existing_path != &page.path {
-                    return Err(format!(
+                    return Err(FractalError::invalid_project(format!(
                         "duplicate page label `{}` for {} and {} (matches existing label `{}`)",
                         label, existing_path, page.path, existing_label
-                    )
-                    .into());
+                    )));
                 }
                 continue;
             }

@@ -129,13 +129,13 @@ Validation requires:
 - `data-fractal-link="note"` links to resolve to a note in the same page
 - link scopes other than `page` and `note` to be rejected
 
-Manual links are invalid during normal validation. Manual internal page links whose text points at one existing page but names another are reported as label/target mismatches rather than accepted as hidden `href` truth. `validate --fix` may unwrap simple manual links into plain text while preserving their text content; when a manual or generated internal page link points to an existing target but its text does not identify that target, repair unwraps the link and appends the target title in parentheses so a later sync can infer the visible page label.
+Manual links are invalid during normal validation. Manual internal page links whose text points at one existing page but names another are reported as label/target mismatches rather than accepted as hidden `href` truth. `repair` may unwrap simple manual links into plain text while preserving their text content. When a generated internal page link points to an existing target but its text does not identify that target, repair keeps the generated link and rewrites its visible text to the target title.
 
 ## Repair Contract
 
 `validate` is a read/check operation and should not write project files. It may build derived state in memory to check labels, links, and structure.
 
-`validate --fix` may safely repair Fractal-owned scaffold and markers:
+`repair` may safely repair Fractal-owned scaffold and markers:
 
 - create missing `.fractal/`
 - create missing `.fractal/style.css`
@@ -167,3 +167,8 @@ These are not blockers for the Phase 1 baseline, but they should be resolved bef
 - Decide whether a tiny safe inline formatting set such as `strong`, `em`, and `br` should become valid Fractal.
 - Tighten list semantics if desired: validation currently focuses on allowed elements and list children, but the contract should eventually be explicit about whether `li` may appear only inside `ul`/`ol`.
 - Move all page-writing operations behind the Phase 2 mutation/write layer and validate generated HTML consistently before writes.
+
+
+## Page slugs
+
+Page paths accepted by create/rename/import APIs are normalized as kebab-case slugs. Components must be lowercase ASCII letters, digits, and single hyphens; `.html` may be omitted and is added automatically. Parent traversal and non-HTML extensions are rejected. Creating new pages whose generated labels collide with existing pages is rejected. If duplicate labels already exist on disk, validation reports them, but deeper behavior is intentionally undefined until the identity model is finalized.

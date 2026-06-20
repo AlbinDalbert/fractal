@@ -1,8 +1,9 @@
-pub(crate) mod html;
-pub(crate) mod metadata;
-pub(crate) mod notes;
-pub(crate) mod render;
+pub mod html;
+pub mod metadata;
+pub mod notes;
+pub mod render;
 
-mod page;
+pub(crate) mod page;
+mod page_links;
 
 pub(crate) use page::PageDocument;

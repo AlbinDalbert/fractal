@@ -15,13 +15,13 @@ use crate::project::{
     import_markdown, init_project_at, list_editor_pages, load_project_index, load_project_manifest,
     new_page, page_backlinks, page_metadata, page_metadata_report, page_notes, page_outlinks,
     patch_note, preflight_delete_page, preflight_rename_page, project_summary, read_page_source,
-    related_pages, remove_note, rename_page, reset_page_metadata, search_project, search_report,
-    set_page_summary, set_page_tags, set_page_title, sync_project, update_editor_page,
-    update_page_body, validate_project, write_page_source, EditorNoteDetail, EditorPageListEntry,
-    EditorPageUpdate, FileEntry, GraphEdge, GraphNeighborPage, GraphNode, GraphNoteLink,
-    GraphPageLink, GraphRelatedPage, LinkEntry, NoteEntry, OperationEvent, PageEntry,
-    PageGraphEntry, PageRename, ProjectGraph, ProjectIndex, ProjectManifest, SearchMatch,
-    SearchResult, Theme,
+    related_pages, remove_note, rename_page, repair_project, reset_page_metadata, search_project,
+    search_report, set_page_summary, set_page_tags, set_page_title, sync_project,
+    update_editor_page, update_page_body, validate_project, write_page_source, EditorLinkDetail,
+    EditorNoteDetail, EditorPageListEntry, EditorPageUpdate, FileEntry, GraphEdge,
+    GraphNeighborPage, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry,
+    NoteEntry, OperationEvent, PageEntry, PageGraphEntry, PageRename, ProjectGraph, ProjectIndex,
+    ProjectManifest, SearchMatch, SearchResult, Theme,
 };
 use crate::validation::validate_page_metadata;
 use crate::FractalErrorCode;
@@ -520,8 +520,7 @@ fn validate_project_rejects_extra_fractal_meta_tags() {
     );
     project.write_page("index.html", html);
 
-    let error =
-        validate_project(project.root(), false).expect_err("extra fractal meta should fail");
+    let error = validate_project(project.root()).expect_err("extra fractal meta should fail");
     assert!(error.to_string().contains("unsupported Fractal meta tag"));
 }
 
@@ -537,7 +536,7 @@ fn validate_project_rejects_title_heading_mismatch() {
     .replace("<h1>Home</h1>", "<h1>Other</h1>");
     project.write_page("index.html", html);
 
-    let error = validate_project(project.root(), false).expect_err("mismatched title should fail");
+    let error = validate_project(project.root()).expect_err("mismatched title should fail");
     assert!(error.to_string().contains("title and main heading differ"));
 }
 
@@ -554,7 +553,7 @@ fn validate_project_rejects_unsupported_body_elements_and_manual_links() {
         ),
     );
 
-    let error = validate_project(project.root(), false).expect_err("unsupported span should fail");
+    let error = validate_project(project.root()).expect_err("unsupported span should fail");
     assert!(error
         .to_string()
         .contains("unsupported Fractal body element"));
@@ -569,7 +568,7 @@ fn validate_project_rejects_unsupported_body_elements_and_manual_links() {
         ),
     );
 
-    let error = validate_project(project.root(), false).expect_err("manual link should fail");
+    let error = validate_project(project.root()).expect_err("manual link should fail");
     assert!(error
         .to_string()
         .contains("manual link is not valid Fractal"));
@@ -588,8 +587,7 @@ fn validate_project_rejects_broken_generated_links() {
         ),
     );
 
-    let error =
-        validate_project(project.root(), false).expect_err("missing generated target should fail");
+    let error = validate_project(project.root()).expect_err("missing generated target should fail");
     assert!(error
         .to_string()
         .contains("generated page link target is missing"));
@@ -617,8 +615,8 @@ fn validate_project_rejects_page_links_whose_text_does_not_match_the_target() {
         ),
     );
 
-    let error = validate_project(project.root(), false)
-        .expect_err("mismatched generated link text should fail");
+    let error =
+        validate_project(project.root()).expect_err("mismatched generated link text should fail");
     assert!(error
         .to_string()
         .contains("generated page link text does not identify its target"));
@@ -634,8 +632,7 @@ fn validate_project_rejects_page_links_whose_text_does_not_match_the_target() {
         ),
     );
 
-    let error =
-        validate_project(project.root(), false).expect_err("mismatched manual link should fail");
+    let error = validate_project(project.root()).expect_err("mismatched manual link should fail");
     assert!(error
         .to_string()
         .contains("manual page link text does not identify its target"));
@@ -664,13 +661,13 @@ fn validate_fix_rewrites_mismatched_internal_links_to_visible_target_labels() {
         ),
     );
 
-    validate_project(project.root(), true).expect("fix mismatched internal links");
+    repair_project(project.root()).expect("fix mismatched internal links");
 
     let fixed =
         fs::read_to_string(project.pages_dir().join("index.html")).expect("read fixed index page");
-    assert!(!fixed.contains("href=\"rust.html\""));
-    assert!(fixed.contains("the language (Rust)"));
-    assert!(fixed.contains("systems language (Rust)"));
+    assert!(fixed.contains("<a data-fractal-link=\"page\" href=\"rust.html\">Rust</a>"));
+    assert!(!fixed.contains("the language (Rust)"));
+    assert!(!fixed.contains("systems language (Rust)"));
 }
 
 #[test]
@@ -685,7 +682,7 @@ fn validate_fix_repairs_simple_contract_drift_and_unwraps_manual_links() {
     .replace("    <title>Home</title>\n", "");
     project.write_page("index.html", html);
 
-    validate_project(project.root(), true).expect("fix simple drift");
+    repair_project(project.root()).expect("fix simple drift");
 
     let fixed =
         fs::read_to_string(project.pages_dir().join("index.html")).expect("read fixed page");
@@ -741,7 +738,7 @@ fn validate_rejects_unsupported_manifest_version() {
     )
     .expect("write manifest");
 
-    let error = validate_project(root.path(), false).expect_err("unsupported manifest should fail");
+    let error = validate_project(root.path()).expect_err("unsupported manifest should fail");
     assert!(error.to_string().contains("unsupported manifest version"));
 }
 
@@ -767,7 +764,7 @@ fn validate_fix_repairs_missing_project_scaffold_and_page_markers() {
         )
         .expect("write page");
 
-    validate_project(root.path(), true).expect("fix and validate project");
+    repair_project(root.path()).expect("fix and validate project");
 
     assert!(root.join(".fractal/style.css").is_file());
     let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
@@ -812,7 +809,7 @@ fn validate_fix_merges_duplicate_notes_sections() {
     )
     .expect("write page");
 
-    validate_project(root.path(), true).expect("fix and validate project");
+    repair_project(root.path()).expect("fix and validate project");
 
     let html = fs::read_to_string(pages_dir.join("index.html")).expect("read page");
     let document = PageDocument::parse(&html);
@@ -863,7 +860,7 @@ fn validate_ignores_non_html_files_under_pages() {
     .expect("write index page");
     fs::write(pages_dir.join("asset.txt"), "asset").expect("write asset");
 
-    validate_project(root.path(), false).expect("validate project");
+    validate_project(root.path()).expect("validate project");
 }
 
 #[test]
@@ -1006,7 +1003,7 @@ fn editor_page_api_lists_pages_and_returns_detail_data() {
     let project = TestProject::new("editor-page-api");
     let home = render_page_document(
         "Home",
-        "<p><a href=\"rust.html\" data-fractal-link=\"page\">Rust</a> and Java.</p>",
+        "<p><a href=\"rust.html\" data-fractal-link=\"page\">Rust</a> and <a href=\"#note-java\" data-fractal-link=\"note\">Java</a>.</p>",
         Theme::Dark,
         "../.fractal/style.css".to_string(),
     );
@@ -1067,6 +1064,25 @@ fn editor_page_api_lists_pages_and_returns_detail_data() {
             label: "java".to_string(),
             text: "note body".to_string(),
         }]
+    );
+    assert_eq!(
+        detail.links,
+        vec![
+            EditorLinkDetail {
+                href: "rust.html".to_string(),
+                text: "Rust".to_string(),
+                scope: "page".to_string(),
+                target_page: Some("rust.html".to_string()),
+                target_note: None,
+            },
+            EditorLinkDetail {
+                href: "#note-java".to_string(),
+                text: "Java".to_string(),
+                scope: "note".to_string(),
+                target_page: None,
+                target_note: Some("note-java".to_string()),
+            },
+        ]
     );
     assert_eq!(
         detail.outlinks,
@@ -1222,10 +1238,69 @@ fn safe_editor_page_update_mutates_owned_fields_and_rebuilds_index() {
     assert!(detail.body_html.contains("Rust"));
     assert_eq!(
         detail.links,
-        vec![LinkEntry {
+        vec![EditorLinkDetail {
             href: "rust.html".to_string(),
             text: "Rust".to_string(),
             scope: "page".to_string(),
+            target_page: Some("rust.html".to_string()),
+            target_note: None,
+        }]
+    );
+}
+
+#[test]
+fn safe_editor_page_update_repairs_editor_html_links_before_validating() {
+    let project = TestProject::new("safe-editor-repairs-links");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p>Original body.</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    project.write_page(
+        "rust.html",
+        render_page_document(
+            "Rust",
+            "<p>Target page.</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let report = update_editor_page(
+        project.root(),
+        Path::new("index"),
+        EditorPageUpdate {
+            body_html: Some("<p><a href=\"rust.html\">Rust</a> stayed readable.</p>".to_string()),
+            ..EditorPageUpdate::default()
+        },
+    )
+    .expect("repair editor body links");
+
+    assert!(report.events.iter().any(|event| {
+        matches!(
+            event,
+            OperationEvent::UpdatedPageLinks { count, .. } if *count == 1
+        )
+    }));
+
+    let detail = editor_page_detail(project.root(), Path::new("index")).expect("page detail");
+    assert!(detail.body_html.contains("Rust stayed readable."));
+    assert!(detail.links.is_empty());
+
+    sync_project(project.root()).expect("sync generated links");
+    let detail = editor_page_detail(project.root(), Path::new("index")).expect("synced detail");
+    assert_eq!(
+        detail.links,
+        vec![EditorLinkDetail {
+            href: "rust.html".to_string(),
+            text: "Rust".to_string(),
+            scope: "page".to_string(),
+            target_page: Some("rust.html".to_string()),
+            target_note: None,
         }]
     );
 }
@@ -1434,7 +1509,7 @@ fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
             .path,
         "folder/home.html"
     );
-    validate_project(project.root(), false).expect("renamed project validates");
+    validate_project(project.root()).expect("renamed project validates");
 }
 
 #[test]
@@ -1600,7 +1675,7 @@ fn delete_page_removes_file_rebuilds_generated_data_and_reports_links() {
             .collect::<Vec<_>>(),
         vec!["index.html".to_string(), "java.html".to_string()]
     );
-    validate_project(project.root(), false).expect("project validates after delete");
+    validate_project(project.root()).expect("project validates after delete");
 }
 
 #[test]
@@ -1638,7 +1713,7 @@ fn delete_page_updates_manifest_default_when_needed() {
         .events
         .iter()
         .any(|event| matches!(event, OperationEvent::UpdatedProjectManifest { .. })));
-    validate_project(project.root(), false).expect("project validates after default delete");
+    validate_project(project.root()).expect("project validates after default delete");
 }
 
 #[test]
@@ -2168,8 +2243,12 @@ fn index_rejects_duplicate_page_labels_case_insensitively() {
     let error = build_index(project.root()).expect_err("duplicate page labels should fail");
     assert!(error.to_string().contains("duplicate page label"));
 
-    let error = validate_project(project.root(), false).expect_err("duplicate project should fail");
-    assert!(error.to_string().contains("duplicate page label"));
+    let report =
+        validate_project(project.root()).expect("duplicate project validates with warning");
+    assert!(report.events.iter().any(|event| matches!(
+        event,
+        OperationEvent::Warning { message } if message.contains("duplicate page label")
+    )));
 }
 
 #[test]

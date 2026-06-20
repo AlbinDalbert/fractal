@@ -3,16 +3,16 @@ use crate::document::metadata::{
 };
 use crate::document::PageDocument;
 use crate::graph::build_project_graph;
-use crate::graph::links::normalize_link_label;
+use crate::graph::links::{normalize_link_label, page_link_text_matches, resolve_page_href};
 use crate::index::{build_index, build_project_index, ensure_page_labels_available_for};
 use crate::project::paths::{page_relative_path, resolve_existing_page};
 use crate::types::{
-    EditorNoteDetail, EditorPageDetail, EditorPageListEntry, EditorPageUpdate, OperationEvent,
-    OperationReport, PageMetadata, PageSource,
+    EditorLinkDetail, EditorNoteDetail, EditorPageDetail, EditorPageListEntry, EditorPageUpdate,
+    LinkEntry, OperationEvent, OperationReport, PageMetadata, PageSource,
 };
-use crate::validation::validate_page_html_for_project;
+use crate::validation::{known_page_titles_for_candidate, validate_page_html_for_project};
 use crate::Result;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -57,6 +57,11 @@ pub fn editor_page_detail(
     let document = PageDocument::parse(&html);
 
     let index = build_project_index(root)?;
+    let page_titles = index
+        .pages
+        .iter()
+        .map(|page| (page.path.clone(), page.title.clone()))
+        .collect::<BTreeMap<_, _>>();
     let graph = build_project_graph(&index);
     let page_entry = index
         .pages
@@ -77,12 +82,18 @@ pub fn editor_page_detail(
         meta: page_entry.meta,
     };
 
+    let notes = editor_note_details(&document);
+    let note_ids = notes.iter().map(|note| note.id.clone()).collect();
+
     Ok(EditorPageDetail {
-        source: PageSource { path, html },
+        source: PageSource {
+            path: path.clone(),
+            html,
+        },
         body_html: document.main_body_html()?,
         metadata,
-        notes: editor_note_details(&document),
-        links: page_entry.links,
+        notes,
+        links: editor_link_details(&path, page_entry.links, &page_titles, &note_ids),
         backlinks: graph_entry.backlinks,
         outlinks: graph_entry.outlinks,
     })
@@ -117,6 +128,7 @@ pub fn update_editor_page(
         }
     }
 
+    let body_html_was_supplied = update.body_html.is_some();
     if let Some(body_html) = update.body_html {
         if document.set_main_body_html(&body_html)? {
             report.push(OperationEvent::UpdatedPageBody { page: page.clone() });
@@ -141,6 +153,17 @@ pub fn update_editor_page(
                 page: page.clone(),
                 name: TAGS_META.to_string(),
                 content: tags,
+            });
+        }
+    }
+
+    if body_html_was_supplied {
+        let known_page_titles = known_page_titles_for_candidate(root, &path, &document)?;
+        let repaired_links = document.repair_invalid_links(&path, &known_page_titles);
+        if repaired_links > 0 {
+            report.push(OperationEvent::UpdatedPageLinks {
+                page: page.clone(),
+                count: repaired_links,
             });
         }
     }
@@ -199,6 +222,40 @@ fn editor_note_details(document: &PageDocument) -> Vec<EditorNoteDetail> {
                 id: note.id,
                 label: note.label,
                 text,
+            }
+        })
+        .collect()
+}
+
+fn editor_link_details(
+    page_path: &str,
+    links: Vec<LinkEntry>,
+    page_titles: &BTreeMap<String, String>,
+    note_ids: &BTreeSet<String>,
+) -> Vec<EditorLinkDetail> {
+    links
+        .into_iter()
+        .map(|link| {
+            let target_note = link
+                .href
+                .strip_prefix('#')
+                .filter(|note_id| note_ids.contains(*note_id))
+                .map(str::to_string);
+            let target_page = (!link.href.starts_with('#'))
+                .then(|| resolve_page_href(page_path, &link.href))
+                .flatten()
+                .and_then(|target| {
+                    page_titles.get(&target).and_then(|title| {
+                        page_link_text_matches(&target, title, &link.text).then_some(target)
+                    })
+                });
+
+            EditorLinkDetail {
+                href: link.href,
+                text: link.text,
+                scope: link.scope,
+                target_page,
+                target_note,
             }
         })
         .collect()

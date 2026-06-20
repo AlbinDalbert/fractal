@@ -17,7 +17,7 @@ use crate::types::{
     PageSource, ProjectManifest, Theme,
 };
 use crate::validation::validate_page_html_for_project;
-use crate::Result;
+use crate::{FractalError, Result};
 use std::fs;
 use std::path::Path;
 
@@ -37,7 +37,10 @@ pub fn init_project_at(
     let manifest_path = root.join(MANIFEST_FILE);
 
     if root.exists() {
-        return Err(format!("path already exists: {}", root.display()).into());
+        return Err(FractalError::already_exists(format!(
+            "path already exists: {}",
+            root.display()
+        )));
     }
 
     fs::create_dir_all(&pages_dir)?;
@@ -77,7 +80,10 @@ pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Operat
 
     let destination = resolve_page_destination(root, page.as_ref())?;
     if destination.exists() {
-        return Err(format!("page already exists: {}", destination.display()).into());
+        return Err(FractalError::already_exists(format!(
+            "page already exists: {}",
+            destination.display()
+        )));
     }
 
     let title = destination
@@ -132,7 +138,10 @@ pub fn preflight_rename_page(
     }
 
     if path_changed && destination.exists() {
-        return Err(format!("page already exists: {}", destination.display()).into());
+        return Err(FractalError::already_exists(format!(
+            "page already exists: {}",
+            destination.display()
+        )));
     }
 
     let html = fs::read_to_string(&source)?;
@@ -331,7 +340,10 @@ pub fn import_markdown(
         .ok_or("could not derive page name from source file")?;
     let destination = resolve_page_destination(root, Path::new(stem))?;
     if destination.exists() {
-        return Err(format!("page already exists: {}", destination.display()).into());
+        return Err(FractalError::already_exists(format!(
+            "page already exists: {}",
+            destination.display()
+        )));
     }
 
     let (title, body) = markdown_to_html(stem, &markdown);
