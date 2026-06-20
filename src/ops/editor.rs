@@ -5,10 +5,11 @@ use crate::document::PageDocument;
 use crate::graph::build_project_graph;
 use crate::graph::links::{normalize_link_label, page_link_text_matches, resolve_page_href};
 use crate::index::{build_index, build_project_index, ensure_page_labels_available_for};
+use crate::ops::page::rename_page;
 use crate::project::paths::{page_relative_path, resolve_existing_page};
 use crate::types::{
     EditorLinkDetail, EditorNoteDetail, EditorPageDetail, EditorPageListEntry, EditorPageUpdate,
-    LinkEntry, OperationEvent, OperationReport, PageMetadata, PageSource,
+    LinkEntry, OperationEvent, OperationReport, PageMetadata, PageRename, PageSource,
 };
 use crate::validation::{known_page_titles_for_candidate, validate_page_html_for_project};
 use crate::Result;
@@ -183,12 +184,12 @@ pub fn set_page_title(
     page: impl AsRef<Path>,
     title: &str,
 ) -> Result<OperationReport> {
-    update_editor_page(
+    rename_page(
         root,
         page,
-        EditorPageUpdate {
+        PageRename {
+            path: None,
             title: Some(title.to_string()),
-            ..EditorPageUpdate::default()
         },
     )
 }

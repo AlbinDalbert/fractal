@@ -9,8 +9,8 @@ use crate::project::constants::{
     INDEX_PAGE, MANIFEST_FILE, MANIFEST_VERSION, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR,
 };
 use crate::project::paths::{
-    collect_page_paths, is_html_path, load_manifest, page_relative_path, resolve_existing_page,
-    resolve_page_destination,
+    collect_page_paths, is_html_path, load_manifest, page_destination_from_title,
+    page_relative_path, resolve_existing_page, resolve_page_destination,
 };
 use crate::types::{
     OperationEvent, OperationReport, PageDeletePreflight, PageRename, PageRenamePreflight,
@@ -77,8 +77,9 @@ pub fn load_project_manifest(root: impl AsRef<Path>) -> Result<ProjectManifest> 
 pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<OperationReport> {
     let root = root.as_ref();
     let manifest = load_manifest(root)?;
+    let title = normalize_page_title(&page.as_ref().to_string_lossy())?;
 
-    let destination = resolve_page_destination(root, page.as_ref())?;
+    let destination = page_destination_from_title(root, &title)?;
     if destination.exists() {
         return Err(FractalError::already_exists(format!(
             "page already exists: {}",
@@ -86,15 +87,10 @@ pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Operat
         )));
     }
 
-    let title = destination
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .ok_or("could not derive page title from destination path")?;
-
     let pages_dir = root.join(PAGES_DIR);
     let relative_page = destination.strip_prefix(&pages_dir)?;
     let relative_page_string = relative_page.to_string_lossy().replace('\\', "/");
-    ensure_page_labels_available(root, &relative_page_string, title)?;
+    ensure_page_labels_available(root, &relative_page_string, &title)?;
 
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
@@ -103,7 +99,7 @@ pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Operat
     fs::write(
         &destination,
         render_page_document(
-            title,
+            &title,
             "<p>New Fractal page.</p>",
             manifest.theme,
             stylesheet_href(relative_page),
@@ -125,8 +121,18 @@ pub fn preflight_rename_page(
     let source = resolve_existing_page(root, page.as_ref())?;
     let source_relative = page_relative_path(root, &source)?;
     let source_page = source_relative.to_string_lossy().replace('\\', "/");
+    let html = fs::read_to_string(&source)?;
+    let document = PageDocument::parse(&html);
+    let current_title = document
+        .title()
+        .unwrap_or_else(|| page_label_from_path(&source_page));
+    let title = match rename.title.as_deref() {
+        Some(title) => normalize_page_title(title)?,
+        None => current_title.clone(),
+    };
     let destination = match rename.path.as_deref() {
         Some(path) => resolve_page_destination(root, path)?,
+        None if rename.title.is_some() => page_destination_from_title(root, &title)?,
         None => source.clone(),
     };
     let destination_relative = page_relative_path(root, &destination)?;
@@ -137,24 +143,28 @@ pub fn preflight_rename_page(
         return Err("rename requires a new page path, a new title, or both".into());
     }
 
+    ensure_page_labels_available_for(root, Some(&source_page), &destination_page, &title)?;
+
     if path_changed && destination.exists() {
+        let existing_page = destination_page.clone();
+        if let Ok(existing_html) = fs::read_to_string(&destination) {
+            let existing_title = PageDocument::parse(&existing_html)
+                .title()
+                .unwrap_or_else(|| page_label_from_path(&existing_page));
+            if normalize_link_label(&existing_title).to_lowercase()
+                == normalize_link_label(&title).to_lowercase()
+            {
+                return Err(FractalError::invalid_project(format!(
+                    "duplicate page label `{}` for {} and {} (matches existing label `{}`)",
+                    title, existing_page, source_page, existing_title
+                )));
+            }
+        }
         return Err(FractalError::already_exists(format!(
             "page already exists: {}",
             destination.display()
         )));
     }
-
-    let html = fs::read_to_string(&source)?;
-    let document = PageDocument::parse(&html);
-    let current_title = document
-        .title()
-        .unwrap_or_else(|| page_label_from_path(&source_page));
-    let title = match rename.title.as_deref() {
-        Some(title) => normalize_page_title(title)?,
-        None => current_title.clone(),
-    };
-
-    ensure_page_labels_available_for(root, Some(&source_page), &destination_page, &title)?;
 
     let index = build_project_index(root)?;
     let graph = build_project_graph(&index);
@@ -237,6 +247,13 @@ pub fn rename_page(
             root,
             &preflight.source_page,
             &preflight.destination_page,
+        )?);
+    }
+    if title_changed {
+        report.extend(rewrite_renamed_page_link_text(
+            root,
+            &preflight.destination_page,
+            &preflight.title,
         )?);
     }
 
@@ -464,6 +481,36 @@ fn unwrap_deleted_page_links(root: &Path, deleted_path: &str) -> Result<Operatio
         let html = fs::read_to_string(&page)?;
         let document = PageDocument::parse(&html);
         let updated = document.unwrap_generated_page_hrefs(&page_path, deleted_path);
+        if updated == 0 {
+            continue;
+        }
+
+        fs::write(&page, document.to_html()?)?;
+        report.push(OperationEvent::UpdatedPageLinks {
+            page,
+            count: updated,
+        });
+    }
+
+    Ok(report)
+}
+
+fn rewrite_renamed_page_link_text(
+    root: &Path,
+    destination_path: &str,
+    title: &str,
+) -> Result<OperationReport> {
+    let pages_dir = root.join(PAGES_DIR);
+    let mut page_paths = Vec::new();
+    collect_page_paths(&pages_dir, &pages_dir, &mut page_paths)?;
+    page_paths.sort();
+
+    let mut report = OperationReport::new();
+    for page_path in page_paths.into_iter().filter(|path| is_html_path(path)) {
+        let page = pages_dir.join(&page_path);
+        let html = fs::read_to_string(&page)?;
+        let document = PageDocument::parse(&html);
+        let updated = document.rewrite_page_link_text(&page_path, destination_path, title);
         if updated == 0 {
             continue;
         }

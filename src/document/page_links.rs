@@ -91,6 +91,40 @@ impl PageDocument {
         links
     }
 
+    pub(crate) fn rewrite_page_link_text(
+        &self,
+        from_page: &str,
+        target_page: &str,
+        title: &str,
+    ) -> usize {
+        let mut updated = 0;
+
+        for element in self
+            .document
+            .select("a[href][data-fractal-link=page]")
+            .expect("static selector should parse")
+        {
+            let attributes = element.attributes.borrow();
+            let Some(href) = attributes.get("href") else {
+                continue;
+            };
+
+            if resolve_page_href(from_page, href).as_deref() != Some(target_page) {
+                continue;
+            }
+
+            let text = normalize_link_label(&element.text_contents());
+            if page_link_text_matches(target_page, title, &text) {
+                continue;
+            }
+
+            replace_children_with_text(element.as_node(), title);
+            updated += 1;
+        }
+
+        updated
+    }
+
     pub(crate) fn rewrite_page_hrefs(
         &self,
         from_page: &str,

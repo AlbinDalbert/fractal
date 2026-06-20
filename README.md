@@ -58,7 +58,7 @@ Raw source APIs remain escape hatches. `read_page_source` and `write_page_source
 
 Fractal treats links as generated project structure, not as something users should have to maintain by hand. The current rule is intentionally strict: a link can be inferred only from a known, unique label in the project index.
 
-Page labels are derived from page titles and filename stems. Matching is normalized and case-insensitive, so `Rust`, `rust`, and `RUST` are the same label for linking and validation purposes. Two pages may not expose the same label, even if they are stored in different folders. Creating or importing a page with a duplicate label should fail before writing the new page, and manually-added duplicates should make validation or indexing fail. A page link is only valid when its visible text identifies the target by one of these labels; the `href` is not allowed to become a hidden second source of truth.
+Page labels are derived from page titles. Matching is normalized and case-insensitive, so `Rust`, `rust`, and `RUST` are the same label for linking and validation purposes. Two pages may not expose the same title label, even if they are stored in different folders. Creating or importing a page with a duplicate title label should fail before writing the new page, and manually-added duplicates should make validation or indexing fail. A page link is only valid when its visible text identifies the target by its title; the `href` is not allowed to become a hidden second source of truth.
 
 Unknown prose is not an unresolved link candidate. If a word or phrase does not match a known page label or page-local note trigger, Fractal leaves it as ordinary text.
 
@@ -77,7 +77,7 @@ fractal index build
 
 fractal page list
 fractal page read <page/path> [--view agent|metadata|source]
-fractal page create <page/path>
+fractal page create <title>
 fractal page set <page/path> [--title <title>] [--summary <summary>] [--tag <tag>...] [--body-file <path>]
 fractal page move <page/path> --to <new-page/path> [--title <title>]
 fractal page delete <page/path> --yes
@@ -141,7 +141,7 @@ my-project/
 - `graph notes <page/path>` prints notes contained by the page from the generated graph's `contains_note` edges.
 - `graph orphans` reads `.fractal/graph.json` and lists pages with no backlinks.
 - `sync` rebuilds `.fractal/index.json` and `.fractal/graph.json`, updates each page's note links inside its own `<main>`, then links remaining matching page-title/page-stem text against the project index. It rebuilds both generated data files again after the page rewrites so generated links are reflected.
-- `page new` creates a new HTML page under `pages/`, adds `.html` automatically when omitted, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
+- `page new` / `page create` creates a new HTML page from the requested title, normalizes that title to a lowercase kebab-case filename under `pages/`, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
 - `page <page/path> extract` prints compact text extracted from the page's `<main>`.
 - `page <page/path> meta show/set-summary/set-tags/reset` reads and mutates Fractal-owned page metadata using parser-backed HTML operations, normalizes comma-separated or repeated tags, and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
 - `page <page/path> note add/remove/patch` mutates notes in the requested page using parser-backed HTML operations and rebuilds `.fractal/index.json` and `.fractal/graph.json`.
@@ -186,13 +186,13 @@ Trigger text is normalized into the note id. For example, `Andromeda Galaxy` bec
 <a href="#note-java" data-fractal-link="note">Java</a>
 ```
 
-After note links are applied, `sync` uses the project index for project-scope links between pages. Page title/stem labels are case-insensitive and must resolve to exactly one page; duplicate page labels are invalid for now.
+After note links are applied, `sync` uses the project index for project-scope links between pages. Page title labels are case-insensitive and must resolve to exactly one page; duplicate page title labels are invalid for now.
 
 ```html
 <a href="subpage.html" data-fractal-link="page">Subpage</a>
 ```
 
-Generated links are marked with `data-fractal-link`, so rerunning `sync` can replace Fractal-managed links. Manual `<a>` links are not part of valid Fractal pages yet; `validate` rejects them, and it rejects generated page links whose visible text does not match the target page title or filename stem. `repair` may unwrap simple manual links into plain text. Generated internal page links whose text drifted from their target are repaired to show the target title.
+Generated links are marked with `data-fractal-link`, so rerunning `sync` can replace Fractal-managed links. Manual `<a>` links are not part of valid Fractal pages yet; `validate` rejects them, and it rejects generated page links whose visible text does not match the target page title. `repair` may unwrap simple manual links into plain text. Generated internal page links whose text drifted from their target are repaired to show the target title.
 
 `.fractal/index.json` and `.fractal/graph.json` are generated data and include schema versions. They can be regenerated with `fractal index build` or `fractal sync`; graph query commands reject unsupported graph versions rather than guessing.
 

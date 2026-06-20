@@ -14,14 +14,14 @@ use crate::project::{
     graph_backlinks_report, graph_notes_report, graph_outlinks_report, graph_related_report,
     import_markdown, init_project_at, list_editor_pages, load_project_index, load_project_manifest,
     new_page, page_backlinks, page_metadata, page_metadata_report, page_notes, page_outlinks,
-    patch_note, preflight_delete_page, preflight_rename_page, project_summary, read_page_source,
-    related_pages, remove_note, rename_page, repair_project, reset_page_metadata, search_project,
-    search_report, set_page_summary, set_page_tags, set_page_title, sync_project,
-    update_editor_page, update_page_body, validate_project, write_page_source, EditorLinkDetail,
-    EditorNoteDetail, EditorPageListEntry, EditorPageUpdate, FileEntry, GraphEdge,
-    GraphNeighborPage, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry,
-    NoteEntry, OperationEvent, PageEntry, PageGraphEntry, PageRename, ProjectGraph, ProjectIndex,
-    ProjectManifest, SearchMatch, SearchResult, Theme,
+    patch_note, preflight_delete_page, preflight_rename_page, preflight_repair_project,
+    project_summary, read_page_source, related_pages, remove_note, rename_page, repair_project,
+    reset_page_metadata, search_project, search_report, set_page_summary, set_page_tags,
+    set_page_title, sync_project, update_editor_page, update_page_body, validate_project,
+    write_page_source, EditorLinkDetail, EditorNoteDetail, EditorPageListEntry, EditorPageUpdate,
+    FileEntry, GraphEdge, GraphNeighborPage, GraphNode, GraphNoteLink, GraphPageLink,
+    GraphRelatedPage, LinkEntry, NoteEntry, OperationEvent, PageEntry, PageGraphEntry, PageRename,
+    ProjectGraph, ProjectIndex, ProjectManifest, SearchMatch, SearchResult, Theme,
 };
 use crate::validation::validate_page_metadata;
 use crate::FractalErrorCode;
@@ -682,6 +682,16 @@ fn validate_fix_repairs_simple_contract_drift_and_unwraps_manual_links() {
     .replace("    <title>Home</title>\n", "");
     project.write_page("index.html", html);
 
+    let preflight = preflight_repair_project(project.root()).expect("preflight simple drift");
+    assert!(preflight.events.iter().any(|event| matches!(
+        event,
+        OperationEvent::Fixed { path } if path.ends_with("pages/index.html")
+    )));
+    let preview =
+        fs::read_to_string(project.pages_dir().join("index.html")).expect("read preview page");
+    assert!(!preview.contains("<title>Home</title>"));
+    assert!(preview.contains("href=\"wrong.css\""));
+
     repair_project(project.root()).expect("fix simple drift");
 
     let fixed =
@@ -886,6 +896,29 @@ fn page_destination_rejects_parent_traversal() {
 
     assert_eq!(error.code, FractalErrorCode::InvalidInput);
     assert_eq!(error.to_string(), "page path cannot contain `..`");
+}
+
+#[test]
+fn page_destination_accepts_lowercase_unicode_and_underscores() {
+    let destination = resolve_page_destination(Path::new("."), Path::new("göteborg/my_new_page"))
+        .expect("resolve destination");
+
+    assert_eq!(
+        destination,
+        PathBuf::from("./pages/göteborg/my_new_page.html")
+    );
+}
+
+#[test]
+fn page_destination_rejects_uppercase_unicode() {
+    let error = resolve_page_destination(Path::new("."), Path::new("Göteborg"))
+        .expect_err("uppercase page path should be rejected");
+
+    assert_eq!(error.code, FractalErrorCode::InvalidInput);
+    assert_eq!(
+        error.to_string(),
+        "page path component must be a lowercase page slug: Göteborg"
+    );
 }
 
 #[test]

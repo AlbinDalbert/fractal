@@ -88,30 +88,52 @@ pub fn validate_project(root: impl AsRef<Path>) -> Result<OperationReport> {
 
 pub fn repair_project(root: impl AsRef<Path>) -> Result<OperationReport> {
     let root = root.as_ref();
-    let mut report = fix_project(root)?;
+    let mut report = fix_project(root, RepairMode::Write)?;
     report.extend(validate_project(root)?);
     Ok(report)
 }
 
-fn fix_project(root: &Path) -> Result<OperationReport> {
+pub fn preflight_repair_project(root: impl AsRef<Path>) -> Result<OperationReport> {
+    fix_project(root.as_ref(), RepairMode::DryRun)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepairMode {
+    DryRun,
+    Write,
+}
+
+impl RepairMode {
+    fn writes(self) -> bool {
+        matches!(self, Self::Write)
+    }
+}
+
+fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
     let manifest = load_manifest(root)?;
     let workspace_dir = root.join(WORKSPACE_DIR);
     let pages_dir = root.join(PAGES_DIR);
     let mut report = OperationReport::new();
 
-    fs::create_dir_all(&workspace_dir)?;
-    fs::create_dir_all(&pages_dir)?;
+    if mode.writes() {
+        fs::create_dir_all(&workspace_dir)?;
+        fs::create_dir_all(&pages_dir)?;
+    }
 
     let stylesheet = workspace_dir.join(STYLE_FILE);
     if !stylesheet.is_file() {
-        fs::write(&stylesheet, default_stylesheet())?;
+        if mode.writes() {
+            fs::write(&stylesheet, default_stylesheet())?;
+        }
         report.push(OperationEvent::Fixed { path: stylesheet });
     }
 
     let default_page = root.join(&manifest.default_page);
     if !default_page.is_file() {
-        if let Some(parent) = default_page.parent() {
-            fs::create_dir_all(parent)?;
+        if mode.writes() {
+            if let Some(parent) = default_page.parent() {
+                fs::create_dir_all(parent)?;
+            }
         }
 
         let title = default_page
@@ -121,18 +143,24 @@ fn fix_project(root: &Path) -> Result<OperationReport> {
         let page_path = default_page
             .strip_prefix(&pages_dir)
             .unwrap_or_else(|_| Path::new(INDEX_PAGE));
-        fs::write(
-            &default_page,
-            render_page_document(
-                title,
-                "<p>Fractal project scaffold.</p>",
-                manifest.theme,
-                stylesheet_href(page_path),
-            ),
-        )?;
+        if mode.writes() {
+            fs::write(
+                &default_page,
+                render_page_document(
+                    title,
+                    "<p>Fractal project scaffold.</p>",
+                    manifest.theme,
+                    stylesheet_href(page_path),
+                ),
+            )?;
+        }
         report.push(OperationEvent::Fixed {
             path: default_page.clone(),
         });
+    }
+
+    if !pages_dir.is_dir() {
+        return Ok(report);
     }
 
     let mut page_paths = Vec::new();
@@ -146,7 +174,7 @@ fn fix_project(root: &Path) -> Result<OperationReport> {
         }
 
         let page = pages_dir.join(&page_path);
-        if fix_page(&page, &page_path, manifest.theme, &known_page_titles)? {
+        if fix_page(&page, &page_path, manifest.theme, &known_page_titles, mode)? {
             report.push(OperationEvent::Fixed { path: page });
         }
     }
@@ -247,6 +275,7 @@ fn fix_page(
     page_path: &str,
     theme: Theme,
     known_page_titles: &BTreeMap<String, String>,
+    mode: RepairMode,
 ) -> Result<bool> {
     let document = PageDocument::from_path(page)?;
     let mut changed = false;
@@ -277,7 +306,7 @@ fn fix_page(
         changed = true;
     }
 
-    if changed {
+    if changed && mode.writes() {
         fs::write(page, document.to_html()?)?;
     }
 

@@ -125,7 +125,7 @@ Validation requires:
 - every `<a>` to have `data-fractal-link`
 - every generated link to have `href`
 - `data-fractal-link="page"` links to resolve to a known project page
-- page-link text to identify that target by one of its implicit labels, currently the page title or filename stem, case-insensitively
+- page-link text to identify that target by its page title, case-insensitively
 - `data-fractal-link="note"` links to resolve to a note in the same page
 - link scopes other than `page` and `note` to be rejected
 
@@ -169,6 +169,8 @@ These are not blockers for the Phase 1 baseline, but they should be resolved bef
 - Move all page-writing operations behind the Phase 2 mutation/write layer and validate generated HTML consistently before writes.
 
 
-## Page slugs
+## Page titles and slugs
 
-Page paths accepted by create/rename/import APIs are normalized as kebab-case slugs. Components must be lowercase ASCII letters, digits, and single hyphens; `.html` may be omitted and is added automatically. Parent traversal and non-HTML extensions are rejected. Creating new pages whose generated labels collide with existing pages is rejected. If duplicate labels already exist on disk, validation reports them, but deeper behavior is intentionally undefined until the identity model is finalized.
+Page titles are the human-facing source of truth for implicit page links. Create APIs accept a title, normalize it to a lowercase kebab-case filename, and store that file under `pages/`. Changing a page title is a rename operation: by default the file path moves to the slug derived from the new title, generated links to that page are repaired, and generated link text is updated to the new title.
+
+Explicit move/import APIs may still accept page paths. Page path components must be lowercase slugs; components may contain lowercase Unicode letters, ASCII digits, single hyphens, and single underscores; `.html` may be omitted and is added automatically. Parent traversal and non-HTML extensions are rejected. Creating new pages whose title labels collide with existing pages is rejected. If duplicate title labels already exist on disk, validation reports them.

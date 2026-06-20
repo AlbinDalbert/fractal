@@ -44,6 +44,38 @@ pub(crate) fn resolve_page_destination(root: &Path, page: &Path) -> Result<PathB
     Ok(root.join(PAGES_DIR).join(relative))
 }
 
+pub(crate) fn page_destination_from_title(root: &Path, title: &str) -> Result<PathBuf> {
+    let slug = page_slug_from_title(title)?;
+    resolve_page_destination(root, Path::new(&slug))
+}
+
+pub(crate) fn page_slug_from_title(title: &str) -> Result<String> {
+    let mut slug = String::new();
+    let mut previous_separator = false;
+
+    for character in title.trim().to_lowercase().chars() {
+        if character.is_ascii_digit() || (character.is_alphabetic() && character.is_lowercase()) {
+            slug.push(character);
+            previous_separator = false;
+        } else if (character.is_whitespace() || matches!(character, '-' | '_' | '/'))
+            && !slug.is_empty()
+            && !previous_separator
+        {
+            slug.push('-');
+            previous_separator = true;
+        }
+    }
+
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        return Err(FractalError::invalid_input(
+            "page title must contain linkable text",
+        ));
+    }
+
+    Ok(slug)
+}
+
 pub(crate) fn resolve_existing_page(root: &Path, page: &Path) -> Result<PathBuf> {
     let destination = resolve_page_reference(root, page)?;
     if !destination.is_file() {
@@ -134,19 +166,25 @@ fn validate_slug_component(component: &OsStr) -> Result<()> {
 
     let stem = component.strip_suffix(".html").unwrap_or(component);
     if stem.is_empty()
-        || stem.starts_with('-')
-        || stem.ends_with('-')
+        || stem.starts_with(['-', '_'])
+        || stem.ends_with(['-', '_'])
         || stem.contains("--")
-        || !stem.chars().all(|character| {
-            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-        })
+        || stem.contains("__")
+        || !stem.chars().all(is_page_slug_character)
     {
         return Err(FractalError::invalid_input(format!(
-            "page path component must be a kebab-case slug: {component}"
+            "page path component must be a lowercase page slug: {component}"
         )));
     }
 
     Ok(())
+}
+
+fn is_page_slug_character(character: char) -> bool {
+    character == '-'
+        || character == '_'
+        || character.is_ascii_digit()
+        || (character.is_alphabetic() && character.is_lowercase())
 }
 
 pub(crate) fn collect_page_paths(

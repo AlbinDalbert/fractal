@@ -27,4 +27,4 @@ pub use crate::types::{
     PageEntry, PageGraphEntry, PageMetadata, PageRename, PageRenamePreflight, PageSource,
     ProjectGraph, ProjectIndex, ProjectManifest, ProjectSummary, SearchMatch, SearchResult, Theme,
 };
-pub use crate::validation::{repair_project, validate_project};
+pub use crate::validation::{preflight_repair_project, repair_project, validate_project};

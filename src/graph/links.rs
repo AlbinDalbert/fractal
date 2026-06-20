@@ -27,8 +27,8 @@ pub(crate) fn page_label_from_path(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-pub(crate) fn page_link_labels(path: &str, title: &str) -> [String; 2] {
-    [normalize_link_label(title), page_label_from_path(path)]
+pub(crate) fn page_link_labels(_path: &str, title: &str) -> [String; 1] {
+    [normalize_link_label(title)]
 }
 
 pub(crate) fn page_link_text_matches(path: &str, title: &str, text: &str) -> bool {
