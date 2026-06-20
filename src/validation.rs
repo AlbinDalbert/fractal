@@ -82,7 +82,7 @@ pub fn validate_project(root: impl AsRef<Path>) -> Result<OperationReport> {
 
     report.extend(warn_duplicate_page_labels(&known_page_titles));
 
-    report.push(OperationEvent::ValidProject {
+    report.push(OperationEvent::ProjectValidated {
         project_name: manifest.project_name,
         manifest_path,
     });
@@ -128,7 +128,10 @@ fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
         if mode.writes() {
             atomic_write(&stylesheet, default_stylesheet())?;
         }
-        report.push(OperationEvent::Fixed { path: stylesheet });
+        report.push(OperationEvent::ProjectRepaired {
+            path: stylesheet,
+            applied: mode.writes(),
+        });
     }
 
     if !manifest.default_page.trim().is_empty() {
@@ -153,8 +156,9 @@ fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
                     render_page_document(title, "", manifest.theme, stylesheet_href(page_path)),
                 )?;
             }
-            report.push(OperationEvent::Fixed {
+            report.push(OperationEvent::ProjectRepaired {
                 path: default_page.clone(),
+                applied: mode.writes(),
             });
         }
     }
@@ -175,7 +179,10 @@ fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
 
         let page = pages_dir.join(&page_path);
         if fix_page(&page, &page_path, manifest.theme, &known_page_titles, mode)? {
-            report.push(OperationEvent::Fixed { path: page });
+            report.push(OperationEvent::ProjectRepaired {
+                path: page,
+                applied: mode.writes(),
+            });
         }
     }
 

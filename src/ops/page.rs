@@ -57,9 +57,11 @@ pub fn init_project_at(
     atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
     atomic_write(workspace_dir.join(STYLE_FILE), default_stylesheet())?;
 
-    Ok(OperationReport::from_event(OperationEvent::Created {
-        path: root.to_path_buf(),
-    }))
+    Ok(OperationReport::from_event(
+        OperationEvent::ProjectCreated {
+            path: root.to_path_buf(),
+        },
+    ))
 }
 
 pub fn load_project_manifest(root: impl AsRef<Path>) -> Result<ProjectManifest> {
@@ -99,7 +101,7 @@ pub fn create_directory(
 
     fs::create_dir(&destination)?;
     Ok(OperationReport::from_event(
-        OperationEvent::AddedDirectory { path: destination },
+        OperationEvent::DirectoryCreated { path: destination },
     ))
 }
 
@@ -133,16 +135,20 @@ pub fn create_page(root: impl AsRef<Path>, page: PageCreate) -> Result<Operation
         &destination,
         render_page_document(&title, "", manifest.theme, stylesheet_href(relative_page)),
     )?;
-    if manifest.default_page.trim().is_empty() {
+    let updated_manifest = if manifest.default_page.trim().is_empty() {
         manifest.default_page = format!("{PAGES_DIR}/{relative_page_string}");
-        atomic_write(
-            root.join(MANIFEST_FILE),
-            serde_json::to_string_pretty(&manifest)?,
-        )?;
-    }
+        let manifest_path = root.join(MANIFEST_FILE);
+        atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+        Some(manifest_path)
+    } else {
+        None
+    };
 
     let generated = build_index(root)?;
-    let mut report = OperationReport::from_event(OperationEvent::Created { path: destination });
+    let mut report = OperationReport::from_event(OperationEvent::PageCreated { path: destination });
+    if let Some(path) = updated_manifest {
+        report.push(OperationEvent::ManifestUpdated { path });
+    }
     report.extend(generated);
     Ok(report)
 }
@@ -283,19 +289,19 @@ pub fn rename_page(
 
     let mut report = OperationReport::new();
     if preflight.path_changed {
-        report.push(OperationEvent::MovedPage {
+        report.push(OperationEvent::PageMoved {
             from: preflight.source_path.clone(),
             to: preflight.destination_path.clone(),
         });
     }
     if title_changed {
-        report.push(OperationEvent::UpdatedPageTitle {
+        report.push(OperationEvent::PageTitleUpdated {
             page: preflight.destination_path.clone(),
             title: preflight.title.clone(),
         });
     }
     if moved_page_link_updates > 0 {
-        report.push(OperationEvent::UpdatedPageLinks {
+        report.push(OperationEvent::PageLinksRewritten {
             page: preflight.destination_path.clone(),
             count: moved_page_link_updates,
         });
@@ -320,7 +326,7 @@ pub fn rename_page(
         manifest.default_page = format!("{PAGES_DIR}/{}", preflight.destination_page);
         let manifest_path = root.join(MANIFEST_FILE);
         atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
-        report.push(OperationEvent::UpdatedProjectManifest {
+        report.push(OperationEvent::ManifestUpdated {
             path: manifest_path,
         });
     }
@@ -375,12 +381,12 @@ pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Ope
     fs::remove_file(&preflight.path)?;
 
     let mut report = OperationReport::new();
-    report.push(OperationEvent::PageLinksAffected {
+    report.push(OperationEvent::PageLinkImpact {
         page: preflight.page.clone(),
         backlinks: preflight.backlinks,
         outlinks: preflight.outlinks,
     });
-    report.push(OperationEvent::DeletedPage {
+    report.push(OperationEvent::PageDeleted {
         path: preflight.path,
     });
 
@@ -390,7 +396,7 @@ pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Ope
         manifest.default_page = format!("{PAGES_DIR}/{default_page}");
         let manifest_path = root.join(MANIFEST_FILE);
         atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
-        report.push(OperationEvent::UpdatedProjectManifest {
+        report.push(OperationEvent::ManifestUpdated {
             path: manifest_path,
         });
     }
@@ -440,7 +446,7 @@ pub fn delete_directory(
     }
 
     let mut report = OperationReport::new();
-    report.push(OperationEvent::DeletedDirectory {
+    report.push(OperationEvent::DirectoryDeleted {
         path: directory_path,
     });
 
@@ -462,7 +468,7 @@ pub fn delete_directory(
             .unwrap_or_default();
         let manifest_path = root.join(MANIFEST_FILE);
         atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
-        report.push(OperationEvent::UpdatedProjectManifest {
+        report.push(OperationEvent::ManifestUpdated {
             path: manifest_path,
         });
     }
@@ -520,7 +526,7 @@ pub fn import_markdown(
         ),
     )?;
     let generated = build_index(root)?;
-    let mut report = OperationReport::from_event(OperationEvent::Imported {
+    let mut report = OperationReport::from_event(OperationEvent::PageImported {
         source: source.to_path_buf(),
         destination,
     });
@@ -548,7 +554,7 @@ pub fn export_page(
 
     let html = fs::read_to_string(&page)?;
     atomic_write(output, html_to_markdown(&html))?;
-    Ok(OperationReport::from_event(OperationEvent::Exported {
+    Ok(OperationReport::from_event(OperationEvent::PageExported {
         page,
         output: output.to_path_buf(),
     }))
@@ -581,7 +587,7 @@ pub fn write_page_source(
     atomic_write(&page, html.as_ref())?;
 
     let generated = build_index(root)?;
-    let mut report = OperationReport::from_event(OperationEvent::SavedPage { path: page });
+    let mut report = OperationReport::from_event(OperationEvent::PageSourceUpdated { page });
     report.extend(generated);
     Ok(report)
 }
@@ -624,7 +630,7 @@ fn unwrap_deleted_page_links(root: &Path, deleted_path: &str) -> Result<Operatio
         }
 
         atomic_write(&page, document.to_html()?)?;
-        report.push(OperationEvent::UpdatedPageLinks {
+        report.push(OperationEvent::PageLinksRewritten {
             page,
             count: updated,
         });
@@ -654,7 +660,7 @@ fn rewrite_renamed_page_link_text(
         }
 
         atomic_write(&page, document.to_html()?)?;
-        report.push(OperationEvent::UpdatedPageLinks {
+        report.push(OperationEvent::PageLinksRewritten {
             page,
             count: updated,
         });
@@ -685,7 +691,7 @@ fn rewrite_renamed_page_links(
         }
 
         atomic_write(&page, document.to_html()?)?;
-        report.push(OperationEvent::UpdatedPageLinks {
+        report.push(OperationEvent::PageLinksRewritten {
             page,
             count: updated,
         });

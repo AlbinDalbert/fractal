@@ -133,14 +133,14 @@ fn write_project_index(root: &Path, index: &ProjectIndex) -> Result<OperationEve
     let index_path = root.join(WORKSPACE_DIR).join(INDEX_FILE);
     atomic_write(&index_path, serde_json::to_string_pretty(index)?)?;
 
-    Ok(OperationEvent::Built { path: index_path })
+    Ok(OperationEvent::GeneratedIndexBuilt { path: index_path })
 }
 
 fn write_project_graph(root: &Path, graph: &ProjectGraph) -> Result<OperationEvent> {
     let graph_path = root.join(WORKSPACE_DIR).join(GRAPH_FILE);
     atomic_write(&graph_path, serde_json::to_string_pretty(graph)?)?;
 
-    Ok(OperationEvent::Built { path: graph_path })
+    Ok(OperationEvent::GeneratedGraphBuilt { path: graph_path })
 }
 
 fn build_page_entry(pages_dir: &Path, path: String) -> Result<PageEntry> {

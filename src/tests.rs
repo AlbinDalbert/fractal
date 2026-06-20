@@ -172,7 +172,7 @@ fn init_project_at_uses_explicit_destination_and_project_name() {
 
     assert_eq!(
         report.events,
-        vec![OperationEvent::Created { path: root.clone() }]
+        vec![OperationEvent::ProjectCreated { path: root.clone() }]
     );
     assert!(!root.join("pages/index.html").exists());
     assert!(root.join(".fractal/style.css").is_file());
@@ -682,14 +682,21 @@ fn validate_fix_repairs_simple_contract_drift_and_unwraps_manual_links() {
     let preflight = preflight_repair_project(project.root()).expect("preflight simple drift");
     assert!(preflight.events.iter().any(|event| matches!(
         event,
-        OperationEvent::Fixed { path } if path.ends_with("pages/index.html")
+        OperationEvent::ProjectRepaired { path, applied: false } if path.ends_with("pages/index.html")
     )));
+    let preflight_summary = preflight.summary();
+    assert!(!preflight_summary.source_changed);
+    assert_eq!(preflight_summary.repaired_paths.len(), 1);
+
     let preview =
         fs::read_to_string(project.pages_dir().join("index.html")).expect("read preview page");
     assert!(!preview.contains("<title>Home</title>"));
     assert!(preview.contains("href=\"wrong.css\""));
 
-    repair_project(project.root()).expect("fix simple drift");
+    let repair = repair_project(project.root()).expect("fix simple drift");
+    let repair_summary = repair.summary();
+    assert!(repair_summary.source_changed);
+    assert_eq!(repair_summary.repaired_paths.len(), 1);
 
     let fixed =
         fs::read_to_string(project.pages_dir().join("index.html")).expect("read fixed page");
@@ -944,12 +951,18 @@ fn new_page_rebuilds_index() {
     );
 
     let report = new_page(project.root(), Path::new("secondpage")).expect("create new page");
+    let created_page = project.pages_dir().join("secondpage.html");
     assert_eq!(
         report.events.first(),
-        Some(&OperationEvent::Created {
-            path: project.pages_dir().join("secondpage.html")
+        Some(&OperationEvent::PageCreated {
+            path: created_page.clone()
         })
     );
+    let summary = report.summary();
+    assert!(summary.source_changed);
+    assert!(summary.generated_changed);
+    assert_eq!(summary.created_paths, vec![created_page.clone()]);
+    assert_eq!(summary.pages_changed, vec![created_page]);
 
     let index: ProjectIndex = serde_json::from_str(
         &fs::read_to_string(project.workspace_dir().join("index.json")).expect("read index"),
@@ -1008,7 +1021,7 @@ fn create_directory_then_create_page_in_directory() {
         create_directory(project.root(), Path::new(""), "research").expect("create directory");
     assert_eq!(
         report.events,
-        vec![OperationEvent::AddedDirectory {
+        vec![OperationEvent::DirectoryCreated {
             path: project.pages_dir().join("research")
         }]
     );
@@ -1088,7 +1101,9 @@ fn page_source_round_trip_rebuilds_index_and_serializes_report() {
     );
 
     let report_json = serde_json::to_value(&report).expect("serialize report");
-    assert_eq!(report_json["events"][0]["type"], "saved_page");
+    assert_eq!(report_json["events"][0]["type"], "page_source_updated");
+    assert!(report.summary().source_changed);
+    assert!(report.summary().generated_changed);
 }
 
 #[test]
@@ -1289,24 +1304,24 @@ fn safe_editor_page_update_mutates_owned_fields_and_rebuilds_index() {
     assert!(report.events.iter().any(|event| {
         matches!(
             event,
-            OperationEvent::UpdatedPageTitle { title, .. } if title == "Home Base"
+            OperationEvent::PageTitleUpdated { title, .. } if title == "Home Base"
         )
     }));
     assert!(report
         .events
         .iter()
-        .any(|event| matches!(event, OperationEvent::UpdatedPageBody { .. })));
+        .any(|event| matches!(event, OperationEvent::PageContentUpdated { .. })));
     assert!(report.events.iter().any(|event| {
         matches!(
             event,
-            OperationEvent::UpdatedMetadata { name, content, .. }
+            OperationEvent::PageMetadataUpdated { name, content, .. }
                 if name == "fractal:summary" && content == "Local project home"
         )
     }));
     assert!(report
         .events
         .iter()
-        .any(|event| matches!(event, OperationEvent::Built { .. })));
+        .any(|event| matches!(event, OperationEvent::GeneratedIndexBuilt { .. })));
 
     let detail = editor_page_detail(project.root(), Path::new("index")).expect("page detail");
     assert_eq!(detail.metadata.title, "Home Base");
@@ -1368,7 +1383,7 @@ fn safe_editor_page_update_repairs_editor_html_links_before_validating() {
     assert!(report.events.iter().any(|event| {
         matches!(
             event,
-            OperationEvent::UpdatedPageLinks { count, .. } if *count == 1
+            OperationEvent::PageLinksRewritten { count, .. } if *count == 1
         )
     }));
 
@@ -1548,25 +1563,31 @@ fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
     assert!(report.events.iter().any(|event| {
         matches!(
             event,
-            OperationEvent::MovedPage { from, to }
+            OperationEvent::PageMoved { from, to }
                 if from == &source && to == &destination
         )
     }));
     assert!(report.events.iter().any(|event| {
         matches!(
             event,
-            OperationEvent::UpdatedPageTitle { page, title }
+            OperationEvent::PageTitleUpdated { page, title }
                 if page == &destination && title == "Home Base"
         )
     }));
     assert!(report
         .events
         .iter()
-        .any(|event| matches!(event, OperationEvent::UpdatedProjectManifest { .. })));
+        .any(|event| matches!(event, OperationEvent::ManifestUpdated { .. })));
     assert!(report
         .events
         .iter()
-        .any(|event| matches!(event, OperationEvent::UpdatedPageLinks { .. })));
+        .any(|event| matches!(event, OperationEvent::PageLinksRewritten { .. })));
+    let summary = report.summary();
+    assert!(summary.source_changed);
+    assert!(summary.generated_changed);
+    assert!(summary.manifest_changed);
+    assert_eq!(summary.moved_paths[0].from, source);
+    assert_eq!(summary.moved_paths[0].to, destination);
 
     let html = fs::read_to_string(&destination).expect("read moved page");
     assert!(html.contains("<title>Home Base</title>"));
@@ -1665,7 +1686,7 @@ fn delete_directory_removes_nested_pages_and_rebuilds_index() {
     assert!(!project.pages_dir().join("folder").exists());
     assert!(report.events.iter().any(|event| matches!(
         event,
-        OperationEvent::DeletedDirectory { path } if path.ends_with("pages/folder")
+        OperationEvent::DirectoryDeleted { path } if path.ends_with("pages/folder")
     )));
     assert!(fs::read_to_string(project.pages_dir().join("index.html"))
         .expect("read index")
@@ -1773,7 +1794,7 @@ fn delete_page_removes_file_rebuilds_generated_data_and_reports_links() {
     assert!(report.events.iter().any(|event| {
         matches!(
             event,
-            OperationEvent::PageLinksAffected {
+            OperationEvent::PageLinkImpact {
                 page,
                 backlinks,
                 outlinks,
@@ -1788,13 +1809,22 @@ fn delete_page_removes_file_rebuilds_generated_data_and_reports_links() {
                 }]
         )
     }));
+    let deleted_page = project.pages_dir().join("rust.html");
     assert!(report.events.iter().any(|event| {
         matches!(
             event,
-            OperationEvent::DeletedPage { path }
-                if path == &project.pages_dir().join("rust.html")
+            OperationEvent::PageDeleted { path }
+                if path == &deleted_page
         )
     }));
+    let summary = report.summary();
+    assert!(summary.source_changed);
+    assert!(summary.generated_changed);
+    assert_eq!(summary.deleted_paths, vec![deleted_page.clone()]);
+    assert!(summary.pages_changed.contains(&deleted_page));
+    assert_eq!(summary.links_rewritten_count, 1);
+    assert_eq!(summary.warnings, Vec::<String>::new());
+
     assert_eq!(
         load_project_index(project.root())
             .expect("load generated index")
@@ -1841,7 +1871,7 @@ fn delete_page_updates_manifest_default_when_needed() {
     assert!(report
         .events
         .iter()
-        .any(|event| matches!(event, OperationEvent::UpdatedProjectManifest { .. })));
+        .any(|event| matches!(event, OperationEvent::ManifestUpdated { .. })));
     validate_project(project.root()).expect("project validates after default delete");
 }
 
@@ -2081,7 +2111,7 @@ fn set_page_metadata_updates_meta_tags_and_rebuilds_index() {
         .expect("set summary");
     assert!(summary_report.events.iter().any(|event| matches!(
         event,
-        OperationEvent::UpdatedMetadata { name, content, .. }
+        OperationEvent::PageMetadataUpdated { name, content, .. }
             if name == "fractal:summary" && content == "Local graph notes"
     )));
 
@@ -2228,11 +2258,11 @@ fn sync_rebuilds_index_and_links_notes_before_project_pages() {
     assert!(first_report
         .events
         .iter()
-        .any(|event| matches!(event, OperationEvent::SyncComplete { pages_updated: 2 })));
+        .any(|event| matches!(event, OperationEvent::SyncCompleted { pages_updated: 2 })));
     assert!(second_report
         .events
         .iter()
-        .any(|event| matches!(event, OperationEvent::SyncComplete { pages_updated: 0 })));
+        .any(|event| matches!(event, OperationEvent::SyncCompleted { pages_updated: 0 })));
 
     let html = fs::read_to_string(project.pages_dir().join("index.html")).expect("read index page");
     assert_eq!(html.matches("data-fractal-link=\"note\"").count(), 1);

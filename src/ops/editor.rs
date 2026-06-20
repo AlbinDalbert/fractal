@@ -126,7 +126,7 @@ pub fn update_editor_page(
     if let Some(title) = update.title {
         let title = normalize_editor_title(&title)?;
         if document.set_title(&title)? {
-            report.push(OperationEvent::UpdatedPageTitle {
+            report.push(OperationEvent::PageTitleUpdated {
                 page: page.clone(),
                 title,
             });
@@ -136,14 +136,14 @@ pub fn update_editor_page(
     let body_html_was_supplied = update.body_html.is_some();
     if let Some(body_html) = update.body_html {
         if document.set_main_body_html(&body_html)? {
-            report.push(OperationEvent::UpdatedPageBody { page: page.clone() });
+            report.push(OperationEvent::PageContentUpdated { page: page.clone() });
         }
     }
 
     if let Some(summary) = update.summary {
         let summary = summary.trim().to_string();
         if document.set_meta_tag(SUMMARY_META, &summary)? {
-            report.push(OperationEvent::UpdatedMetadata {
+            report.push(OperationEvent::PageMetadataUpdated {
                 page: page.clone(),
                 name: SUMMARY_META.to_string(),
                 content: summary,
@@ -154,7 +154,7 @@ pub fn update_editor_page(
     if let Some(tags) = update.tags {
         let tags = normalize_tags(tags.iter().map(String::as_str)).join(", ");
         if document.set_meta_tag(TAGS_META, &tags)? {
-            report.push(OperationEvent::UpdatedMetadata {
+            report.push(OperationEvent::PageMetadataUpdated {
                 page: page.clone(),
                 name: TAGS_META.to_string(),
                 content: tags,
@@ -166,7 +166,7 @@ pub fn update_editor_page(
         let known_page_titles = known_page_titles_for_candidate(root, &path, &document)?;
         let repaired_links = document.repair_invalid_links(&path, &known_page_titles);
         if repaired_links > 0 {
-            report.push(OperationEvent::UpdatedPageLinks {
+            report.push(OperationEvent::PageLinksRewritten {
                 page: page.clone(),
                 count: repaired_links,
             });

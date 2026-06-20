@@ -32,10 +32,10 @@ pub use ops::{
 pub use types::{
     EditorLinkDetail, EditorNoteDetail, EditorPageDetail, EditorPageListEntry, EditorPageUpdate,
     FileEntry, GraphEdge, GraphNeighborPage, GraphNode, GraphNoteLink, GraphPageLink,
-    GraphRelatedPage, LinkEntry, NoteEntry, OperationEvent, OperationReport, PageCreate,
-    PageDeletePreflight, PageEntry, PageGraphEntry, PageMetadata, PageRename, PageRenamePreflight,
-    PageSource, ProjectGraph, ProjectIndex, ProjectManifest, ProjectSummary, SearchMatch,
-    SearchResult, Theme,
+    GraphRelatedPage, LinkEntry, NoteEntry, OperationEvent, OperationReport, OperationSummary,
+    PageCreate, PageDeletePreflight, PageEntry, PageGraphEntry, PageMetadata, PageRename,
+    PageRenamePreflight, PageSource, PathMove, ProjectGraph, ProjectIndex, ProjectManifest,
+    ProjectSummary, SearchMatch, SearchResult, Theme,
 };
 pub use validation::{preflight_repair_project, repair_project, validate_project};
 

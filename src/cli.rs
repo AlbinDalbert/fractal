@@ -308,6 +308,7 @@ struct ProjectRef {
 #[derive(Debug, Serialize)]
 struct ReportData {
     report: OperationReport,
+    summary: crate::OperationSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -649,6 +650,7 @@ fn print_report_result(
             root,
             &ReportData {
                 report: report.clone(),
+                summary: report.summary(),
             },
         ),
     }
@@ -703,35 +705,49 @@ fn print_data_json<T: Serialize>(command: &'static str, root: &Path, data: &T) -
 fn print_operation_report(report: &OperationReport) -> Result<()> {
     for event in &report.events {
         match event {
-            OperationEvent::AddedDirectory { path } => {
+            OperationEvent::ProjectCreated { path } => {
+                println!("created project {}", path.display())
+            }
+            OperationEvent::DirectoryCreated { path } => {
                 println!("created directory {}", path.display())
             }
-            OperationEvent::AddedNote { page, note_id } => {
+            OperationEvent::NoteAdded { page, note_id } => {
                 println!("added note {} to {}", note_id, page.display());
             }
-            OperationEvent::Built { path } => println!("built {}", path.display()),
-            OperationEvent::Created { path } => println!("created {}", path.display()),
-            OperationEvent::Exported { page, output } => {
+            OperationEvent::GeneratedIndexBuilt { path } => {
+                println!("built index {}", path.display())
+            }
+            OperationEvent::GeneratedGraphBuilt { path } => {
+                println!("built graph {}", path.display())
+            }
+            OperationEvent::PageCreated { path } => println!("created page {}", path.display()),
+            OperationEvent::PageExported { page, output } => {
                 println!("exported {} -> {}", page.display(), output.display());
             }
-            OperationEvent::DeletedPage { path } => println!("deleted page {}", path.display()),
-            OperationEvent::DeletedDirectory { path } => {
+            OperationEvent::PageDeleted { path } => println!("deleted page {}", path.display()),
+            OperationEvent::DirectoryDeleted { path } => {
                 println!("deleted directory {}", path.display())
             }
-            OperationEvent::Fixed { path } => println!("fixed {}", path.display()),
-            OperationEvent::Imported {
+            OperationEvent::ProjectRepaired { path, applied } => {
+                if *applied {
+                    println!("fixed {}", path.display());
+                } else {
+                    println!("would fix {}", path.display());
+                }
+            }
+            OperationEvent::PageImported {
                 source,
                 destination,
             } => {
                 println!("imported {} -> {}", source.display(), destination.display());
             }
-            OperationEvent::MovedPage { from, to } => {
+            OperationEvent::PageMoved { from, to } => {
                 println!("moved page {} -> {}", from.display(), to.display());
             }
-            OperationEvent::PatchedNote { page, note_id } => {
+            OperationEvent::NoteUpdated { page, note_id } => {
                 println!("patched note {} in {}", note_id, page.display());
             }
-            OperationEvent::PageLinksAffected {
+            OperationEvent::PageLinkImpact {
                 page,
                 backlinks,
                 outlinks,
@@ -741,32 +757,31 @@ fn print_operation_report(report: &OperationReport) -> Result<()> {
                 backlinks.len(),
                 outlinks.len()
             ),
-            OperationEvent::RemovedNote { page, note_id } => {
+            OperationEvent::NoteRemoved { page, note_id } => {
                 println!("removed note {} from {}", note_id, page.display());
             }
-            OperationEvent::UpdatedPageBody { page } => {
+            OperationEvent::PageContentUpdated { page } => {
                 println!("updated page body for {}", page.display());
             }
-            OperationEvent::UpdatedPageTitle { page, title } => {
+            OperationEvent::PageTitleUpdated { page, title } => {
                 println!("updated page title for {} to {}", page.display(), title);
             }
-            OperationEvent::UpdatedMetadata {
+            OperationEvent::PageMetadataUpdated {
                 page,
                 name,
                 content,
             } => println!("updated {} for {} to {}", name, page.display(), content),
-            OperationEvent::UpdatedPageLinks { page, count } => {
+            OperationEvent::PageLinksRewritten { page, count } => {
                 println!("updated {count} page link(s) in {}", page.display());
             }
-            OperationEvent::UpdatedProjectManifest { path } => {
+            OperationEvent::ManifestUpdated { path } => {
                 println!("updated project manifest {}", path.display());
             }
-            OperationEvent::SavedPage { path } => println!("saved {}", path.display()),
-            OperationEvent::Synced { path } => println!("synced {}", path.display()),
-            OperationEvent::SyncComplete { pages_updated } => {
+            OperationEvent::PageSourceUpdated { page } => println!("saved {}", page.display()),
+            OperationEvent::SyncCompleted { pages_updated } => {
                 println!("sync complete: {pages_updated} page(s) updated");
             }
-            OperationEvent::ValidProject {
+            OperationEvent::ProjectValidated {
                 project_name,
                 manifest_path,
             } => println!(

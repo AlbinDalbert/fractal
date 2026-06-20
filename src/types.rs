@@ -26,87 +26,228 @@ impl OperationReport {
     pub fn extend(&mut self, report: OperationReport) {
         self.events.extend(report.events);
     }
+
+    pub fn summary(&self) -> OperationSummary {
+        OperationSummary::from_events(&self.events)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperationSummary {
+    pub source_changed: bool,
+    pub generated_changed: bool,
+    pub manifest_changed: bool,
+    pub validation_performed: bool,
+    pub created_paths: Vec<PathBuf>,
+    pub changed_paths: Vec<PathBuf>,
+    pub deleted_paths: Vec<PathBuf>,
+    pub moved_paths: Vec<PathMove>,
+    pub repaired_paths: Vec<PathBuf>,
+    pub pages_changed: Vec<PathBuf>,
+    pub links_rewritten_count: usize,
+    pub warnings: Vec<String>,
+}
+
+impl OperationSummary {
+    fn from_events(events: &[OperationEvent]) -> Self {
+        let mut summary = Self::default();
+
+        for event in events {
+            match event {
+                OperationEvent::ProjectCreated { path }
+                | OperationEvent::DirectoryCreated { path }
+                | OperationEvent::PageCreated { path } => {
+                    summary.source_changed = true;
+                    push_unique_path(&mut summary.created_paths, path);
+                    push_unique_path(&mut summary.changed_paths, path);
+                    if matches!(event, OperationEvent::PageCreated { .. }) {
+                        push_unique_path(&mut summary.pages_changed, path);
+                    }
+                }
+                OperationEvent::PageImported { destination, .. } => {
+                    summary.source_changed = true;
+                    push_unique_path(&mut summary.created_paths, destination);
+                    push_unique_path(&mut summary.changed_paths, destination);
+                    push_unique_path(&mut summary.pages_changed, destination);
+                }
+                OperationEvent::PageExported { output, .. } => {
+                    push_unique_path(&mut summary.created_paths, output);
+                    push_unique_path(&mut summary.changed_paths, output);
+                }
+                OperationEvent::PageDeleted { path }
+                | OperationEvent::DirectoryDeleted { path } => {
+                    summary.source_changed = true;
+                    push_unique_path(&mut summary.deleted_paths, path);
+                    if matches!(event, OperationEvent::PageDeleted { .. }) {
+                        push_unique_path(&mut summary.pages_changed, path);
+                    }
+                }
+                OperationEvent::PageMoved { from, to } => {
+                    summary.source_changed = true;
+                    push_unique_move(&mut summary.moved_paths, from, to);
+                    push_unique_path(&mut summary.changed_paths, to);
+                    push_unique_path(&mut summary.pages_changed, from);
+                    push_unique_path(&mut summary.pages_changed, to);
+                }
+                OperationEvent::NoteAdded { page, .. }
+                | OperationEvent::NoteRemoved { page, .. }
+                | OperationEvent::NoteUpdated { page, .. }
+                | OperationEvent::PageContentUpdated { page }
+                | OperationEvent::PageTitleUpdated { page, .. }
+                | OperationEvent::PageMetadataUpdated { page, .. }
+                | OperationEvent::PageSourceUpdated { page }
+                | OperationEvent::PageLinksRewritten { page, .. } => {
+                    summary.source_changed = true;
+                    push_unique_path(&mut summary.changed_paths, page);
+                    push_unique_path(&mut summary.pages_changed, page);
+                    if let OperationEvent::PageLinksRewritten { count, .. } = event {
+                        summary.links_rewritten_count += count;
+                    }
+                }
+                OperationEvent::ManifestUpdated { path } => {
+                    summary.source_changed = true;
+                    summary.manifest_changed = true;
+                    push_unique_path(&mut summary.changed_paths, path);
+                }
+                OperationEvent::ProjectRepaired { path, applied } => {
+                    if *applied {
+                        summary.source_changed = true;
+                        push_unique_path(&mut summary.changed_paths, path);
+                    }
+                    push_unique_path(&mut summary.repaired_paths, path);
+                }
+                OperationEvent::GeneratedIndexBuilt { path }
+                | OperationEvent::GeneratedGraphBuilt { path } => {
+                    summary.generated_changed = true;
+                    push_unique_path(&mut summary.changed_paths, path);
+                }
+                OperationEvent::ProjectValidated { .. } => {
+                    summary.validation_performed = true;
+                }
+                OperationEvent::PageLinkImpact { .. } | OperationEvent::SyncCompleted { .. } => {}
+                OperationEvent::Warning { message } => {
+                    push_unique_string(&mut summary.warnings, message);
+                }
+            }
+        }
+
+        summary
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PathMove {
+    pub from: PathBuf,
+    pub to: PathBuf,
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: &PathBuf) {
+    if !paths.contains(path) {
+        paths.push(path.clone());
+    }
+}
+
+fn push_unique_move(moves: &mut Vec<PathMove>, from: &PathBuf, to: &PathBuf) {
+    if !moves
+        .iter()
+        .any(|entry| entry.from == *from && entry.to == *to)
+    {
+        moves.push(PathMove {
+            from: from.clone(),
+            to: to.clone(),
+        });
+    }
+}
+
+fn push_unique_string(strings: &mut Vec<String>, value: &str) {
+    if !strings.iter().any(|entry| entry == value) {
+        strings.push(value.to_string());
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OperationEvent {
-    AddedDirectory {
+    ProjectCreated {
         path: PathBuf,
     },
-    AddedNote {
-        page: PathBuf,
-        note_id: String,
-    },
-    Built {
+    DirectoryCreated {
         path: PathBuf,
     },
-    Created {
+    PageCreated {
         path: PathBuf,
     },
-    Exported {
-        page: PathBuf,
-        output: PathBuf,
-    },
-    DeletedPage {
-        path: PathBuf,
-    },
-    DeletedDirectory {
-        path: PathBuf,
-    },
-    Fixed {
-        path: PathBuf,
-    },
-    Imported {
+    PageImported {
         source: PathBuf,
         destination: PathBuf,
     },
-    MovedPage {
+    PageExported {
+        page: PathBuf,
+        output: PathBuf,
+    },
+    PageDeleted {
+        path: PathBuf,
+    },
+    DirectoryDeleted {
+        path: PathBuf,
+    },
+    PageMoved {
         from: PathBuf,
         to: PathBuf,
     },
-    PatchedNote {
+    NoteAdded {
         page: PathBuf,
         note_id: String,
     },
-    PageLinksAffected {
-        page: String,
-        backlinks: Vec<GraphPageLink>,
-        outlinks: Vec<GraphPageLink>,
-    },
-    RemovedNote {
+    NoteRemoved {
         page: PathBuf,
         note_id: String,
     },
-    UpdatedPageBody {
+    NoteUpdated {
+        page: PathBuf,
+        note_id: String,
+    },
+    PageContentUpdated {
         page: PathBuf,
     },
-    UpdatedPageTitle {
+    PageTitleUpdated {
         page: PathBuf,
         title: String,
     },
-    UpdatedMetadata {
+    PageMetadataUpdated {
         page: PathBuf,
         name: String,
         content: String,
     },
-    UpdatedPageLinks {
+    PageLinksRewritten {
         page: PathBuf,
         count: usize,
     },
-    UpdatedProjectManifest {
+    PageSourceUpdated {
+        page: PathBuf,
+    },
+    PageLinkImpact {
+        page: String,
+        backlinks: Vec<GraphPageLink>,
+        outlinks: Vec<GraphPageLink>,
+    },
+    ManifestUpdated {
         path: PathBuf,
     },
-    SavedPage {
+    ProjectRepaired {
+        path: PathBuf,
+        applied: bool,
+    },
+    GeneratedIndexBuilt {
         path: PathBuf,
     },
-    Synced {
+    GeneratedGraphBuilt {
         path: PathBuf,
     },
-    SyncComplete {
+    SyncCompleted {
         pages_updated: usize,
     },
-    ValidProject {
+    ProjectValidated {
         project_name: String,
         manifest_path: PathBuf,
     },

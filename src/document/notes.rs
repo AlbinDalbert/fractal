@@ -30,7 +30,7 @@ pub fn add_note(
     let html = insert_note_into_document(&html, &render_note_aside(&note_id, content))?;
     atomic_write(&page, html)?;
     let generated = build_index(root)?;
-    let mut report = OperationReport::from_event(OperationEvent::AddedNote { page, note_id });
+    let mut report = OperationReport::from_event(OperationEvent::NoteAdded { page, note_id });
     report.extend(generated);
     Ok(report)
 }
@@ -47,7 +47,7 @@ pub fn remove_note(
     let html = remove_note_from_document(&html, &note_id)?;
     atomic_write(&page, html)?;
     let generated = build_index(root)?;
-    let mut report = OperationReport::from_event(OperationEvent::RemovedNote { page, note_id });
+    let mut report = OperationReport::from_event(OperationEvent::NoteRemoved { page, note_id });
     report.extend(generated);
     Ok(report)
 }
@@ -65,7 +65,7 @@ pub fn patch_note(
     let html = patch_note_in_document(&html, &note_id, content)?;
     atomic_write(&page, html)?;
     let generated = build_index(root)?;
-    let mut report = OperationReport::from_event(OperationEvent::PatchedNote { page, note_id });
+    let mut report = OperationReport::from_event(OperationEvent::NoteUpdated { page, note_id });
     report.extend(generated);
     Ok(report)
 }

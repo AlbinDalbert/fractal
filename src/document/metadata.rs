@@ -92,18 +92,17 @@ fn update_page_meta(
     let html = fs::read_to_string(&page)?;
     let document = PageDocument::parse(&html);
 
-    let changed = document.set_meta_tag(name, content)?;
-    if changed {
+    let mut report = OperationReport::new();
+    if document.set_meta_tag(name, content)? {
         atomic_write(&page, document.to_html()?)?;
+        report.push(OperationEvent::PageMetadataUpdated {
+            page,
+            name: name.to_string(),
+            content: content.to_string(),
+        });
     }
 
-    let generated = build_index(root)?;
-    let mut report = OperationReport::from_event(OperationEvent::UpdatedMetadata {
-        page,
-        name: name.to_string(),
-        content: content.to_string(),
-    });
-    report.extend(generated);
+    report.extend(build_index(root)?);
     Ok(report)
 }
 

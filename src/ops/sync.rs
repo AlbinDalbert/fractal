@@ -25,22 +25,29 @@ pub fn sync_project(root: impl AsRef<Path>) -> Result<OperationReport> {
         let path = pages_dir.join(&page.path);
         let html = fs::read_to_string(&path)?;
         let updated = sync_page_links(&html, &page.path, &initial_index)?;
-        if updated != html {
-            atomic_write(&path, updated)?;
+        if updated.html != html {
+            atomic_write(&path, updated.html)?;
             synced += 1;
-            report.push(OperationEvent::Synced { path });
+            report.push(OperationEvent::PageLinksRewritten {
+                page: path,
+                count: updated.links_written,
+            });
         }
     }
 
     let final_index = build_project_index(root)?;
     report.extend(write_generated_project_data(root, &final_index)?);
-    report.push(OperationEvent::SyncComplete {
+    report.push(OperationEvent::SyncCompleted {
         pages_updated: synced,
     });
     Ok(report)
 }
 
-pub(crate) fn sync_page_links(html: &str, page_path: &str, index: &ProjectIndex) -> Result<String> {
+pub(crate) fn sync_page_links(
+    html: &str,
+    page_path: &str,
+    index: &ProjectIndex,
+) -> Result<SyncPageLinks> {
     let document = PageDocument::parse(html);
     let main = document
         .document
@@ -52,10 +59,18 @@ pub(crate) fn sync_page_links(html: &str, page_path: &str, index: &ProjectIndex)
     let project_candidates = project_link_candidates(index, page_path);
 
     unwrap_generated_links(&main);
-    link_candidates_in_node(&main, &note_candidates);
-    link_candidates_in_node(&main, &project_candidates);
+    let links_written = link_candidates_in_node(&main, &note_candidates)
+        + link_candidates_in_node(&main, &project_candidates);
 
-    document.to_html()
+    Ok(SyncPageLinks {
+        html: document.to_html()?,
+        links_written,
+    })
+}
+
+pub(crate) struct SyncPageLinks {
+    pub(crate) html: String,
+    pub(crate) links_written: usize,
 }
 
 fn note_link_candidates(html: &str) -> Vec<LinkCandidate> {
@@ -131,9 +146,9 @@ fn unwrap_generated_links(root: &NodeRef) {
     }
 }
 
-fn link_candidates_in_node(root: &NodeRef, candidates: &[LinkCandidate]) {
+fn link_candidates_in_node(root: &NodeRef, candidates: &[LinkCandidate]) -> usize {
     if candidates.is_empty() {
-        return;
+        return 0;
     }
 
     let text_nodes = root
@@ -141,9 +156,10 @@ fn link_candidates_in_node(root: &NodeRef, candidates: &[LinkCandidate]) {
         .filter(|node| node.as_text().is_some() && !has_skipped_ancestor(node, root))
         .collect::<Vec<_>>();
 
-    for text_node in text_nodes {
-        link_text_node(&text_node, candidates);
-    }
+    text_nodes
+        .into_iter()
+        .map(|text_node| link_text_node(&text_node, candidates))
+        .sum()
 }
 
 fn has_skipped_ancestor(node: &NodeRef, root: &NodeRef) -> bool {
@@ -160,16 +176,17 @@ fn has_skipped_ancestor(node: &NodeRef, root: &NodeRef) -> bool {
         })
 }
 
-fn link_text_node(text_node: &NodeRef, candidates: &[LinkCandidate]) {
+fn link_text_node(text_node: &NodeRef, candidates: &[LinkCandidate]) -> usize {
     let Some(text) = text_node.as_text() else {
-        return;
+        return 0;
     };
     let text = text.borrow().clone();
     let ranges = link_ranges(&text, candidates);
     if ranges.is_empty() {
-        return;
+        return 0;
     }
 
+    let links_written = ranges.len();
     let mut offset = 0;
     for range in ranges {
         if range.start > offset {
@@ -188,6 +205,7 @@ fn link_text_node(text_node: &NodeRef, candidates: &[LinkCandidate]) {
         text_node.insert_before(NodeRef::new_text(&text[offset..]));
     }
     text_node.detach();
+    links_written
 }
 
 fn link_ranges(text: &str, candidates: &[LinkCandidate]) -> Vec<LinkRange> {
