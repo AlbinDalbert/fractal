@@ -45,8 +45,25 @@ pub(crate) fn resolve_page_destination(root: &Path, page: &Path) -> Result<PathB
 }
 
 pub(crate) fn page_destination_from_title(root: &Path, title: &str) -> Result<PathBuf> {
+    page_destination_in_directory(root, Path::new(""), title)
+}
+
+pub(crate) fn page_destination_in_directory(
+    root: &Path,
+    directory: &Path,
+    title: &str,
+) -> Result<PathBuf> {
     let slug = page_slug_from_title(title)?;
-    resolve_page_destination(root, Path::new(&slug))
+    let directory = normalize_page_directory_path(directory)?;
+    Ok(root
+        .join(PAGES_DIR)
+        .join(directory)
+        .join(format!("{slug}.html")))
+}
+
+pub(crate) fn resolve_directory_destination(root: &Path, directory: &Path) -> Result<PathBuf> {
+    let relative = normalize_page_directory_path(directory)?;
+    Ok(root.join(PAGES_DIR).join(relative))
 }
 
 pub(crate) fn page_slug_from_title(title: &str) -> Result<String> {
@@ -104,6 +121,50 @@ fn resolve_page_reference(root: &Path, page: &Path) -> Result<PathBuf> {
     };
 
     Ok(root.join(PAGES_DIR).join(relative))
+}
+
+pub(crate) fn normalize_page_directory_path(directory: &Path) -> Result<PathBuf> {
+    if directory.is_absolute() {
+        return Err(FractalError::invalid_input(
+            "directory path must be relative to pages/",
+        ));
+    }
+
+    let mut components = directory.components().peekable();
+    if matches!(
+        components.peek(),
+        Some(Component::Normal(prefix)) if prefix.to_str() == Some(PAGES_DIR)
+    ) {
+        components.next();
+    }
+
+    let mut relative = PathBuf::new();
+    for component in components {
+        match component {
+            Component::Normal(part) => {
+                if Path::new(part).extension().is_some() {
+                    return Err(FractalError::invalid_input(
+                        "directory path components cannot have extensions",
+                    ));
+                }
+                validate_slug_component(part)?;
+                relative.push(part);
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(FractalError::invalid_input(
+                    "directory path cannot contain `..`",
+                ));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(FractalError::invalid_input(
+                    "directory path must be relative to pages/",
+                ));
+            }
+        }
+    }
+
+    Ok(relative)
 }
 
 fn normalize_page_relative_path(page: &Path) -> Result<PathBuf> {

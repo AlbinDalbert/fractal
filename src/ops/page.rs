@@ -10,11 +10,12 @@ use crate::project::constants::{
 };
 use crate::project::paths::{
     collect_page_paths, is_html_path, load_manifest, page_destination_from_title,
-    page_relative_path, resolve_existing_page, resolve_page_destination,
+    page_destination_in_directory, page_relative_path, resolve_directory_destination,
+    resolve_existing_page, resolve_page_destination,
 };
 use crate::types::{
-    OperationEvent, OperationReport, PageDeletePreflight, PageRename, PageRenamePreflight,
-    PageSource, ProjectManifest, Theme,
+    OperationEvent, OperationReport, PageCreate, PageDeletePreflight, PageRename,
+    PageRenamePreflight, PageSource, ProjectManifest, Theme,
 };
 use crate::validation::validate_page_html_for_project;
 use crate::{FractalError, Result};
@@ -74,12 +75,57 @@ pub fn load_project_manifest(root: impl AsRef<Path>) -> Result<ProjectManifest> 
     load_manifest(root.as_ref())
 }
 
-pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<OperationReport> {
+pub fn create_directory(
+    root: impl AsRef<Path>,
+    parent: impl AsRef<Path>,
+    name: impl AsRef<str>,
+) -> Result<OperationReport> {
+    let root = root.as_ref();
+    load_manifest(root)?;
+
+    let parent = resolve_directory_destination(root, parent.as_ref())?;
+    if !parent.is_dir() {
+        return Err(FractalError::not_found(format!(
+            "directory does not exist: {}",
+            parent.display()
+        )));
+    }
+
+    let name = name.as_ref().trim();
+    if Path::new(name).components().count() != 1 {
+        return Err(FractalError::invalid_input(
+            "directory name must be a single slug component",
+        ));
+    }
+    let destination_name = resolve_directory_destination(root, Path::new(name))?;
+    let destination = parent.join(destination_name.file_name().expect("directory name"));
+    if destination.exists() {
+        return Err(FractalError::already_exists(format!(
+            "directory already exists: {}",
+            destination.display()
+        )));
+    }
+
+    fs::create_dir(&destination)?;
+    Ok(OperationReport::from_event(
+        OperationEvent::AddedDirectory { path: destination },
+    ))
+}
+
+pub fn create_page(root: impl AsRef<Path>, page: PageCreate) -> Result<OperationReport> {
     let root = root.as_ref();
     let manifest = load_manifest(root)?;
-    let title = normalize_page_title(&page.as_ref().to_string_lossy())?;
+    let title = normalize_page_title(&page.title)?;
+    let directory = page.directory.as_deref().unwrap_or_else(|| Path::new(""));
+    let directory_path = resolve_directory_destination(root, directory)?;
+    if !directory_path.is_dir() {
+        return Err(FractalError::not_found(format!(
+            "directory does not exist: {}",
+            directory_path.display()
+        )));
+    }
 
-    let destination = page_destination_from_title(root, &title)?;
+    let destination = page_destination_in_directory(root, directory, &title)?;
     if destination.exists() {
         return Err(FractalError::already_exists(format!(
             "page already exists: {}",
@@ -91,10 +137,6 @@ pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Operat
     let relative_page = destination.strip_prefix(&pages_dir)?;
     let relative_page_string = relative_page.to_string_lossy().replace('\\', "/");
     ensure_page_labels_available(root, &relative_page_string, &title)?;
-
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)?;
-    }
 
     fs::write(
         &destination,
@@ -109,6 +151,25 @@ pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Operat
     let mut report = OperationReport::from_event(OperationEvent::Created { path: destination });
     report.extend(generated);
     Ok(report)
+}
+
+pub fn new_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<OperationReport> {
+    let page = page.as_ref();
+    let directory = page
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    let title = page
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| page.to_string_lossy().into_owned());
+    create_page(
+        root,
+        PageCreate {
+            directory: directory.map(Path::to_path_buf),
+            title,
+        },
+    )
 }
 
 pub fn preflight_rename_page(

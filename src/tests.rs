@@ -10,18 +10,19 @@ use crate::io::markdown::{html_to_markdown, markdown_to_html};
 use crate::project::constants::{GRAPH_VERSION, INDEX_VERSION, MANIFEST_VERSION};
 use crate::project::paths::{collect_page_paths, resolve_page_destination};
 use crate::project::{
-    add_note, build_index, delete_page, editor_page_detail, export_page, extract_page_text,
-    graph_backlinks_report, graph_notes_report, graph_outlinks_report, graph_related_report,
-    import_markdown, init_project_at, list_editor_pages, load_project_index, load_project_manifest,
-    new_page, page_backlinks, page_metadata, page_metadata_report, page_notes, page_outlinks,
-    patch_note, preflight_delete_page, preflight_rename_page, preflight_repair_project,
-    project_summary, read_page_source, related_pages, remove_note, rename_page, repair_project,
-    reset_page_metadata, search_project, search_report, set_page_summary, set_page_tags,
-    set_page_title, sync_project, update_editor_page, update_page_body, validate_project,
-    write_page_source, EditorLinkDetail, EditorNoteDetail, EditorPageListEntry, EditorPageUpdate,
-    FileEntry, GraphEdge, GraphNeighborPage, GraphNode, GraphNoteLink, GraphPageLink,
-    GraphRelatedPage, LinkEntry, NoteEntry, OperationEvent, PageEntry, PageGraphEntry, PageRename,
-    ProjectGraph, ProjectIndex, ProjectManifest, SearchMatch, SearchResult, Theme,
+    add_note, build_index, create_directory, create_page, delete_page, editor_page_detail,
+    export_page, extract_page_text, graph_backlinks_report, graph_notes_report,
+    graph_outlinks_report, graph_related_report, import_markdown, init_project_at,
+    list_editor_pages, load_project_index, load_project_manifest, new_page, page_backlinks,
+    page_metadata, page_metadata_report, page_notes, page_outlinks, patch_note,
+    preflight_delete_page, preflight_rename_page, preflight_repair_project, project_summary,
+    read_page_source, related_pages, remove_note, rename_page, repair_project, reset_page_metadata,
+    search_project, search_report, set_page_summary, set_page_tags, set_page_title, sync_project,
+    update_editor_page, update_page_body, validate_project, write_page_source, EditorLinkDetail,
+    EditorNoteDetail, EditorPageListEntry, EditorPageUpdate, FileEntry, GraphEdge,
+    GraphNeighborPage, GraphNode, GraphNoteLink, GraphPageLink, GraphRelatedPage, LinkEntry,
+    NoteEntry, OperationEvent, PageCreate, PageEntry, PageGraphEntry, PageRename, ProjectGraph,
+    ProjectIndex, ProjectManifest, SearchMatch, SearchResult, Theme,
 };
 use crate::validation::validate_page_metadata;
 use crate::FractalErrorCode;
@@ -992,6 +993,69 @@ fn new_page_rebuilds_index() {
             }
         ]
     );
+}
+
+#[test]
+fn create_directory_then_create_page_in_directory() {
+    let project = TestProject::new("directory-page-create");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "index",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let report =
+        create_directory(project.root(), Path::new(""), "research").expect("create directory");
+    assert_eq!(
+        report.events,
+        vec![OperationEvent::AddedDirectory {
+            path: project.pages_dir().join("research")
+        }]
+    );
+
+    create_page(
+        project.root(),
+        PageCreate {
+            directory: Some(PathBuf::from("research")),
+            title: "Rust Ownership".to_string(),
+        },
+    )
+    .expect("create page in existing directory");
+
+    assert!(project
+        .pages_dir()
+        .join("research/rust-ownership.html")
+        .is_file());
+}
+
+#[test]
+fn create_page_does_not_create_missing_parent_directories() {
+    let project = TestProject::new("page-missing-directory");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "index",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let error = create_page(
+        project.root(),
+        PageCreate {
+            directory: Some(PathBuf::from("missing")),
+            title: "Rust Ownership".to_string(),
+        },
+    )
+    .expect_err("missing directory should be rejected");
+
+    assert_eq!(error.code, FractalErrorCode::NotFound);
+    assert!(!project.pages_dir().join("missing").exists());
 }
 
 #[test]

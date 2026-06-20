@@ -13,9 +13,10 @@ pub use crate::graph::{
 pub use crate::index::search::{search_project, search_report};
 pub use crate::index::{build_index, load_project_index};
 pub use crate::ops::{
-    delete_page, export_page, extract_page_text, import_markdown, init_project, init_project_at,
-    load_project_manifest, new_page, preflight_delete_page, preflight_rename_page, project_summary,
-    read_page_source, rename_page, sync_project, write_page_source,
+    create_directory, create_page, delete_page, export_page, extract_page_text, import_markdown,
+    init_project, init_project_at, load_project_manifest, new_page, preflight_delete_page,
+    preflight_rename_page, project_summary, read_page_source, rename_page, sync_project,
+    write_page_source,
 };
 pub use crate::ops::{
     editor_page_detail, list_editor_pages, set_page_title, update_editor_page, update_page_body,
@@ -23,8 +24,9 @@ pub use crate::ops::{
 pub use crate::types::{
     EditorLinkDetail, EditorNoteDetail, EditorPageDetail, EditorPageListEntry, EditorPageUpdate,
     FileEntry, GraphEdge, GraphNeighborPage, GraphNode, GraphNoteLink, GraphPageLink,
-    GraphRelatedPage, LinkEntry, NoteEntry, OperationEvent, OperationReport, PageDeletePreflight,
-    PageEntry, PageGraphEntry, PageMetadata, PageRename, PageRenamePreflight, PageSource,
-    ProjectGraph, ProjectIndex, ProjectManifest, ProjectSummary, SearchMatch, SearchResult, Theme,
+    GraphRelatedPage, LinkEntry, NoteEntry, OperationEvent, OperationReport, PageCreate,
+    PageDeletePreflight, PageEntry, PageGraphEntry, PageMetadata, PageRename, PageRenamePreflight,
+    PageSource, ProjectGraph, ProjectIndex, ProjectManifest, ProjectSummary, SearchMatch,
+    SearchResult, Theme,
 };
 pub use crate::validation::{preflight_repair_project, repair_project, validate_project};

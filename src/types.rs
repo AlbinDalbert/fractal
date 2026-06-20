@@ -31,6 +31,9 @@ impl OperationReport {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OperationEvent {
+    AddedDirectory {
+        path: PathBuf,
+    },
     AddedNote {
         page: PathBuf,
         note_id: String,
@@ -107,6 +110,12 @@ pub enum OperationEvent {
     Warning {
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageCreate {
+    pub directory: Option<PathBuf>,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

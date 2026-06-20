@@ -671,6 +671,9 @@ fn print_data_json<T: Serialize>(command: &'static str, root: &Path, data: &T) -
 fn print_operation_report(report: &OperationReport) -> Result<()> {
     for event in &report.events {
         match event {
+            OperationEvent::AddedDirectory { path } => {
+                println!("created directory {}", path.display())
+            }
             OperationEvent::AddedNote { page, note_id } => {
                 println!("added note {} to {}", note_id, page.display());
             }
