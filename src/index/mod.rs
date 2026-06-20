@@ -124,23 +124,35 @@ pub(crate) fn write_generated_project_data(
     index: &ProjectIndex,
 ) -> Result<OperationReport> {
     let mut report = OperationReport::new();
-    report.push(write_project_index(root, index)?);
-    report.push(write_project_graph(root, &build_project_graph(index))?);
+    if let Some(event) = write_project_index(root, index)? {
+        report.push(event);
+    }
+    if let Some(event) = write_project_graph(root, &build_project_graph(index))? {
+        report.push(event);
+    }
     Ok(report.relative_to(root))
 }
 
-fn write_project_index(root: &Path, index: &ProjectIndex) -> Result<OperationEvent> {
+fn write_project_index(root: &Path, index: &ProjectIndex) -> Result<Option<OperationEvent>> {
     let index_path = root.join(WORKSPACE_DIR).join(INDEX_FILE);
-    atomic_write(&index_path, serde_json::to_string_pretty(index)?)?;
-
-    Ok(OperationEvent::GeneratedIndexBuilt { path: index_path })
+    if atomic_write(&index_path, serde_json::to_string_pretty(index)?)? {
+        Ok(Some(OperationEvent::GeneratedIndexBuilt {
+            path: index_path,
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
-fn write_project_graph(root: &Path, graph: &ProjectGraph) -> Result<OperationEvent> {
+fn write_project_graph(root: &Path, graph: &ProjectGraph) -> Result<Option<OperationEvent>> {
     let graph_path = root.join(WORKSPACE_DIR).join(GRAPH_FILE);
-    atomic_write(&graph_path, serde_json::to_string_pretty(graph)?)?;
-
-    Ok(OperationEvent::GeneratedGraphBuilt { path: graph_path })
+    if atomic_write(&graph_path, serde_json::to_string_pretty(graph)?)? {
+        Ok(Some(OperationEvent::GeneratedGraphBuilt {
+            path: graph_path,
+        }))
+    } else {
+        Ok(None)
+    }
 }
 
 fn build_page_entry(pages_dir: &Path, path: String) -> Result<PageEntry> {

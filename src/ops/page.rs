@@ -556,12 +556,14 @@ pub fn export_page(
     }
 
     let html = fs::read_to_string(&page)?;
-    atomic_write(output, html_to_markdown(&html))?;
-    Ok(OperationReport::from_event(OperationEvent::PageExported {
-        page,
-        output: output.to_path_buf(),
-    })
-    .relative_to(root))
+    let mut report = OperationReport::new();
+    if atomic_write(output, html_to_markdown(&html))? {
+        report.push(OperationEvent::PageExported {
+            page,
+            output: output.to_path_buf(),
+        });
+    }
+    Ok(report.relative_to(root))
 }
 
 pub fn read_page_source(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<PageSource> {
@@ -588,10 +590,13 @@ pub fn write_page_source(
     let relative_page = page_relative_path(root, &page)?;
     let page_path = relative_page.to_string_lossy().replace('\\', "/");
     validate_page_html_for_project(root, &page_path, html.as_ref())?;
-    atomic_write(&page, html.as_ref())?;
+    let page_updated = atomic_write(&page, html.as_ref())?;
 
     let generated = build_index(root)?;
-    let mut report = OperationReport::from_event(OperationEvent::PageSourceUpdated { page });
+    let mut report = OperationReport::new();
+    if page_updated {
+        report.push(OperationEvent::PageSourceUpdated { page });
+    }
     report.extend(generated);
     Ok(report.relative_to(root))
 }

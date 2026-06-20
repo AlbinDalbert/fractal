@@ -1104,8 +1104,73 @@ fn page_source_round_trip_rebuilds_index_and_serializes_report() {
 
     let report_json = serde_json::to_value(&report).expect("serialize report");
     assert_eq!(report_json["events"][0]["type"], "page_source_updated");
-    assert!(report.summary().source_changed);
-    assert!(report.summary().generated_changed);
+    assert_eq!(report_json["events"][0]["page"], "pages/index.html");
+
+    let summary = report.summary();
+    assert!(!summary.noop);
+    assert!(summary.source_changed);
+    assert!(summary.source_files_changed);
+    assert!(summary.user_content_changed);
+    assert!(summary.generated_changed);
+    assert!(summary.generated_files_changed);
+    assert_eq!(
+        summary.pages_changed,
+        vec![PathBuf::from("pages/index.html")]
+    );
+    assert_eq!(
+        summary.source_paths_changed,
+        vec![PathBuf::from("pages/index.html")]
+    );
+    assert_eq!(
+        summary.generated_paths_changed,
+        vec![
+            PathBuf::from(".fractal/index.json"),
+            PathBuf::from(".fractal/graph.json")
+        ]
+    );
+
+    let summary_json = serde_json::to_value(summary).expect("serialize summary");
+    assert_eq!(summary_json["noop"], false);
+    assert_eq!(summary_json["user_content_changed"], true);
+    assert_eq!(summary_json["source_paths_changed"][0], "pages/index.html");
+    assert_eq!(
+        summary_json["generated_paths_changed"],
+        serde_json::json!([".fractal/index.json", ".fractal/graph.json"])
+    );
+}
+
+#[test]
+fn same_content_source_write_reports_noop_when_generated_data_is_fresh() {
+    let project = TestProject::new("same-content-source-write");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "index",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    build_index(project.root()).expect("build initial generated data");
+    let generated_report = build_index(project.root()).expect("rebuild unchanged generated data");
+    assert_eq!(generated_report.events, Vec::<OperationEvent>::new());
+    assert!(generated_report.summary().noop);
+
+    let source = read_page_source(project.root(), Path::new("index")).expect("read page source");
+    let report = write_page_source(project.root(), Path::new("index"), source.html)
+        .expect("write same page source");
+
+    assert_eq!(report.events, Vec::<OperationEvent>::new());
+    let summary = report.summary();
+    assert!(summary.noop);
+    assert!(!summary.source_files_changed);
+    assert!(!summary.user_content_changed);
+    assert!(!summary.generated_files_changed);
+    assert_eq!(summary.changed_paths, Vec::<PathBuf>::new());
+
+    let summary_json = serde_json::to_value(summary).expect("serialize no-op summary");
+    assert_eq!(summary_json["noop"], true);
+    assert_eq!(summary_json["changed_paths"], serde_json::json!([]));
 }
 
 #[test]
@@ -2286,6 +2351,12 @@ fn sync_rebuilds_index_and_links_notes_before_project_pages() {
         .events
         .iter()
         .any(|event| matches!(event, OperationEvent::SyncCompleted { pages_updated: 0 })));
+    let first_summary = first_report.summary();
+    assert!(!first_summary.noop);
+    assert!(first_summary.source_files_changed);
+    assert!(!first_summary.user_content_changed);
+    assert!(first_summary.links_rewritten_count > 0);
+    assert!(second_report.summary().noop);
 
     let html = fs::read_to_string(project.pages_dir().join("index.html")).expect("read index page");
     assert_eq!(html.matches("data-fractal-link=\"note\"").count(), 1);

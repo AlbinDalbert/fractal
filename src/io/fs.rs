@@ -6,8 +6,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) fn atomic_write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> Result<()> {
+pub(crate) fn atomic_write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> Result<bool> {
     let path = path.as_ref();
+    let contents = contents.as_ref();
+
+    if existing_contents_match(path, contents)? {
+        return Ok(false);
+    }
+
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let temp_path = temp_path_for(path)?;
 
@@ -16,7 +22,7 @@ pub(crate) fn atomic_write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -
             .write(true)
             .create_new(true)
             .open(&temp_path)?;
-        file.write_all(contents.as_ref())?;
+        file.write_all(contents)?;
         file.sync_all()?;
         drop(file);
 
@@ -29,7 +35,15 @@ pub(crate) fn atomic_write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -
         let _ = fs::remove_file(&temp_path);
     }
 
-    write_result
+    write_result.map(|()| true)
+}
+
+fn existing_contents_match(path: &Path, contents: &[u8]) -> Result<bool> {
+    match fs::read(path) {
+        Ok(existing) => Ok(existing == contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn temp_path_for(path: &Path) -> Result<PathBuf> {

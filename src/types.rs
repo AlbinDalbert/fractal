@@ -40,10 +40,14 @@ impl OperationReport {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OperationSummary {
+    pub noop: bool,
     pub source_changed: bool,
     pub generated_changed: bool,
+    pub user_content_changed: bool,
+    pub source_files_changed: bool,
+    pub generated_files_changed: bool,
     pub manifest_changed: bool,
     pub validation_performed: bool,
     pub created_paths: Vec<PathBuf>,
@@ -52,8 +56,39 @@ pub struct OperationSummary {
     pub moved_paths: Vec<PathMove>,
     pub repaired_paths: Vec<PathBuf>,
     pub pages_changed: Vec<PathBuf>,
+    pub source_paths_changed: Vec<PathBuf>,
+    pub generated_paths_changed: Vec<PathBuf>,
+    pub manifest_paths_changed: Vec<PathBuf>,
+    pub external_output_paths: Vec<PathBuf>,
     pub links_rewritten_count: usize,
     pub warnings: Vec<String>,
+}
+
+impl Default for OperationSummary {
+    fn default() -> Self {
+        Self {
+            noop: true,
+            source_changed: false,
+            generated_changed: false,
+            user_content_changed: false,
+            source_files_changed: false,
+            generated_files_changed: false,
+            manifest_changed: false,
+            validation_performed: false,
+            created_paths: Vec::new(),
+            changed_paths: Vec::new(),
+            deleted_paths: Vec::new(),
+            moved_paths: Vec::new(),
+            repaired_paths: Vec::new(),
+            pages_changed: Vec::new(),
+            source_paths_changed: Vec::new(),
+            generated_paths_changed: Vec::new(),
+            manifest_paths_changed: Vec::new(),
+            external_output_paths: Vec::new(),
+            links_rewritten_count: 0,
+            warnings: Vec::new(),
+        }
+    }
 }
 
 impl OperationSummary {
@@ -63,35 +98,40 @@ impl OperationSummary {
         for event in events {
             match event {
                 OperationEvent::ProjectCreated { path }
-                | OperationEvent::DirectoryCreated { path }
-                | OperationEvent::PageCreated { path } => {
-                    summary.source_changed = true;
+                | OperationEvent::DirectoryCreated { path } => {
+                    mark_source_file_changed(&mut summary, path);
                     push_unique_path(&mut summary.created_paths, path);
                     push_unique_path(&mut summary.changed_paths, path);
-                    if matches!(event, OperationEvent::PageCreated { .. }) {
-                        push_unique_path(&mut summary.pages_changed, path);
-                    }
+                }
+                OperationEvent::PageCreated { path } => {
+                    mark_user_page_changed(&mut summary, path);
+                    push_unique_path(&mut summary.created_paths, path);
+                    push_unique_path(&mut summary.changed_paths, path);
                 }
                 OperationEvent::PageImported { destination, .. } => {
-                    summary.source_changed = true;
+                    mark_user_page_changed(&mut summary, destination);
                     push_unique_path(&mut summary.created_paths, destination);
                     push_unique_path(&mut summary.changed_paths, destination);
-                    push_unique_path(&mut summary.pages_changed, destination);
                 }
                 OperationEvent::PageExported { output, .. } => {
                     push_unique_path(&mut summary.created_paths, output);
                     push_unique_path(&mut summary.changed_paths, output);
+                    push_unique_path(&mut summary.external_output_paths, output);
                 }
-                OperationEvent::PageDeleted { path }
-                | OperationEvent::DirectoryDeleted { path } => {
-                    summary.source_changed = true;
+                OperationEvent::PageDeleted { path } => {
+                    mark_user_content_changed(&mut summary);
+                    mark_source_file_changed(&mut summary, path);
                     push_unique_path(&mut summary.deleted_paths, path);
-                    if matches!(event, OperationEvent::PageDeleted { .. }) {
-                        push_unique_path(&mut summary.pages_changed, path);
-                    }
+                    push_unique_path(&mut summary.pages_changed, path);
+                }
+                OperationEvent::DirectoryDeleted { path } => {
+                    mark_source_file_changed(&mut summary, path);
+                    push_unique_path(&mut summary.deleted_paths, path);
                 }
                 OperationEvent::PageMoved { from, to } => {
-                    summary.source_changed = true;
+                    mark_user_content_changed(&mut summary);
+                    mark_source_file_changed(&mut summary, from);
+                    mark_source_file_changed(&mut summary, to);
                     push_unique_move(&mut summary.moved_paths, from, to);
                     push_unique_path(&mut summary.changed_paths, to);
                     push_unique_path(&mut summary.pages_changed, from);
@@ -103,23 +143,25 @@ impl OperationSummary {
                 | OperationEvent::PageContentUpdated { page }
                 | OperationEvent::PageTitleUpdated { page, .. }
                 | OperationEvent::PageMetadataUpdated { page, .. }
-                | OperationEvent::PageSourceUpdated { page }
-                | OperationEvent::PageLinksRewritten { page, .. } => {
-                    summary.source_changed = true;
+                | OperationEvent::PageSourceUpdated { page } => {
+                    mark_user_page_changed(&mut summary, page);
+                    push_unique_path(&mut summary.changed_paths, page);
+                }
+                OperationEvent::PageLinksRewritten { page, count } => {
+                    mark_source_file_changed(&mut summary, page);
                     push_unique_path(&mut summary.changed_paths, page);
                     push_unique_path(&mut summary.pages_changed, page);
-                    if let OperationEvent::PageLinksRewritten { count, .. } = event {
-                        summary.links_rewritten_count += count;
-                    }
+                    summary.links_rewritten_count += count;
                 }
                 OperationEvent::ManifestUpdated { path } => {
-                    summary.source_changed = true;
+                    mark_source_file_changed(&mut summary, path);
                     summary.manifest_changed = true;
+                    push_unique_path(&mut summary.manifest_paths_changed, path);
                     push_unique_path(&mut summary.changed_paths, path);
                 }
                 OperationEvent::ProjectRepaired { path, applied } => {
                     if *applied {
-                        summary.source_changed = true;
+                        mark_source_file_changed(&mut summary, path);
                         push_unique_path(&mut summary.changed_paths, path);
                     }
                     push_unique_path(&mut summary.repaired_paths, path);
@@ -127,6 +169,8 @@ impl OperationSummary {
                 OperationEvent::GeneratedIndexBuilt { path }
                 | OperationEvent::GeneratedGraphBuilt { path } => {
                     summary.generated_changed = true;
+                    summary.generated_files_changed = true;
+                    push_unique_path(&mut summary.generated_paths_changed, path);
                     push_unique_path(&mut summary.changed_paths, path);
                 }
                 OperationEvent::ProjectValidated { .. } => {
@@ -139,8 +183,27 @@ impl OperationSummary {
             }
         }
 
+        summary.noop = !(summary.source_files_changed
+            || summary.generated_files_changed
+            || !summary.external_output_paths.is_empty());
         summary
     }
+}
+
+fn mark_user_page_changed(summary: &mut OperationSummary, path: &PathBuf) {
+    mark_user_content_changed(summary);
+    mark_source_file_changed(summary, path);
+    push_unique_path(&mut summary.pages_changed, path);
+}
+
+fn mark_user_content_changed(summary: &mut OperationSummary) {
+    summary.user_content_changed = true;
+}
+
+fn mark_source_file_changed(summary: &mut OperationSummary, path: &PathBuf) {
+    summary.source_changed = true;
+    summary.source_files_changed = true;
+    push_unique_path(&mut summary.source_paths_changed, path);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
