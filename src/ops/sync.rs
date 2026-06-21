@@ -8,7 +8,7 @@ use crate::ops::mutation::MutationPlan;
 use crate::project::constants::PAGES_DIR;
 use crate::types::{OperationEvent, OperationReport, ProjectIndex};
 use crate::{FractalError, Result};
-use kuchiki::NodeRef;
+use brik::NodeRef;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;

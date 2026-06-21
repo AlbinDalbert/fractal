@@ -664,7 +664,7 @@ fn validate_fix_rewrites_mismatched_internal_links_to_visible_target_labels() {
 
     let fixed =
         fs::read_to_string(project.pages_dir().join("index.html")).expect("read fixed index page");
-    assert!(fixed.contains("<a data-fractal-link=\"page\" href=\"rust.html\">Rust</a>"));
+    assert!(fixed.contains("<a href=\"rust.html\" data-fractal-link=\"page\">Rust</a>"));
     assert!(!fixed.contains("the language (Rust)"));
     assert!(!fixed.contains("systems language (Rust)"));
 }

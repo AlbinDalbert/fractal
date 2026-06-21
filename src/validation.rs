@@ -13,7 +13,7 @@ use crate::project::constants::{INDEX_PAGE, MANIFEST_FILE, PAGES_DIR, STYLE_FILE
 use crate::project::paths::{collect_page_paths, is_html_path, load_manifest};
 use crate::types::{OperationEvent, OperationReport, Theme};
 use crate::{FractalError, Result};
-use kuchiki::NodeRef;
+use brik::NodeRef;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 

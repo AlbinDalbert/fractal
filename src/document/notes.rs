@@ -5,7 +5,7 @@ use crate::ops::mutation::MutationPlan;
 use crate::project::paths::resolve_existing_page;
 use crate::types::{OperationEvent, OperationReport};
 use crate::{FractalError, Result};
-use kuchiki::NodeRef;
+use brik::NodeRef;
 use std::fs;
 use std::path::Path;
 

@@ -4,7 +4,7 @@ use crate::graph::links::{
     relative_href, resolve_page_href,
 };
 use crate::types::LinkEntry;
-use kuchiki::NodeRef;
+use brik::NodeRef;
 use std::collections::BTreeMap;
 
 impl PageDocument {

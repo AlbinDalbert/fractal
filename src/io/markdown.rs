@@ -1,6 +1,6 @@
 use crate::document::html::escape_html;
 use crate::document::PageDocument;
-use kuchiki::NodeRef;
+use brik::NodeRef;
 
 pub(crate) fn markdown_to_html(default_title: &str, markdown: &str) -> (String, String) {
     let blocks = parse_markdown_blocks(markdown);

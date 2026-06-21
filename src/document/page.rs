@@ -2,20 +2,20 @@ use crate::document::html::{escape_html, escape_html_attribute};
 use crate::graph::links::{normalize_link_label, note_label_from_id};
 use crate::types::NoteEntry;
 use crate::{FractalError, Result};
-use kuchiki::traits::*;
-use kuchiki::NodeRef;
+use brik::traits::*;
+use brik::NodeRef;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 pub(crate) struct PageDocument {
-    pub(crate) document: kuchiki::NodeRef,
+    pub(crate) document: brik::NodeRef,
 }
 
 impl PageDocument {
     pub(crate) fn parse(html: &str) -> Self {
         Self {
-            document: kuchiki::parse_html().one(html),
+            document: brik::parse_html().one(html),
         }
     }
 
