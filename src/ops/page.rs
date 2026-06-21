@@ -21,7 +21,7 @@ use crate::types::{
 use crate::validation::validate_page_html_for_project;
 use crate::{FractalError, Result};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub fn init_project(project_name: &str) -> Result<OperationReport> {
     init_project_at(project_name, project_name)
@@ -268,7 +268,7 @@ pub fn rename_page(
 
     let title_changed = document.set_title(&preflight.title)?;
     document.set_stylesheet_href(&stylesheet_href(&destination_relative))?;
-    let moved_page_link_updates = if preflight.path_changed {
+    let moved_page_href_updates = if preflight.path_changed {
         document.rewrite_relative_page_hrefs_for_move(
             &preflight.source_page,
             &preflight.destination_page,
@@ -276,7 +276,24 @@ pub fn rename_page(
     } else {
         0
     };
+    let moved_page_title_link_updates = if title_changed {
+        document.rewrite_page_link_text(
+            &preflight.destination_page,
+            &preflight.destination_page,
+            &preflight.title,
+        )
+    } else {
+        0
+    };
     let updated_html = document.to_html()?;
+    let renamed_link_rewrites = plan_renamed_page_link_rewrites(
+        root,
+        &preflight.source_page,
+        &preflight.destination_page,
+        &preflight.title,
+        preflight.path_changed,
+        title_changed,
+    )?;
 
     if let Some(parent) = preflight.destination_path.parent() {
         fs::create_dir_all(parent)?;
@@ -300,6 +317,7 @@ pub fn rename_page(
             title: preflight.title.clone(),
         });
     }
+    let moved_page_link_updates = moved_page_href_updates + moved_page_title_link_updates;
     if moved_page_link_updates > 0 {
         report.push(OperationEvent::PageLinksRewritten {
             page: preflight.destination_path.clone(),
@@ -307,20 +325,7 @@ pub fn rename_page(
         });
     }
 
-    if preflight.path_changed {
-        report.extend(rewrite_renamed_page_links(
-            root,
-            &preflight.source_page,
-            &preflight.destination_page,
-        )?);
-    }
-    if title_changed {
-        report.extend(rewrite_renamed_page_link_text(
-            root,
-            &preflight.destination_page,
-            &preflight.title,
-        )?);
-    }
+    report.extend(apply_planned_page_rewrites(renamed_link_rewrites)?);
 
     if preflight.updates_default_page {
         manifest.default_page = format!("{PAGES_DIR}/{}", preflight.destination_page);
@@ -378,6 +383,8 @@ pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Ope
     let root = root.as_ref();
     let mut manifest = load_manifest(root)?;
     let preflight = preflight_delete_page(root, page)?;
+    let deleted_link_rewrites =
+        plan_unwrap_deleted_page_links(root, std::slice::from_ref(&preflight.page))?;
     fs::remove_file(&preflight.path)?;
 
     let mut report = OperationReport::new();
@@ -390,7 +397,7 @@ pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Ope
         path: preflight.path,
     });
 
-    report.extend(unwrap_deleted_page_links(root, &preflight.page)?);
+    report.extend(apply_planned_page_rewrites(deleted_link_rewrites)?);
 
     if let Some(default_page) = preflight.replacement_default_page {
         manifest.default_page = format!("{PAGES_DIR}/{default_page}");
@@ -438,6 +445,21 @@ pub fn delete_directory(
         .filter(|path| is_html_path(path))
         .map(|path| format!("{directory_prefix}/{path}"))
         .collect::<Vec<_>>();
+    let deleted_link_rewrites = plan_unwrap_deleted_page_links(root, &deleted_pages)?;
+    let default_page = manifest_default_page_path(root, &manifest).ok();
+    let default_was_deleted = default_page.as_deref().is_some_and(|path| {
+        path == directory_prefix || path.starts_with(&format!("{directory_prefix}/"))
+    });
+    let replacement_default_page = if default_was_deleted {
+        let mut remaining_pages = Vec::new();
+        collect_page_paths(&pages_dir, &pages_dir, &mut remaining_pages)?;
+        remaining_pages.sort();
+        remaining_pages
+            .into_iter()
+            .find(|path| is_html_path(path) && !deleted_pages.contains(path))
+    } else {
+        None
+    };
 
     if recursive {
         fs::remove_dir_all(&directory_path)?;
@@ -454,19 +476,12 @@ pub fn delete_directory(
         report.push(OperationEvent::PageDeleted {
             path: pages_dir.join(deleted_page),
         });
-        report.extend(unwrap_deleted_page_links(root, deleted_page)?);
     }
 
-    let default_page = manifest_default_page_path(root, &manifest).ok();
-    if default_page.as_deref().is_some_and(|path| {
-        path == directory_prefix || path.starts_with(&format!("{directory_prefix}/"))
-    }) {
-        let mut remaining_pages = Vec::new();
-        collect_page_paths(&pages_dir, &pages_dir, &mut remaining_pages)?;
-        remaining_pages.sort();
-        manifest.default_page = remaining_pages
-            .into_iter()
-            .find(|path| is_html_path(path))
+    report.extend(apply_planned_page_rewrites(deleted_link_rewrites)?);
+
+    if default_was_deleted {
+        manifest.default_page = replacement_default_page
             .map(|path| format!("{PAGES_DIR}/{path}"))
             .unwrap_or_default();
         let manifest_path = root.join(MANIFEST_FILE);
@@ -622,89 +637,110 @@ fn manifest_default_page_path(root: &Path, manifest: &ProjectManifest) -> Result
         .replace('\\', "/"))
 }
 
-fn unwrap_deleted_page_links(root: &Path, deleted_path: &str) -> Result<OperationReport> {
-    let pages_dir = root.join(PAGES_DIR);
-    let mut page_paths = Vec::new();
-    collect_page_paths(&pages_dir, &pages_dir, &mut page_paths)?;
-    page_paths.sort();
-
-    let mut report = OperationReport::new();
-    for page_path in page_paths.into_iter().filter(|path| is_html_path(path)) {
-        let page = pages_dir.join(&page_path);
-        let html = fs::read_to_string(&page)?;
-        let document = PageDocument::parse(&html);
-        let updated = document.unwrap_generated_page_hrefs(&page_path, deleted_path);
-        if updated == 0 {
-            continue;
-        }
-
-        atomic_write(&page, document.to_html()?)?;
-        report.push(OperationEvent::PageLinksRewritten {
-            page,
-            count: updated,
-        });
-    }
-
-    Ok(report.relative_to(root))
+struct PlannedPageRewrite {
+    page: PathBuf,
+    html: String,
+    count: usize,
 }
 
-fn rewrite_renamed_page_link_text(
+fn plan_unwrap_deleted_page_links(
     root: &Path,
-    destination_path: &str,
-    title: &str,
-) -> Result<OperationReport> {
+    deleted_paths: &[String],
+) -> Result<Vec<PlannedPageRewrite>> {
     let pages_dir = root.join(PAGES_DIR);
     let mut page_paths = Vec::new();
     collect_page_paths(&pages_dir, &pages_dir, &mut page_paths)?;
     page_paths.sort();
 
-    let mut report = OperationReport::new();
+    let mut planned = Vec::new();
     for page_path in page_paths.into_iter().filter(|path| is_html_path(path)) {
+        if deleted_paths.contains(&page_path) {
+            continue;
+        }
+
         let page = pages_dir.join(&page_path);
         let html = fs::read_to_string(&page)?;
         let document = PageDocument::parse(&html);
-        let updated = document.rewrite_page_link_text(&page_path, destination_path, title);
+        let updated = deleted_paths
+            .iter()
+            .map(|deleted_path| document.unwrap_generated_page_hrefs(&page_path, deleted_path))
+            .sum();
         if updated == 0 {
             continue;
         }
 
-        atomic_write(&page, document.to_html()?)?;
-        report.push(OperationEvent::PageLinksRewritten {
+        planned.push(PlannedPageRewrite {
             page,
+            html: document.to_html()?,
             count: updated,
         });
     }
 
-    Ok(report.relative_to(root))
+    Ok(planned)
 }
 
-fn rewrite_renamed_page_links(
+fn plan_renamed_page_link_rewrites(
     root: &Path,
     source_path: &str,
     destination_path: &str,
-) -> Result<OperationReport> {
+    title: &str,
+    path_changed: bool,
+    title_changed: bool,
+) -> Result<Vec<PlannedPageRewrite>> {
+    if !path_changed && !title_changed {
+        return Ok(Vec::new());
+    }
+
     let pages_dir = root.join(PAGES_DIR);
     let mut page_paths = Vec::new();
     collect_page_paths(&pages_dir, &pages_dir, &mut page_paths)?;
     page_paths.sort();
 
-    let mut report = OperationReport::new();
+    let mut planned = Vec::new();
     for page_path in page_paths.into_iter().filter(|path| is_html_path(path)) {
+        if page_path == source_path {
+            continue;
+        }
+
         let page = pages_dir.join(&page_path);
         let html = fs::read_to_string(&page)?;
         let document = PageDocument::parse(&html);
-        let href = relative_href(&page_path, destination_path);
-        let updated = document.rewrite_page_hrefs(&page_path, source_path, &href);
+        let mut updated = 0;
+
+        if path_changed {
+            let href = relative_href(&page_path, destination_path);
+            updated += document.rewrite_page_hrefs(&page_path, source_path, &href);
+        }
+
+        if title_changed {
+            updated += document.rewrite_page_link_text(&page_path, destination_path, title);
+        }
+
         if updated == 0 {
             continue;
         }
 
-        atomic_write(&page, document.to_html()?)?;
-        report.push(OperationEvent::PageLinksRewritten {
+        planned.push(PlannedPageRewrite {
             page,
+            html: document.to_html()?,
             count: updated,
         });
     }
 
-    Ok(report.relative_to(root))
+    Ok(planned)
+}
+
+fn apply_planned_page_rewrites(rewrites: Vec<PlannedPageRewrite>) -> Result<OperationReport> {
+    let mut report = OperationReport::new();
+
+    for rewrite in rewrites {
+        if atomic_write(&rewrite.page, rewrite.html)? {
+            report.push(OperationEvent::PageLinksRewritten {
+                page: rewrite.page,
+                count: rewrite.count,
+            });
+        }
+    }
+
+    Ok(report)
 }

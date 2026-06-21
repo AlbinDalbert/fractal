@@ -1664,6 +1664,11 @@ fn rename_page_moves_page_updates_title_manifest_and_generated_data() {
     assert!(html.contains("href=\"../../.fractal/style.css\""));
     assert!(html.contains("href=\"../links.html\""));
     assert!(html.contains("href=\"home.html#intro\""));
+    assert!(PageDocument::parse(&html).links().contains(&LinkEntry {
+        href: "home.html#intro".to_string(),
+        text: "Home Base".to_string(),
+        scope: "page".to_string(),
+    }));
     let links_html =
         fs::read_to_string(project.pages_dir().join("links.html")).expect("read links");
     assert!(links_html.contains("href=\"folder/home.html#intro\""));
@@ -2453,6 +2458,46 @@ fn sync_rebuilds_index_and_links_notes_before_project_pages() {
             text: "Home".to_string(),
         }]
     );
+}
+
+#[test]
+fn sync_failure_does_not_write_initial_generated_data() {
+    let project = TestProject::new("sync-failure-no-generated-write");
+    project.write_page(
+        "index.html",
+        r#"<!doctype html>
+<html>
+  <head>
+    <title>Broken</title>
+    <meta name="fractal:version" content="0.1">
+    <meta name="fractal:summary" content="">
+    <meta name="fractal:tags" content="">
+    <link rel="stylesheet" href="../.fractal/style.css">
+  </head>
+  <body data-fractal-theme="dark">
+    <p>Rust is mentioned here.</p>
+    <section data-fractal-notes></section>
+  </body>
+</html>"#,
+    );
+    project.write_page(
+        "rust.html",
+        render_page_document(
+            "Rust",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+
+    let error = sync_project(project.root()).expect_err("sync should reject missing main");
+
+    assert!(error.to_string().contains("missing main section"));
+    assert!(!project.workspace_dir().join("index.json").exists());
+    assert!(!project.workspace_dir().join("graph.json").exists());
+    assert!(!fs::read_to_string(project.pages_dir().join("index.html"))
+        .expect("read broken page")
+        .contains("data-fractal-link"));
 }
 
 #[test]

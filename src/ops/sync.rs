@@ -16,21 +16,30 @@ use std::path::Path;
 pub fn sync_project(root: impl AsRef<Path>) -> Result<OperationReport> {
     let root = root.as_ref();
     let initial_index = build_project_index(root)?;
-    write_generated_project_data(root, &initial_index)?;
-
     let pages_dir = root.join(PAGES_DIR);
-    let mut synced = 0;
-    let mut report = OperationReport::new();
+    let mut planned_rewrites = Vec::new();
+
     for page in &initial_index.pages {
         let path = pages_dir.join(&page.path);
         let html = fs::read_to_string(&path)?;
         let updated = sync_page_links(&html, &page.path, &initial_index)?;
         if updated.html != html {
-            atomic_write(&path, updated.html)?;
+            planned_rewrites.push(PlannedSyncRewrite {
+                path,
+                html: updated.html,
+                links_written: updated.links_written,
+            });
+        }
+    }
+
+    let mut synced = 0;
+    let mut report = OperationReport::new();
+    for rewrite in planned_rewrites {
+        if atomic_write(&rewrite.path, rewrite.html)? {
             synced += 1;
             report.push(OperationEvent::PageLinksRewritten {
-                page: path,
-                count: updated.links_written,
+                page: rewrite.path,
+                count: rewrite.links_written,
             });
         }
     }
@@ -41,6 +50,12 @@ pub fn sync_project(root: impl AsRef<Path>) -> Result<OperationReport> {
         pages_updated: synced,
     });
     Ok(report.relative_to(root))
+}
+
+struct PlannedSyncRewrite {
+    path: std::path::PathBuf,
+    html: String,
+    links_written: usize,
 }
 
 pub(crate) fn sync_page_links(
