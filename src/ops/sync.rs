@@ -44,7 +44,7 @@ pub fn sync_project(root: impl AsRef<Path>) -> Result<OperationReport> {
         );
     }
 
-    let mut report = plan.apply()?;
+    let mut report = plan.apply(root)?;
     let synced = report
         .events
         .iter()

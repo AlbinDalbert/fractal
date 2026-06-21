@@ -105,7 +105,7 @@ fn update_page_meta(
         );
     }
 
-    let mut report = plan.apply()?;
+    let mut report = plan.apply(root)?;
     report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }

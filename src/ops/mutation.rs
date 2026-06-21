@@ -1,8 +1,12 @@
 use crate::io::fs::atomic_write;
+use crate::project::constants::WORKSPACE_DIR;
 use crate::types::{OperationEvent, OperationReport};
-use crate::Result;
-use std::fs;
-use std::path::PathBuf;
+use crate::{FractalError, Result};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+pub(crate) const MUTATION_LOCK_FILE: &str = "mutation.lock";
 
 #[derive(Debug, Default)]
 pub(crate) struct MutationPlan {
@@ -97,7 +101,16 @@ impl MutationPlan {
         });
     }
 
-    pub(crate) fn apply(self) -> Result<OperationReport> {
+    pub(crate) fn apply(self, root: &Path) -> Result<OperationReport> {
+        if self.steps.is_empty() {
+            return Ok(OperationReport::new());
+        }
+
+        let _lock = ProjectLock::acquire(root)?;
+        self.apply_unlocked()
+    }
+
+    fn apply_unlocked(self) -> Result<OperationReport> {
         let mut report = OperationReport::new();
 
         for step in self.steps {
@@ -147,6 +160,45 @@ impl MutationPlan {
         }
 
         Ok(report)
+    }
+}
+
+struct ProjectLock {
+    path: PathBuf,
+}
+
+impl ProjectLock {
+    fn acquire(root: &Path) -> Result<Self> {
+        let path = root.join(WORKSPACE_DIR).join(MUTATION_LOCK_FILE);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    FractalError::project_locked(format!(
+                        "project is locked for mutation: {}",
+                        path.display()
+                    ))
+                } else {
+                    error.into()
+                }
+            })?;
+
+        writeln!(file, "pid={}", std::process::id())?;
+        file.sync_all()?;
+
+        Ok(Self { path })
+    }
+}
+
+impl Drop for ProjectLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
     }
 }
 

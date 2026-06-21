@@ -122,7 +122,7 @@ fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
         let mut setup_plan = MutationPlan::new();
         setup_plan.ensure_dir(workspace_dir.clone());
         setup_plan.ensure_dir(pages_dir.clone());
-        report.extend(setup_plan.apply()?);
+        report.extend(setup_plan.apply(root)?);
     }
 
     let mut plan = MutationPlan::new();
@@ -203,7 +203,7 @@ fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
     }
 
     if mode.writes() {
-        report.extend(plan.apply()?);
+        report.extend(plan.apply(root)?);
     }
 
     Ok(report.relative_to(root))

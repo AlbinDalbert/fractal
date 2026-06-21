@@ -34,7 +34,7 @@ pub fn add_note(
         html.into_bytes(),
         OperationEvent::NoteAdded { page, note_id },
     );
-    let mut report = plan.apply()?;
+    let mut report = plan.apply(root)?;
     report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }
@@ -55,7 +55,7 @@ pub fn remove_note(
         html.into_bytes(),
         OperationEvent::NoteRemoved { page, note_id },
     );
-    let mut report = plan.apply()?;
+    let mut report = plan.apply(root)?;
     report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }
@@ -77,7 +77,7 @@ pub fn patch_note(
         html.into_bytes(),
         OperationEvent::NoteUpdated { page, note_id },
     );
-    let mut report = plan.apply()?;
+    let mut report = plan.apply(root)?;
     report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }

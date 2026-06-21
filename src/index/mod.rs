@@ -137,7 +137,7 @@ pub(crate) fn write_generated_project_data(
         OperationEvent::GeneratedGraphBuilt { path: graph_path },
     );
 
-    Ok(plan.apply()?.relative_to(root))
+    Ok(plan.apply(root)?.relative_to(root))
 }
 
 fn build_page_entry(pages_dir: &Path, path: String) -> Result<PageEntry> {

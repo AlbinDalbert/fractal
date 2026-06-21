@@ -66,7 +66,7 @@ pub fn init_project_at(
         path: root.to_path_buf(),
     });
 
-    Ok(plan.apply()?.relative_to(root))
+    Ok(plan.apply(root)?.relative_to(root))
 }
 
 pub fn load_project_manifest(root: impl AsRef<Path>) -> Result<ProjectManifest> {
@@ -109,7 +109,7 @@ pub fn create_directory(
         destination.clone(),
         OperationEvent::DirectoryCreated { path: destination },
     );
-    Ok(plan.apply()?.relative_to(root))
+    Ok(plan.apply(root)?.relative_to(root))
 }
 
 pub fn create_page(root: impl AsRef<Path>, page: PageCreate) -> Result<OperationReport> {
@@ -157,7 +157,7 @@ pub fn create_page(root: impl AsRef<Path>, page: PageCreate) -> Result<Operation
         );
     }
 
-    let mut report = plan.apply()?;
+    let mut report = plan.apply(root)?;
     report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }
@@ -336,8 +336,8 @@ pub fn rename_page(
         });
     }
 
-    let mut report = plan.apply()?;
-    report.extend(apply_planned_page_rewrites(renamed_link_rewrites)?);
+    let mut report = plan.apply(root)?;
+    report.extend(apply_planned_page_rewrites(root, renamed_link_rewrites)?);
 
     if preflight.updates_default_page {
         manifest.default_page = format!("{PAGES_DIR}/{}", preflight.destination_page);
@@ -350,7 +350,7 @@ pub fn rename_page(
                 path: manifest_path,
             },
         );
-        report.extend(manifest_plan.apply()?);
+        report.extend(manifest_plan.apply(root)?);
     }
 
     report.extend(build_index(root)?);
@@ -415,8 +415,8 @@ pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Ope
         },
     );
 
-    let mut report = plan.apply()?;
-    report.extend(apply_planned_page_rewrites(deleted_link_rewrites)?);
+    let mut report = plan.apply(root)?;
+    report.extend(apply_planned_page_rewrites(root, deleted_link_rewrites)?);
 
     if let Some(default_page) = preflight.replacement_default_page {
         manifest.default_page = format!("{PAGES_DIR}/{default_page}");
@@ -429,7 +429,7 @@ pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Ope
                 path: manifest_path,
             },
         );
-        report.extend(manifest_plan.apply()?);
+        report.extend(manifest_plan.apply(root)?);
     }
 
     report.extend(build_index(root)?);
@@ -499,8 +499,8 @@ pub fn delete_directory(
         });
     }
 
-    let mut report = plan.apply()?;
-    report.extend(apply_planned_page_rewrites(deleted_link_rewrites)?);
+    let mut report = plan.apply(root)?;
+    report.extend(apply_planned_page_rewrites(root, deleted_link_rewrites)?);
 
     if default_was_deleted {
         manifest.default_page = replacement_default_page
@@ -515,7 +515,7 @@ pub fn delete_directory(
                 path: manifest_path,
             },
         );
-        report.extend(manifest_plan.apply()?);
+        report.extend(manifest_plan.apply(root)?);
     }
 
     report.extend(build_index(root)?);
@@ -575,7 +575,7 @@ pub fn import_markdown(
             destination,
         },
     );
-    let mut report = plan.apply()?;
+    let mut report = plan.apply(root)?;
     report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }
@@ -608,7 +608,7 @@ pub fn export_page(
             output: output.to_path_buf(),
         },
     );
-    Ok(plan.apply()?.relative_to(root))
+    Ok(plan.apply(root)?.relative_to(root))
 }
 
 pub fn read_page_source(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<PageSource> {
@@ -642,7 +642,7 @@ pub fn write_page_source(
         OperationEvent::PageSourceUpdated { page },
     );
 
-    let mut report = plan.apply()?;
+    let mut report = plan.apply(root)?;
     report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }
@@ -761,7 +761,10 @@ fn plan_renamed_page_link_rewrites(
     Ok(planned)
 }
 
-fn apply_planned_page_rewrites(rewrites: Vec<PlannedPageRewrite>) -> Result<OperationReport> {
+fn apply_planned_page_rewrites(
+    root: &Path,
+    rewrites: Vec<PlannedPageRewrite>,
+) -> Result<OperationReport> {
     let mut plan = MutationPlan::new();
 
     for rewrite in rewrites {
@@ -775,5 +778,5 @@ fn apply_planned_page_rewrites(rewrites: Vec<PlannedPageRewrite>) -> Result<Oper
         );
     }
 
-    plan.apply()
+    plan.apply(root)
 }

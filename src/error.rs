@@ -34,6 +34,10 @@ impl FractalError {
     pub fn unsupported_version(message: impl Into<String>) -> Self {
         Self::new(FractalErrorCode::UnsupportedVersion, message)
     }
+
+    pub fn project_locked(message: impl Into<String>) -> Self {
+        Self::new(FractalErrorCode::ProjectLocked, message)
+    }
 }
 
 impl fmt::Display for FractalError {
@@ -95,6 +99,7 @@ pub enum FractalErrorCode {
     Json,
     NotFound,
     Path,
+    ProjectLocked,
     UnsupportedVersion,
     Utf8,
 }

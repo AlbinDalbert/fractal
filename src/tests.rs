@@ -1473,6 +1473,40 @@ fn safe_editor_page_update_repairs_editor_html_links_before_validating() {
 }
 
 #[test]
+fn mutation_lock_blocks_writes_and_successful_mutations_clean_up_lock() {
+    let project = TestProject::new("mutation-lock");
+    project.write_page(
+        "index.html",
+        render_page_document(
+            "Home",
+            "<p>body</p>",
+            Theme::Dark,
+            "../.fractal/style.css".to_string(),
+        ),
+    );
+    let lock_path = project
+        .workspace_dir()
+        .join(crate::ops::mutation::MUTATION_LOCK_FILE);
+
+    update_page_body(project.root(), Path::new("index"), "<p>updated</p>")
+        .expect("update page with free lock");
+    assert!(!lock_path.exists());
+
+    fs::write(&lock_path, "held by another process").expect("create lock");
+    let error = update_page_body(project.root(), Path::new("index"), "<p>blocked</p>")
+        .expect_err("locked project should reject writes");
+
+    assert_eq!(error.code, FractalErrorCode::ProjectLocked);
+    assert!(lock_path.exists());
+    assert!(fs::read_to_string(project.pages_dir().join("index.html"))
+        .expect("read page")
+        .contains("<p>updated</p>"));
+    assert!(!fs::read_to_string(project.pages_dir().join("index.html"))
+        .expect("read page")
+        .contains("<p>blocked</p>"));
+}
+
+#[test]
 fn safe_page_editing_rejects_duplicate_title_before_writing() {
     let project = TestProject::new("safe-editor-duplicate-title");
     project.write_page(
