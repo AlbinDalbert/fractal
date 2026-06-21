@@ -5,12 +5,10 @@ use crate::graph::build_project_graph;
 use crate::graph::links::{
     link_label_key, normalize_link_label, page_label_from_path, page_link_labels,
 };
-use crate::io::fs::atomic_write;
+use crate::ops::mutation::MutationPlan;
 use crate::project::constants::{GRAPH_FILE, INDEX_FILE, INDEX_VERSION, PAGES_DIR, WORKSPACE_DIR};
 use crate::project::paths::{collect_page_paths, file_kind, is_html_path, load_manifest};
-use crate::types::{
-    FileEntry, OperationEvent, OperationReport, PageEntry, ProjectGraph, ProjectIndex,
-};
+use crate::types::{FileEntry, OperationEvent, OperationReport, PageEntry, ProjectIndex};
 use crate::{FractalError, Result};
 use std::collections::BTreeMap;
 use std::fs;
@@ -123,36 +121,23 @@ pub(crate) fn write_generated_project_data(
     root: &Path,
     index: &ProjectIndex,
 ) -> Result<OperationReport> {
-    let mut report = OperationReport::new();
-    if let Some(event) = write_project_index(root, index)? {
-        report.push(event);
-    }
-    if let Some(event) = write_project_graph(root, &build_project_graph(index))? {
-        report.push(event);
-    }
-    Ok(report.relative_to(root))
-}
-
-fn write_project_index(root: &Path, index: &ProjectIndex) -> Result<Option<OperationEvent>> {
     let index_path = root.join(WORKSPACE_DIR).join(INDEX_FILE);
-    if atomic_write(&index_path, serde_json::to_string_pretty(index)?)? {
-        Ok(Some(OperationEvent::GeneratedIndexBuilt {
-            path: index_path,
-        }))
-    } else {
-        Ok(None)
-    }
-}
-
-fn write_project_graph(root: &Path, graph: &ProjectGraph) -> Result<Option<OperationEvent>> {
     let graph_path = root.join(WORKSPACE_DIR).join(GRAPH_FILE);
-    if atomic_write(&graph_path, serde_json::to_string_pretty(graph)?)? {
-        Ok(Some(OperationEvent::GeneratedGraphBuilt {
-            path: graph_path,
-        }))
-    } else {
-        Ok(None)
-    }
+    let graph = build_project_graph(index);
+    let mut plan = MutationPlan::new();
+
+    plan.write_if_changed(
+        index_path.clone(),
+        serde_json::to_string_pretty(index)?.into_bytes(),
+        OperationEvent::GeneratedIndexBuilt { path: index_path },
+    );
+    plan.write_if_changed(
+        graph_path.clone(),
+        serde_json::to_string_pretty(&graph)?.into_bytes(),
+        OperationEvent::GeneratedGraphBuilt { path: graph_path },
+    );
+
+    Ok(plan.apply()?.relative_to(root))
 }
 
 fn build_page_entry(pages_dir: &Path, path: String) -> Result<PageEntry> {

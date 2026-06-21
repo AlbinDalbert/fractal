@@ -1,4 +1,5 @@
 mod editor;
+pub(crate) mod mutation;
 mod page;
 mod summary;
 mod sync;

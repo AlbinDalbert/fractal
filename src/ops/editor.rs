@@ -5,7 +5,7 @@ use crate::document::PageDocument;
 use crate::graph::build_project_graph;
 use crate::graph::links::{normalize_link_label, page_link_text_matches, resolve_page_href};
 use crate::index::{build_index, build_project_index, ensure_page_labels_available_for};
-use crate::io::fs::atomic_write;
+use crate::ops::mutation::MutationPlan;
 use crate::ops::page::rename_page;
 use crate::project::paths::{page_relative_path, resolve_existing_page};
 use crate::types::{
@@ -121,12 +121,12 @@ pub fn update_editor_page(
 
     let html = fs::read_to_string(&page)?;
     let document = PageDocument::parse(&html);
-    let mut report = OperationReport::new();
+    let mut events = Vec::new();
 
     if let Some(title) = update.title {
         let title = normalize_editor_title(&title)?;
         if document.set_title(&title)? {
-            report.push(OperationEvent::PageTitleUpdated {
+            events.push(OperationEvent::PageTitleUpdated {
                 page: page.clone(),
                 title,
             });
@@ -136,14 +136,14 @@ pub fn update_editor_page(
     let body_html_was_supplied = update.body_html.is_some();
     if let Some(body_html) = update.body_html {
         if document.set_main_body_html(&body_html)? {
-            report.push(OperationEvent::PageContentUpdated { page: page.clone() });
+            events.push(OperationEvent::PageContentUpdated { page: page.clone() });
         }
     }
 
     if let Some(summary) = update.summary {
         let summary = summary.trim().to_string();
         if document.set_meta_tag(SUMMARY_META, &summary)? {
-            report.push(OperationEvent::PageMetadataUpdated {
+            events.push(OperationEvent::PageMetadataUpdated {
                 page: page.clone(),
                 name: SUMMARY_META.to_string(),
                 content: summary,
@@ -154,7 +154,7 @@ pub fn update_editor_page(
     if let Some(tags) = update.tags {
         let tags = normalize_tags(tags.iter().map(String::as_str)).join(", ");
         if document.set_meta_tag(TAGS_META, &tags)? {
-            report.push(OperationEvent::PageMetadataUpdated {
+            events.push(OperationEvent::PageMetadataUpdated {
                 page: page.clone(),
                 name: TAGS_META.to_string(),
                 content: tags,
@@ -166,19 +166,24 @@ pub fn update_editor_page(
         let known_page_titles = known_page_titles_for_candidate(root, &path, &document)?;
         let repaired_links = document.repair_invalid_links(&path, &known_page_titles);
         if repaired_links > 0 {
-            report.push(OperationEvent::PageLinksRewritten {
+            events.push(OperationEvent::PageLinksRewritten {
                 page: page.clone(),
                 count: repaired_links,
             });
         }
     }
 
-    if !report.events.is_empty() {
+    let mut plan = MutationPlan::new();
+    if !events.is_empty() {
         let html = document.to_html()?;
         validate_page_html_for_project(root, &path, &html)?;
-        atomic_write(&page, html)?;
+        plan.write_silent(page, html.into_bytes());
+        for event in events {
+            plan.event(event);
+        }
     }
 
+    let mut report = plan.apply()?;
     report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }

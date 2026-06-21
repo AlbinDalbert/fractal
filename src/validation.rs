@@ -8,14 +8,13 @@ use crate::graph::links::{
     page_link_text_matches, resolve_page_href,
 };
 use crate::index::ensure_page_labels_available_for;
-use crate::io::fs::atomic_write;
+use crate::ops::mutation::MutationPlan;
 use crate::project::constants::{INDEX_PAGE, MANIFEST_FILE, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR};
 use crate::project::paths::{collect_page_paths, is_html_path, load_manifest};
 use crate::types::{OperationEvent, OperationReport, Theme};
 use crate::{FractalError, Result};
 use kuchiki::NodeRef;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 
 pub fn validate_project(root: impl AsRef<Path>) -> Result<OperationReport> {
@@ -120,47 +119,57 @@ fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
     let mut report = OperationReport::new();
 
     if mode.writes() {
-        fs::create_dir_all(&workspace_dir)?;
-        fs::create_dir_all(&pages_dir)?;
+        let mut setup_plan = MutationPlan::new();
+        setup_plan.ensure_dir(workspace_dir.clone());
+        setup_plan.ensure_dir(pages_dir.clone());
+        report.extend(setup_plan.apply()?);
     }
+
+    let mut plan = MutationPlan::new();
 
     let stylesheet = workspace_dir.join(STYLE_FILE);
     if !stylesheet.is_file() {
-        if mode.writes() {
-            atomic_write(&stylesheet, default_stylesheet())?;
-        }
-        report.push(OperationEvent::ProjectRepaired {
-            path: stylesheet,
+        let event = OperationEvent::ProjectRepaired {
+            path: stylesheet.clone(),
             applied: mode.writes(),
-        });
+        };
+        if mode.writes() {
+            plan.write_silent(stylesheet, default_stylesheet().as_bytes().to_vec());
+            plan.event(event);
+        } else {
+            report.push(event);
+        }
     }
 
     if !manifest.default_page.trim().is_empty() {
         let default_page = root.join(&manifest.default_page);
         if !default_page.is_file() {
-            if mode.writes() {
-                if let Some(parent) = default_page.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-            }
-
             let title = default_page
                 .file_stem()
                 .and_then(|stem| stem.to_str())
-                .unwrap_or(&manifest.project_name);
+                .unwrap_or(&manifest.project_name)
+                .to_string();
             let page_path = default_page
                 .strip_prefix(&pages_dir)
-                .unwrap_or_else(|_| Path::new(INDEX_PAGE));
-            if mode.writes() {
-                atomic_write(
-                    &default_page,
-                    render_page_document(title, "", manifest.theme, stylesheet_href(page_path)),
-                )?;
-            }
-            report.push(OperationEvent::ProjectRepaired {
+                .unwrap_or_else(|_| Path::new(INDEX_PAGE))
+                .to_path_buf();
+            let event = OperationEvent::ProjectRepaired {
                 path: default_page.clone(),
                 applied: mode.writes(),
-            });
+            };
+            if mode.writes() {
+                if let Some(parent) = default_page.parent() {
+                    plan.ensure_dir(parent.to_path_buf());
+                }
+                plan.write_silent(
+                    default_page,
+                    render_page_document(&title, "", manifest.theme, stylesheet_href(&page_path))
+                        .into_bytes(),
+                );
+                plan.event(event);
+            } else {
+                report.push(event);
+            }
         }
     }
 
@@ -179,12 +188,22 @@ fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
         }
 
         let page = pages_dir.join(&page_path);
-        if fix_page(&page, &page_path, manifest.theme, &known_page_titles, mode)? {
-            report.push(OperationEvent::ProjectRepaired {
-                path: page,
+        if let Some(html) = fix_page(&page, &page_path, manifest.theme, &known_page_titles)? {
+            let event = OperationEvent::ProjectRepaired {
+                path: page.clone(),
                 applied: mode.writes(),
-            });
+            };
+            if mode.writes() {
+                plan.write_silent(page, html.into_bytes());
+                plan.event(event);
+            } else {
+                report.push(event);
+            }
         }
+    }
+
+    if mode.writes() {
+        report.extend(plan.apply()?);
     }
 
     Ok(report.relative_to(root))
@@ -192,7 +211,7 @@ fn fix_project(root: &Path, mode: RepairMode) -> Result<OperationReport> {
 
 #[cfg(test)]
 pub(crate) fn validate_page_metadata(page: &Path) -> Result<()> {
-    let html = fs::read_to_string(page)?;
+    let html = std::fs::read_to_string(page)?;
     let document = PageDocument::parse(&html);
     validate_page_structure(page, "page.html", Theme::Dark, &document)?;
     validate_note_ids(page, &document)?;
@@ -283,8 +302,7 @@ fn fix_page(
     page_path: &str,
     theme: Theme,
     known_page_titles: &BTreeMap<String, String>,
-    mode: RepairMode,
-) -> Result<bool> {
+) -> Result<Option<String>> {
     let document = PageDocument::from_path(page)?;
     let mut changed = false;
 
@@ -314,11 +332,11 @@ fn fix_page(
         changed = true;
     }
 
-    if changed && mode.writes() {
-        atomic_write(page, document.to_html()?)?;
+    if changed {
+        Ok(Some(document.to_html()?))
+    } else {
+        Ok(None)
     }
-
-    Ok(changed)
 }
 
 fn fix_missing_title_or_heading(document: &PageDocument, page_path: &str) -> Result<bool> {

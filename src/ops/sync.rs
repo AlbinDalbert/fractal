@@ -4,7 +4,7 @@ use crate::graph::links::{
     is_linkable_label, link_label_key, normalize_link_label, page_link_labels, relative_href,
 };
 use crate::index::{build_project_index, write_generated_project_data};
-use crate::io::fs::atomic_write;
+use crate::ops::mutation::MutationPlan;
 use crate::project::constants::PAGES_DIR;
 use crate::types::{OperationEvent, OperationReport, ProjectIndex};
 use crate::{FractalError, Result};
@@ -32,17 +32,24 @@ pub fn sync_project(root: impl AsRef<Path>) -> Result<OperationReport> {
         }
     }
 
-    let mut synced = 0;
-    let mut report = OperationReport::new();
+    let mut plan = MutationPlan::new();
     for rewrite in planned_rewrites {
-        if atomic_write(&rewrite.path, rewrite.html)? {
-            synced += 1;
-            report.push(OperationEvent::PageLinksRewritten {
+        plan.write_if_changed(
+            rewrite.path.clone(),
+            rewrite.html.into_bytes(),
+            OperationEvent::PageLinksRewritten {
                 page: rewrite.path,
                 count: rewrite.links_written,
-            });
-        }
+            },
+        );
     }
+
+    let mut report = plan.apply()?;
+    let synced = report
+        .events
+        .iter()
+        .filter(|event| matches!(event, OperationEvent::PageLinksRewritten { .. }))
+        .count();
 
     let final_index = build_project_index(root)?;
     report.extend(write_generated_project_data(root, &final_index)?);

@@ -1,7 +1,7 @@
 use crate::document::html::escape_html;
 use crate::document::PageDocument;
 use crate::index::build_index;
-use crate::io::fs::atomic_write;
+use crate::ops::mutation::MutationPlan;
 use crate::project::paths::resolve_existing_page;
 use crate::types::{OperationEvent, OperationReport};
 use crate::{FractalError, Result};
@@ -28,10 +28,14 @@ pub fn add_note(
     }
 
     let html = insert_note_into_document(&html, &render_note_aside(&note_id, content))?;
-    atomic_write(&page, html)?;
-    let generated = build_index(root)?;
-    let mut report = OperationReport::from_event(OperationEvent::NoteAdded { page, note_id });
-    report.extend(generated);
+    let mut plan = MutationPlan::new();
+    plan.write_always(
+        page.clone(),
+        html.into_bytes(),
+        OperationEvent::NoteAdded { page, note_id },
+    );
+    let mut report = plan.apply()?;
+    report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }
 
@@ -45,10 +49,14 @@ pub fn remove_note(
     let note_id = note_id_from_trigger(trigger)?;
     let html = fs::read_to_string(&page)?;
     let html = remove_note_from_document(&html, &note_id)?;
-    atomic_write(&page, html)?;
-    let generated = build_index(root)?;
-    let mut report = OperationReport::from_event(OperationEvent::NoteRemoved { page, note_id });
-    report.extend(generated);
+    let mut plan = MutationPlan::new();
+    plan.write_always(
+        page.clone(),
+        html.into_bytes(),
+        OperationEvent::NoteRemoved { page, note_id },
+    );
+    let mut report = plan.apply()?;
+    report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }
 
@@ -63,10 +71,14 @@ pub fn patch_note(
     let note_id = note_id_from_trigger(trigger)?;
     let html = fs::read_to_string(&page)?;
     let html = patch_note_in_document(&html, &note_id, content)?;
-    atomic_write(&page, html)?;
-    let generated = build_index(root)?;
-    let mut report = OperationReport::from_event(OperationEvent::NoteUpdated { page, note_id });
-    report.extend(generated);
+    let mut plan = MutationPlan::new();
+    plan.write_always(
+        page.clone(),
+        html.into_bytes(),
+        OperationEvent::NoteUpdated { page, note_id },
+    );
+    let mut report = plan.apply()?;
+    report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }
 

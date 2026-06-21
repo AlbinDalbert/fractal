@@ -1,7 +1,7 @@
 use crate::document::PageDocument;
 use crate::graph::links::normalize_link_label;
 use crate::index::build_index;
-use crate::io::fs::atomic_write;
+use crate::ops::mutation::MutationPlan;
 use crate::project::constants::{DEFAULT_SUMMARY, DEFAULT_TAGS};
 use crate::project::paths::{page_relative_path, resolve_existing_page};
 use crate::types::{OperationEvent, OperationReport, PageMetadata};
@@ -92,16 +92,20 @@ fn update_page_meta(
     let html = fs::read_to_string(&page)?;
     let document = PageDocument::parse(&html);
 
-    let mut report = OperationReport::new();
+    let mut plan = MutationPlan::new();
     if document.set_meta_tag(name, content)? {
-        atomic_write(&page, document.to_html()?)?;
-        report.push(OperationEvent::PageMetadataUpdated {
-            page,
-            name: name.to_string(),
-            content: content.to_string(),
-        });
+        plan.write_always(
+            page.clone(),
+            document.to_html()?.into_bytes(),
+            OperationEvent::PageMetadataUpdated {
+                page,
+                name: name.to_string(),
+                content: content.to_string(),
+            },
+        );
     }
 
+    let mut report = plan.apply()?;
     report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }

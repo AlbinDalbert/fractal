@@ -4,8 +4,8 @@ use crate::graph::build_project_graph;
 use crate::graph::links::{normalize_link_label, page_label_from_path, relative_href};
 use crate::index::ensure_page_labels_available_for;
 use crate::index::{build_index, build_project_index, ensure_page_labels_available};
-use crate::io::fs::atomic_write;
 use crate::io::markdown::{html_to_markdown, markdown_to_html};
+use crate::ops::mutation::MutationPlan;
 use crate::project::constants::{
     MANIFEST_FILE, MANIFEST_VERSION, PAGES_DIR, STYLE_FILE, WORKSPACE_DIR,
 };
@@ -44,9 +44,6 @@ pub fn init_project_at(
         )));
     }
 
-    fs::create_dir_all(&pages_dir)?;
-    fs::create_dir_all(&workspace_dir)?;
-
     let manifest = ProjectManifest {
         project_name: project_name.to_string(),
         version: MANIFEST_VERSION,
@@ -54,13 +51,22 @@ pub fn init_project_at(
         theme: Theme::default(),
     };
 
-    atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
-    atomic_write(workspace_dir.join(STYLE_FILE), default_stylesheet())?;
-
-    Ok(OperationReport::from_event(OperationEvent::ProjectCreated {
+    let mut plan = MutationPlan::new();
+    plan.ensure_dir(pages_dir);
+    plan.ensure_dir(workspace_dir.clone());
+    plan.write_silent(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest)?.into_bytes(),
+    );
+    plan.write_silent(
+        workspace_dir.join(STYLE_FILE),
+        default_stylesheet().as_bytes().to_vec(),
+    );
+    plan.event(OperationEvent::ProjectCreated {
         path: root.to_path_buf(),
-    })
-    .relative_to(root))
+    });
+
+    Ok(plan.apply()?.relative_to(root))
 }
 
 pub fn load_project_manifest(root: impl AsRef<Path>) -> Result<ProjectManifest> {
@@ -98,11 +104,12 @@ pub fn create_directory(
         )));
     }
 
-    fs::create_dir(&destination)?;
-    Ok(
-        OperationReport::from_event(OperationEvent::DirectoryCreated { path: destination })
-            .relative_to(root),
-    )
+    let mut plan = MutationPlan::new();
+    plan.create_dir(
+        destination.clone(),
+        OperationEvent::DirectoryCreated { path: destination },
+    );
+    Ok(plan.apply()?.relative_to(root))
 }
 
 pub fn create_page(root: impl AsRef<Path>, page: PageCreate) -> Result<OperationReport> {
@@ -131,25 +138,27 @@ pub fn create_page(root: impl AsRef<Path>, page: PageCreate) -> Result<Operation
     let relative_page_string = relative_page.to_string_lossy().replace('\\', "/");
     ensure_page_labels_available(root, &relative_page_string, &title)?;
 
-    atomic_write(
-        &destination,
-        render_page_document(&title, "", manifest.theme, stylesheet_href(relative_page)),
-    )?;
-    let updated_manifest = if manifest.default_page.trim().is_empty() {
+    let mut plan = MutationPlan::new();
+    plan.write_always(
+        destination.clone(),
+        render_page_document(&title, "", manifest.theme, stylesheet_href(relative_page))
+            .into_bytes(),
+        OperationEvent::PageCreated { path: destination },
+    );
+    if manifest.default_page.trim().is_empty() {
         manifest.default_page = format!("{PAGES_DIR}/{relative_page_string}");
         let manifest_path = root.join(MANIFEST_FILE);
-        atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
-        Some(manifest_path)
-    } else {
-        None
-    };
-
-    let generated = build_index(root)?;
-    let mut report = OperationReport::from_event(OperationEvent::PageCreated { path: destination });
-    if let Some(path) = updated_manifest {
-        report.push(OperationEvent::ManifestUpdated { path });
+        plan.write_always(
+            manifest_path.clone(),
+            serde_json::to_string_pretty(&manifest)?.into_bytes(),
+            OperationEvent::ManifestUpdated {
+                path: manifest_path,
+            },
+        );
     }
-    report.extend(generated);
+
+    let mut report = plan.apply()?;
+    report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }
 
@@ -295,45 +304,53 @@ pub fn rename_page(
         title_changed,
     )?;
 
+    let mut plan = MutationPlan::new();
     if let Some(parent) = preflight.destination_path.parent() {
-        fs::create_dir_all(parent)?;
+        plan.ensure_dir(parent.to_path_buf());
     }
-
     if preflight.path_changed {
-        fs::rename(&preflight.source_path, &preflight.destination_path)?;
+        plan.move_file(
+            preflight.source_path.clone(),
+            preflight.destination_path.clone(),
+            OperationEvent::PageMoved {
+                from: preflight.source_path.clone(),
+                to: preflight.destination_path.clone(),
+            },
+        );
     }
-    atomic_write(&preflight.destination_path, updated_html)?;
-
-    let mut report = OperationReport::new();
-    if preflight.path_changed {
-        report.push(OperationEvent::PageMoved {
-            from: preflight.source_path.clone(),
-            to: preflight.destination_path.clone(),
-        });
-    }
+    plan.write_silent(
+        preflight.destination_path.clone(),
+        updated_html.into_bytes(),
+    );
     if title_changed {
-        report.push(OperationEvent::PageTitleUpdated {
+        plan.event(OperationEvent::PageTitleUpdated {
             page: preflight.destination_path.clone(),
             title: preflight.title.clone(),
         });
     }
     let moved_page_link_updates = moved_page_href_updates + moved_page_title_link_updates;
     if moved_page_link_updates > 0 {
-        report.push(OperationEvent::PageLinksRewritten {
+        plan.event(OperationEvent::PageLinksRewritten {
             page: preflight.destination_path.clone(),
             count: moved_page_link_updates,
         });
     }
 
+    let mut report = plan.apply()?;
     report.extend(apply_planned_page_rewrites(renamed_link_rewrites)?);
 
     if preflight.updates_default_page {
         manifest.default_page = format!("{PAGES_DIR}/{}", preflight.destination_page);
         let manifest_path = root.join(MANIFEST_FILE);
-        atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
-        report.push(OperationEvent::ManifestUpdated {
-            path: manifest_path,
-        });
+        let mut manifest_plan = MutationPlan::new();
+        manifest_plan.write_always(
+            manifest_path.clone(),
+            serde_json::to_string_pretty(&manifest)?.into_bytes(),
+            OperationEvent::ManifestUpdated {
+                path: manifest_path,
+            },
+        );
+        report.extend(manifest_plan.apply()?);
     }
 
     report.extend(build_index(root)?);
@@ -385,27 +402,34 @@ pub fn delete_page(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<Ope
     let preflight = preflight_delete_page(root, page)?;
     let deleted_link_rewrites =
         plan_unwrap_deleted_page_links(root, std::slice::from_ref(&preflight.page))?;
-    fs::remove_file(&preflight.path)?;
-
-    let mut report = OperationReport::new();
-    report.push(OperationEvent::PageLinkImpact {
+    let mut plan = MutationPlan::new();
+    plan.event(OperationEvent::PageLinkImpact {
         page: preflight.page.clone(),
         backlinks: preflight.backlinks,
         outlinks: preflight.outlinks,
     });
-    report.push(OperationEvent::PageDeleted {
-        path: preflight.path,
-    });
+    plan.remove_file(
+        preflight.path.clone(),
+        OperationEvent::PageDeleted {
+            path: preflight.path,
+        },
+    );
 
+    let mut report = plan.apply()?;
     report.extend(apply_planned_page_rewrites(deleted_link_rewrites)?);
 
     if let Some(default_page) = preflight.replacement_default_page {
         manifest.default_page = format!("{PAGES_DIR}/{default_page}");
         let manifest_path = root.join(MANIFEST_FILE);
-        atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
-        report.push(OperationEvent::ManifestUpdated {
-            path: manifest_path,
-        });
+        let mut manifest_plan = MutationPlan::new();
+        manifest_plan.write_always(
+            manifest_path.clone(),
+            serde_json::to_string_pretty(&manifest)?.into_bytes(),
+            OperationEvent::ManifestUpdated {
+                path: manifest_path,
+            },
+        );
+        report.extend(manifest_plan.apply()?);
     }
 
     report.extend(build_index(root)?);
@@ -461,23 +485,21 @@ pub fn delete_directory(
         None
     };
 
-    if recursive {
-        fs::remove_dir_all(&directory_path)?;
-    } else {
-        fs::remove_dir(&directory_path)?;
-    }
-
-    let mut report = OperationReport::new();
-    report.push(OperationEvent::DirectoryDeleted {
-        path: directory_path.clone(),
-    });
-
+    let mut plan = MutationPlan::new();
+    plan.remove_dir(
+        directory_path.clone(),
+        recursive,
+        OperationEvent::DirectoryDeleted {
+            path: directory_path.clone(),
+        },
+    );
     for deleted_page in &deleted_pages {
-        report.push(OperationEvent::PageDeleted {
+        plan.event(OperationEvent::PageDeleted {
             path: pages_dir.join(deleted_page),
         });
     }
 
+    let mut report = plan.apply()?;
     report.extend(apply_planned_page_rewrites(deleted_link_rewrites)?);
 
     if default_was_deleted {
@@ -485,10 +507,15 @@ pub fn delete_directory(
             .map(|path| format!("{PAGES_DIR}/{path}"))
             .unwrap_or_default();
         let manifest_path = root.join(MANIFEST_FILE);
-        atomic_write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
-        report.push(OperationEvent::ManifestUpdated {
-            path: manifest_path,
-        });
+        let mut manifest_plan = MutationPlan::new();
+        manifest_plan.write_always(
+            manifest_path.clone(),
+            serde_json::to_string_pretty(&manifest)?.into_bytes(),
+            OperationEvent::ManifestUpdated {
+                path: manifest_path,
+            },
+        );
+        report.extend(manifest_plan.apply()?);
     }
 
     report.extend(build_index(root)?);
@@ -530,25 +557,26 @@ pub fn import_markdown(
     let relative_page_string = relative_page.to_string_lossy().replace('\\', "/");
     ensure_page_labels_available(root, &relative_page_string, &title)?;
 
+    let mut plan = MutationPlan::new();
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)?;
+        plan.ensure_dir(parent.to_path_buf());
     }
-
-    atomic_write(
-        &destination,
+    plan.write_always(
+        destination.clone(),
         render_page_document(
             &title,
             &body,
             manifest.theme,
             stylesheet_href(&relative_page),
-        ),
-    )?;
-    let generated = build_index(root)?;
-    let mut report = OperationReport::from_event(OperationEvent::PageImported {
-        source: source.to_path_buf(),
-        destination,
-    });
-    report.extend(generated);
+        )
+        .into_bytes(),
+        OperationEvent::PageImported {
+            source: source.to_path_buf(),
+            destination,
+        },
+    );
+    let mut report = plan.apply()?;
+    report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }
 
@@ -563,22 +591,24 @@ pub fn export_page(
     let page = resolve_existing_page(root, page.as_ref())?;
 
     let output = output.as_ref();
+    let mut plan = MutationPlan::new();
     if let Some(parent) = output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
-        fs::create_dir_all(parent)?;
+        plan.ensure_dir(parent.to_path_buf());
     }
 
     let html = fs::read_to_string(&page)?;
-    let mut report = OperationReport::new();
-    if atomic_write(output, html_to_markdown(&html))? {
-        report.push(OperationEvent::PageExported {
+    plan.write_if_changed(
+        output.to_path_buf(),
+        html_to_markdown(&html).into_bytes(),
+        OperationEvent::PageExported {
             page,
             output: output.to_path_buf(),
-        });
-    }
-    Ok(report.relative_to(root))
+        },
+    );
+    Ok(plan.apply()?.relative_to(root))
 }
 
 pub fn read_page_source(root: impl AsRef<Path>, page: impl AsRef<Path>) -> Result<PageSource> {
@@ -605,14 +635,15 @@ pub fn write_page_source(
     let relative_page = page_relative_path(root, &page)?;
     let page_path = relative_page.to_string_lossy().replace('\\', "/");
     validate_page_html_for_project(root, &page_path, html.as_ref())?;
-    let page_updated = atomic_write(&page, html.as_ref())?;
+    let mut plan = MutationPlan::new();
+    plan.write_if_changed(
+        page.clone(),
+        html.as_ref().as_bytes().to_vec(),
+        OperationEvent::PageSourceUpdated { page },
+    );
 
-    let generated = build_index(root)?;
-    let mut report = OperationReport::new();
-    if page_updated {
-        report.push(OperationEvent::PageSourceUpdated { page });
-    }
-    report.extend(generated);
+    let mut report = plan.apply()?;
+    report.extend(build_index(root)?);
     Ok(report.relative_to(root))
 }
 
@@ -731,16 +762,18 @@ fn plan_renamed_page_link_rewrites(
 }
 
 fn apply_planned_page_rewrites(rewrites: Vec<PlannedPageRewrite>) -> Result<OperationReport> {
-    let mut report = OperationReport::new();
+    let mut plan = MutationPlan::new();
 
     for rewrite in rewrites {
-        if atomic_write(&rewrite.page, rewrite.html)? {
-            report.push(OperationEvent::PageLinksRewritten {
+        plan.write_if_changed(
+            rewrite.page.clone(),
+            rewrite.html.into_bytes(),
+            OperationEvent::PageLinksRewritten {
                 page: rewrite.page,
                 count: rewrite.count,
-            });
-        }
+            },
+        );
     }
 
-    Ok(report)
+    plan.apply()
 }
