@@ -101,42 +101,45 @@ Fractal says that valid Fractal documents are stricter than arbitrary HTML, but 
   - arbitrary HTML that is not valid Fractal.
 - README and code agree on the contract.
 
-## Phase 2 — Build a Safe Mutation Layer
+## Phase 2 — Finish the Safe Mutation Layer
+
+Status: partially landed. The code now has the baseline abstraction (`MutationPlan`), atomic file replacement, a project mutation lock, typed operation events, and preflight helpers for the riskiest page operations. The remaining work is consistency, failure semantics, and documentation—not inventing a larger architecture.
 
 ### Problem
 
-Most operations currently write files directly and then rebuild generated data. If an error occurs halfway through a rename, delete, sync, or metadata update, the project can be left partially changed.
+Most important operations now use a central mutation path, but the project still needs a deliberate audit of every write path. Multi-file operations are safer than before, but they are not fully transactional: a late failure can still leave earlier applied changes on disk. The engine should be honest about those limits and avoid reporting generated data as fresh when an operation did not fully complete.
 
 ### Goals
 
-- Centralize file writes for project mutations.
-- Make multi-file operations predictable.
-- Return reliable reports for both applied and future dry-run operations.
+- Keep project writes centralized through `MutationPlan` where practical.
+- Make multi-file operations predictable and explicitly non-magical.
+- Keep preflight/report behavior stable enough for editors, scripts, and agents.
+- Define the limits of locking, dry-run/preflight, and rollback.
 
-### Work Items
+### Landed Work
 
-- Introduce a mutation/write abstraction for project operations.
-- Use temp files plus atomic rename for file writes where possible.
-- Consider a project lock file during mutations.
-- Separate mutation planning from mutation application.
-- Make reports describe planned/applied semantic changes, not just raw file writes.
+- Added `MutationPlan` as the central mutation/write abstraction.
+- Added atomic replacement for file writes through temporary files and rename.
+- Added a project mutation lock under `.fractal/mutation.lock` while plans apply.
+- Added typed `OperationEvent` / `OperationReport` summaries with project-relative paths.
+- Planned link rewrites before destructive rename/delete operations.
+- Added preflight helpers for rename and delete impact reporting.
+- Added tests around mutation locking, operation summaries, rename/delete preflights, and generated-data reporting.
+
+### Remaining Work Items
+
+- Audit direct filesystem writes in operation modules and either move them onto `MutationPlan` or document why they are not project mutations.
+- Keep page creation, metadata updates, note add/patch/remove, editor updates, rename/move, delete, sync, and generated index/graph writes on the same mutation/report conventions.
+- Decide whether preflight structs are enough for dry-run UX or whether selected operations need first-class dry-run reports.
 - Decide how much rollback support is required for failed multi-file operations.
-
-### Candidate Operations to Move Onto This Layer
-
-- page creation
-- metadata updates
-- note add/patch/remove
-- safe editor page updates
-- rename/move page
-- delete page
-- sync-generated links
-- generated index/graph writes
+- Add failure-path tests for partially failing rename/delete/sync-style operations where practical.
+- Keep reports semantic: callers should understand user-content changes, source-file changes, generated-data changes, and no-ops without parsing strings.
 
 ### Acceptance Criteria
 
+- User-visible project mutations either use `MutationPlan` or have a documented reason not to.
 - A failed mutation does not leave generated data pretending everything succeeded.
-- Broad operations like rename/delete/sync can report what they will change before writing.
+- Broad operations like rename/delete/sync can report their expected impact before destructive writes where that matters.
 - Every write operation has a consistent report shape.
 
 ## Phase 3 — Stabilize Errors, Reports, and Machine Output
@@ -172,7 +175,7 @@ The public API has `FractalErrorCode`, but many errors collapse into generic str
   - offending note/link ID
 - Version the operation report schema.
 - Normalize report paths to project-relative paths where possible.
-- Add CLI `--json` / `--format json` eventually.
+- Finish normalizing CLI JSON coverage for migrated commands and keep the output envelope stable.
 - Add rustdoc for the public library API.
 
 ### Acceptance Criteria
@@ -367,16 +370,16 @@ Graph/search/import/export are core to Fractal's long-term direction, but expand
 2. [x] Update validation to enforce the spec.
 3. [x] Update repair to safely fix only agreed scaffold problems.
 4. [x] Add missing tests around invalid structure and edge cases.
-5. [ ] Introduce a mutation/write abstraction.
-6. [ ] Move page/note/metadata operations onto the abstraction.
+5. [x] Introduce a mutation/write abstraction.
+6. [ ] Audit remaining write paths and finish moving project mutations onto the abstraction.
 7. [ ] Normalize errors and reports.
-8. [ ] Add JSON output and rustdoc for public surfaces.
+8. [ ] Finish JSON output normalization and add rustdoc for public surfaces.
 9. [ ] Decide the page identity/path model.
 10. [ ] Make generated data freshness explicit.
 11. [ ] Then expand graph/search/import/export.
 
 ## Immediate Next Best Task
 
-Finish the Phase 1 landing cleanup, then start Phase 2.
+Do a Phase 2 consistency pass rather than a new architecture pass.
 
-Before implementing the Phase 2 mutation layer, keep `README.md`, [`docs/format-contract.md`](docs/format-contract.md), validation, and tests aligned. The first Phase 2 design task is to introduce a small mutation/write abstraction and move one low-risk operation onto it before attempting broad rename/delete/sync rewrites.
+Specifically: follow [`docs/current-focus.md`](docs/current-focus.md), audit direct filesystem writes, document any intentional exceptions, add missing failure-path tests, and keep `README.md`, [`docs/architecture.md`](docs/architecture.md), [`docs/format-contract.md`](docs/format-contract.md), validation, and tests aligned with what the mutation layer actually guarantees.

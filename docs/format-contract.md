@@ -148,7 +148,6 @@ Manual links are invalid during normal validation. Manual internal page links wh
 - merge duplicate notes sections while preserving child content
 - restore missing title/heading pairs when one side can be inferred
 - unwrap simple manual links into plain text
-- unwrap simple manual links into plain text
 - rewrite generated internal page links with mismatched text to the target title
 
 Repairs should not guess at arbitrary user intent or convert arbitrary HTML into Fractal.

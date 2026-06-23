@@ -12,7 +12,7 @@ Fractal is the engine, not an end-user interface. This crate should focus on the
 
 The page format is HTML-backed by design, but Fractal is not arbitrary HTML. HTML is the storage/rendering substrate in roughly the same way DOCX borrows XML: inspectable with common tools, but governed by Fractal's stricter format contract. Fractal avoids owning a custom renderer while still getting a richer and more consistent rendering target than markdown.
 
-The current Fractal format contract is documented in [`docs/format-contract.md`](docs/format-contract.md). Treat that file as the short-form contract for what validation is expected to enforce.
+The current Fractal format contract is documented in [`docs/format-contract.md`](docs/format-contract.md). Treat that file as the short-form contract for what validation is expected to enforce. The current code-organization rulebook lives in [`docs/architecture.md`](docs/architecture.md).
 
 The core product idea is that users should not have to remember which pages to link to, when to link them, or how to maintain the graph by hand. Linking, discovery, metadata, indexing, and graph structure should increasingly be inferred and maintained by the tool.
 
@@ -22,10 +22,10 @@ Because of that, import and export are not side features. Converting other forma
 
 ## Core next tasks
 
-Near-term priority is engine hardening before broad feature growth. See [`ENGINE-HARDENING-ROADMAP.md`](ENGINE-HARDENING-ROADMAP.md) for the phase plan.
+Near-term priority is engine hardening before broad feature growth. Start with [`docs/current-focus.md`](docs/current-focus.md) when you need the shortest working-memory version, [`docs/feature-inventory.md`](docs/feature-inventory.md) when you need to know what exists today, and [`docs/code-map.md`](docs/code-map.md) when you need to understand how the code hangs together. See [`ENGINE-HARDENING-ROADMAP.md`](ENGINE-HARDENING-ROADMAP.md) for the phase plan and [`docs/architecture.md`](docs/architecture.md) for the current KISS module boundaries.
 
-- Land the Phase 1 baseline: keep [`docs/format-contract.md`](docs/format-contract.md), this README, validation, and tests aligned.
-- Build the Phase 2 safe mutation layer: centralize project writes, preflight multi-file operations, use atomic writes where practical, and make failure behavior predictable.
+- Keep the Phase 1 contract baseline aligned across [`docs/format-contract.md`](docs/format-contract.md), this README, validation, and tests.
+- Finish the Phase 2 safe-mutation push: audit remaining direct writes, keep user-visible mutations on `MutationPlan`, and clarify the limits of locking, rollback, and dry-run/preflight behavior.
 - Stabilize errors and reports so humans, editors, scripts, and LLM agents can branch on stable machine-readable outcomes instead of parsing strings.
 - Make generated index/graph freshness explicit for graph and search reads.
 - Then grow graph/search/import/export on the hardened core: richer edge types, snippets, field filters, semantic search, aliases/entities/relationships, context packets, and richer import/export.
@@ -207,7 +207,11 @@ The `import` and `export` flows currently support only markdown headings (`#` th
 ## Repo notes
 
 - The active rewrite lives in the root crate.
+- [`docs/current-focus.md`](docs/current-focus.md) is the short working-memory page for what to do next.
+- [`docs/feature-inventory.md`](docs/feature-inventory.md) lists current supported capabilities and known gaps.
+- [`docs/code-map.md`](docs/code-map.md) is the practical map of modules and key flows.
 - [`docs/format-contract.md`](docs/format-contract.md) is the current short-form Fractal project/page contract.
+- [`docs/architecture.md`](docs/architecture.md) records the current KISS module boundaries and mutation flow.
 - [`ENGINE-HARDENING-ROADMAP.md`](ENGINE-HARDENING-ROADMAP.md) tracks the engine hardening phases.
 - [`CLI-PROPOSITION.md`](CLI-PROPOSITION.md), `wishlist.md`, and `gemma4_wishlists.md` are future-facing design inputs, not descriptions of the current CLI.
 - `README-legacy.md` archives older `.frac`/binary-format thinking and should not be treated as current product direction.
