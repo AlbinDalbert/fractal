@@ -1,0 +1,272 @@
+use crate::{FractalError, Result};
+use brik::traits::*;
+use brik::{NodeData, NodeRef};
+use std::path::{Component, Path, PathBuf};
+
+pub(crate) struct Document {
+    root: NodeRef,
+}
+
+impl Document {
+    pub(crate) fn parse(html: &str) -> Self {
+        Self {
+            root: brik::parse_html().one(html),
+        }
+    }
+
+    pub(crate) fn title(&self) -> Option<String> {
+        self.root
+            .select_first("title")
+            .ok()
+            .or_else(|| self.root.select_first("h1").ok())
+            .map(|node| normalize_space(&node.text_contents()))
+            .filter(|title| !title.is_empty())
+    }
+
+    pub(crate) fn text(&self) -> String {
+        let node = self
+            .root
+            .select_first("body")
+            .ok()
+            .map(|node| node.as_node().clone())
+            .unwrap_or_else(|| self.root.clone());
+        normalize_space(&node.text_contents())
+    }
+
+    pub(crate) fn unlinked_text(&self) -> String {
+        let mut parts = Vec::new();
+        for node in self.root.descendants() {
+            let NodeData::Text(text) = node.data() else {
+                continue;
+            };
+            if node.ancestors().any(|ancestor| {
+                ancestor.as_element().is_some_and(|element| {
+                    matches!(
+                        element.name.local.as_ref(),
+                        "a" | "title" | "script" | "style" | "code" | "pre"
+                    )
+                })
+            }) {
+                continue;
+            }
+            parts.push(text.borrow().to_string());
+        }
+        normalize_space(&parts.join(" "))
+    }
+
+    pub(crate) fn raw_links(&self) -> Vec<(String, String)> {
+        self.root
+            .select("a[href]")
+            .expect("static selector")
+            .filter_map(|link| {
+                let href = link.attributes.borrow().get("href")?.to_string();
+                Some((href, normalize_space(&link.text_contents())))
+            })
+            .collect()
+    }
+
+    pub(crate) fn rewrite_internal_target(
+        &self,
+        source: &str,
+        old_target: &str,
+        new_target: &str,
+    ) -> usize {
+        let mut count = 0;
+        for link in self.root.select("a[href]").expect("static selector") {
+            let mut attributes = link.attributes.borrow_mut();
+            let Some(href) = attributes.get("href").map(str::to_string) else {
+                continue;
+            };
+            if resolve_internal_href(source, &href).as_deref() != Some(old_target) {
+                continue;
+            }
+            let suffix = href
+                .find(['?', '#'])
+                .map(|index| &href[index..])
+                .unwrap_or("");
+            let relative = relative_href(source, new_target);
+            attributes.insert("href", format!("{relative}{suffix}"));
+            count += 1;
+        }
+        count
+    }
+
+    pub(crate) fn rewrite_source_location(&self, old_source: &str, new_source: &str) -> usize {
+        let mut count = 0;
+        for link in self.root.select("a[href]").expect("static selector") {
+            let mut attributes = link.attributes.borrow_mut();
+            let Some(href) = attributes.get("href").map(str::to_string) else {
+                continue;
+            };
+            let Some(mut target) = resolve_internal_href(old_source, &href) else {
+                continue;
+            };
+            if target == old_source {
+                target = new_source.to_string();
+            }
+            let suffix = href
+                .find(['?', '#'])
+                .map(|index| &href[index..])
+                .unwrap_or("");
+            attributes.insert(
+                "href",
+                format!("{}{}", relative_href(new_source, &target), suffix),
+            );
+            count += 1;
+        }
+        count
+    }
+
+    pub(crate) fn insert_link(&self, text: &str, href: &str) -> Result<bool> {
+        if text.trim().is_empty() {
+            return Err(FractalError::invalid_input("link text cannot be empty"));
+        }
+
+        for node in self.root.descendants() {
+            let NodeData::Text(contents) = node.data() else {
+                continue;
+            };
+            if node.ancestors().any(|ancestor| {
+                ancestor.as_element().is_some_and(|element| {
+                    matches!(
+                        element.name.local.as_ref(),
+                        "a" | "title" | "script" | "style" | "code" | "pre"
+                    )
+                })
+            }) {
+                continue;
+            }
+
+            let original = contents.borrow().to_string();
+            let Some(start) = find_case_insensitive(&original, text) else {
+                continue;
+            };
+            let end = start + text.len();
+            if !original.is_char_boundary(start) || !original.is_char_boundary(end) {
+                continue;
+            }
+
+            let before = &original[..start];
+            let matched = &original[start..end];
+            let after = &original[end..];
+            if !before.is_empty() {
+                node.insert_before(NodeRef::new_text(before));
+            }
+            node.insert_before(parse_link(href, matched)?);
+            if !after.is_empty() {
+                node.insert_before(NodeRef::new_text(after));
+            }
+            node.detach();
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    pub(crate) fn serialize(&self) -> Result<String> {
+        let mut bytes = Vec::new();
+        self.root.serialize(&mut bytes)?;
+        Ok(String::from_utf8(bytes)?)
+    }
+}
+
+fn parse_link(href: &str, text: &str) -> Result<NodeRef> {
+    let html = format!(
+        "<a href=\"{}\">{}</a>",
+        escape_attribute(href),
+        escape_html(text)
+    );
+    let root = brik::parse_html().one(html);
+    let node = root
+        .select_first("a")
+        .map_err(|_| FractalError::invalid_input("could not create link"))?
+        .as_node()
+        .clone();
+    node.detach();
+    Ok(node)
+}
+
+pub(crate) fn is_external_href(href: &str) -> bool {
+    href.starts_with("//")
+        || href.split_once(':').is_some_and(|(scheme, _)| {
+            scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        })
+}
+
+pub(crate) fn resolve_internal_href(source: &str, href: &str) -> Option<String> {
+    if href.is_empty() || href.starts_with('#') || is_external_href(href) {
+        return None;
+    }
+    let path = href.split(['?', '#']).next()?;
+    if path.is_empty() {
+        return None;
+    }
+    let mut resolved = if path.starts_with('/') {
+        PathBuf::new()
+    } else {
+        Path::new(source)
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf()
+    };
+    for component in Path::new(path.trim_start_matches('/')).components() {
+        match component {
+            Component::Normal(part) => resolved.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !resolved.pop() {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(resolved.to_string_lossy().replace('\\', "/"))
+}
+
+pub(crate) fn relative_href(source: &str, target: &str) -> String {
+    let source_dir = Path::new(source).parent().unwrap_or_else(|| Path::new(""));
+    let source_parts: Vec<_> = source_dir.components().collect();
+    let target_parts: Vec<_> = Path::new(target).components().collect();
+    let shared = source_parts
+        .iter()
+        .zip(&target_parts)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut output = PathBuf::new();
+    for _ in shared..source_parts.len() {
+        output.push("..");
+    }
+    for part in &target_parts[shared..] {
+        output.push(part.as_os_str());
+    }
+    output.to_string_lossy().replace('\\', "/")
+}
+
+pub(crate) fn normalize_space(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    (0..=haystack.len() - needle.len()).find(|start| {
+        let end = start + needle.len();
+        haystack.is_char_boundary(*start)
+            && haystack.is_char_boundary(end)
+            && haystack[*start..end].eq_ignore_ascii_case(needle)
+    })
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn escape_attribute(value: &str) -> String {
+    escape_html(value).replace('"', "&quot;")
+}
