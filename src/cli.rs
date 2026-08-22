@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(version, about = "Cheap, reliable operations on linked HTML documents")]
+#[command(version, about = "Engine for native Fractal documents and raw HTML")]
 struct Cli {
     #[arg(short, long, global = true, default_value = ".")]
     project: PathBuf,
@@ -50,7 +50,13 @@ enum Command {
     Links {
         page: PathBuf,
     },
+    Iframes {
+        page: PathBuf,
+    },
     Backlinks {
+        page: PathBuf,
+    },
+    EmbeddedBy {
         page: PathBuf,
     },
     Suggest {
@@ -106,7 +112,9 @@ pub fn run() -> Result<()> {
                 Command::Delete { page } => output(&project.delete_page(page)?, cli.json),
                 Command::Search { query } => output(&project.search(&query), cli.json),
                 Command::Links { page } => output(&project.links(page)?, cli.json),
+                Command::Iframes { page } => output(&project.iframes(page)?, cli.json),
                 Command::Backlinks { page } => output(&project.backlinks(page)?, cli.json),
+                Command::EmbeddedBy { page } => output(&project.iframe_backlinks(page)?, cli.json),
                 Command::Suggest { page } => output(&project.suggest_links(page)?, cli.json),
                 Command::Link { page, text, target } => {
                     output(&project.insert_link(page, &text, target)?, cli.json)

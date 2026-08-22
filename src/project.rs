@@ -8,6 +8,7 @@ use std::path::{Component, Path, PathBuf};
 const MANIFEST: &str = "fractal.json";
 const PAGES: &str = "pages";
 const VERSION: u32 = 1;
+const NATIVE_SUFFIX: &str = ".fractal.html";
 
 #[derive(Debug)]
 pub struct Project {
@@ -96,14 +97,14 @@ impl Project {
 
     pub fn create_page(&mut self, title: &str) -> Result<Mutation> {
         let stem = slug(title)?;
-        self.create_page_at(format!("{stem}.html"), title)
+        self.create_page_at(format!("{stem}{NATIVE_SUFFIX}"), title)
     }
 
     pub fn create_page_at(&mut self, path: impl AsRef<Path>, title: &str) -> Result<Mutation> {
         if title.trim().is_empty() {
             return Err(FractalError::invalid_input("title cannot be empty"));
         }
-        let relative = normalize_page_path(path.as_ref())?;
+        let relative = normalize_native_page_path(path.as_ref())?;
         let destination = self.root.join(PAGES).join(&relative);
         if destination.exists() {
             return Err(FractalError::already_exists(format!(
@@ -113,7 +114,7 @@ impl Project {
         }
         let title = title.trim();
         let html = format!(
-            "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <title>{}</title>\n</head>\n<body>\n  <main>\n    <h1>{}</h1>\n  </main>\n</body>\n</html>\n",
+            "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"fractal-format\" content=\"1\">\n  <title>{}</title>\n</head>\n<body>\n  <main data-fractal-document>\n    <h1>{}</h1>\n  </main>\n</body>\n</html>\n",
             escape_html(title),
             escape_html(title)
         );
@@ -127,11 +128,13 @@ impl Project {
 
     pub fn write_page(&mut self, path: impl AsRef<Path>, html: &str) -> Result<Mutation> {
         let relative = self.existing_path(path.as_ref())?;
-        let document = Document::parse(html);
-        if document.title().is_none() {
-            return Err(FractalError::invalid_input(
-                "page must have a non-empty <title> or <h1>",
-            ));
+        if page_kind(&relative) == PageKind::Native {
+            let issues = native_document_issues(&Document::parse(html));
+            if let Some(issue) = issues.first() {
+                return Err(FractalError::invalid_input(format!(
+                    "invalid native document: {issue}"
+                )));
+            }
         }
         atomic_write(&self.root.join(PAGES).join(&relative), html)?;
         self.reload()?;
@@ -143,7 +146,8 @@ impl Project {
 
     pub fn move_page(&mut self, from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<Mutation> {
         let from = self.existing_path(from.as_ref())?;
-        let to = normalize_page_path(to.as_ref())?;
+        let kind = page_kind(&from);
+        let to = normalize_destination_page_path(to.as_ref(), kind)?;
         if from == to {
             return Ok(Mutation {
                 changed: vec![],
@@ -160,13 +164,17 @@ impl Project {
 
         let from_string = path_string(&from);
         let to_string = path_string(&to);
-        let moved_document = Document::parse(&self.stored(&from)?.html);
-        moved_document.rewrite_source_location(&from_string, &to_string);
-        let moved_html = moved_document.serialize()?;
+        let moved_html = if kind == PageKind::Native {
+            let moved_document = Document::parse(&self.stored(&from)?.html);
+            moved_document.rewrite_source_location(&from_string, &to_string);
+            Some(moved_document.serialize()?)
+        } else {
+            None
+        };
 
         let mut rewrites = Vec::new();
         for (path, stored) in &self.pages {
-            if path == &from_string {
+            if path == &from_string || stored.page.kind != PageKind::Native {
                 continue;
             }
             let document = Document::parse(&stored.html);
@@ -179,7 +187,9 @@ impl Project {
             fs::create_dir_all(parent)?;
         }
         fs::rename(self.root.join(PAGES).join(&from), &destination)?;
-        atomic_write(&destination, &moved_html)?;
+        if let Some(moved_html) = moved_html {
+            atomic_write(&destination, &moved_html)?;
+        }
         let mut changed = vec![to.clone()];
         for (path, html) in rewrites {
             atomic_write(&self.root.join(PAGES).join(&path), &html)?;
@@ -195,11 +205,13 @@ impl Project {
     pub fn delete_page(&mut self, path: impl AsRef<Path>) -> Result<Mutation> {
         let relative = self.existing_path(path.as_ref())?;
         let backlinks = self.backlinks(&relative)?;
-        if !backlinks.is_empty() {
+        let iframe_backlinks = self.iframe_backlinks(&relative)?;
+        if !backlinks.is_empty() || !iframe_backlinks.is_empty() {
             return Err(FractalError::invalid_input(format!(
-                "cannot delete {} while {} explicit link(s) target it",
+                "cannot delete {} while {} link(s) and {} iframe(s) target it",
                 relative.display(),
-                backlinks.len()
+                backlinks.len(),
+                iframe_backlinks.len()
             )));
         }
         fs::remove_file(self.root.join(PAGES).join(&relative))?;
@@ -214,6 +226,10 @@ impl Project {
         Ok(self.stored(path.as_ref())?.page.links.clone())
     }
 
+    pub fn iframes(&self, path: impl AsRef<Path>) -> Result<Vec<Iframe>> {
+        Ok(self.stored(path.as_ref())?.page.iframes.clone())
+    }
+
     pub fn backlinks(&self, path: impl AsRef<Path>) -> Result<Vec<Backlink>> {
         let target = path_string(&self.existing_path(path.as_ref())?);
         let mut backlinks = Vec::new();
@@ -223,6 +239,22 @@ impl Project {
                     backlinks.push(Backlink {
                         page: page.page.path.clone(),
                         text: link.text.clone(),
+                    });
+                }
+            }
+        }
+        Ok(backlinks)
+    }
+
+    pub fn iframe_backlinks(&self, path: impl AsRef<Path>) -> Result<Vec<IframeBacklink>> {
+        let target = path_string(&self.existing_path(path.as_ref())?);
+        let mut backlinks = Vec::new();
+        for page in self.pages.values() {
+            for iframe in &page.page.iframes {
+                if matches!(&iframe.target, IframeTarget::Internal(value) if value == &target) {
+                    backlinks.push(IframeBacklink {
+                        page: page.page.path.clone(),
+                        title: iframe.title.clone(),
                     });
                 }
             }
@@ -348,6 +380,11 @@ impl Project {
     ) -> Result<Mutation> {
         let page = self.existing_path(page.as_ref())?;
         let target = self.existing_path(target.as_ref())?;
+        if page_kind(&page) != PageKind::Native {
+            return Err(FractalError::invalid_input(
+                "semantic link insertion is only available for native documents",
+            ));
+        }
         if page == target {
             return Err(FractalError::invalid_input("cannot link a page to itself"));
         }
@@ -376,10 +413,14 @@ impl Project {
             });
         }
         for stored in self.pages.values() {
-            if stored.page.title.is_none() {
+            if stored.page.kind != PageKind::Native {
+                continue;
+            }
+            let document = Document::parse(&stored.html);
+            for message in native_document_issues(&document) {
                 issues.push(ValidationIssue {
                     path: Some(stored.page.path.clone()),
-                    message: "page needs a non-empty <title> or <h1>".into(),
+                    message,
                 });
             }
             for link in &stored.page.links {
@@ -393,6 +434,22 @@ impl Project {
                     });
                 }
             }
+            for iframe in &stored.page.iframes {
+                match &iframe.target {
+                    IframeTarget::Broken(target) => issues.push(ValidationIssue {
+                        path: Some(stored.page.path.clone()),
+                        message: format!(
+                            "broken iframe source `{}` resolves to `{target}`",
+                            iframe.src.as_deref().unwrap_or("")
+                        ),
+                    }),
+                    IframeTarget::Missing => issues.push(ValidationIssue {
+                        path: Some(stored.page.path.clone()),
+                        message: "iframe needs a non-empty `src` or a `srcdoc` attribute".into(),
+                    }),
+                    _ => {}
+                }
+            }
         }
         ValidationReport {
             valid: issues.is_empty(),
@@ -401,19 +458,38 @@ impl Project {
     }
 
     fn stored(&self, path: &Path) -> Result<&StoredPage> {
-        let path = path_string(&normalize_page_path(path)?);
+        let path = path_string(&self.existing_path(path)?);
         self.pages
             .get(&path)
             .ok_or_else(|| FractalError::not_found(format!("page does not exist: {path}")))
     }
 
     fn existing_path(&self, path: &Path) -> Result<PathBuf> {
-        let normalized = normalize_page_path(path)?;
-        let key = path_string(&normalized);
-        self.pages
-            .contains_key(&key)
-            .then_some(normalized)
-            .ok_or_else(|| FractalError::not_found(format!("page does not exist: {key}")))
+        let normalized = normalize_relative_path(path)?;
+        let candidates = if normalized.extension().is_some() {
+            validate_html_path(&normalized)?;
+            vec![normalized]
+        } else {
+            vec![
+                append_native_suffix(&normalized)?,
+                normalized.with_extension("html"),
+            ]
+        };
+        let found: Vec<_> = candidates
+            .into_iter()
+            .filter(|candidate| self.pages.contains_key(&path_string(candidate)))
+            .collect();
+        match found.as_slice() {
+            [path] => Ok(path.clone()),
+            [] => Err(FractalError::not_found(format!(
+                "page does not exist: {}",
+                path.display()
+            ))),
+            _ => Err(FractalError::invalid_input(format!(
+                "page path is ambiguous, include the suffix: {}",
+                path.display()
+            ))),
+        }
     }
 
     fn reload(&mut self) -> Result<()> {
@@ -447,11 +523,46 @@ impl Project {
                     Link { href, text, target }
                 })
                 .collect();
+            let iframes = document
+                .raw_iframes()
+                .into_iter()
+                .map(|iframe| {
+                    let target = if iframe.has_srcdoc {
+                        IframeTarget::Inline
+                    } else if let Some(src) =
+                        iframe.src.as_deref().filter(|value| !value.is_empty())
+                    {
+                        if is_external_href(src) {
+                            IframeTarget::External(src.to_string())
+                        } else if let Some(resolved) = resolve_internal_href(&path, src) {
+                            if known.contains(&resolved) {
+                                IframeTarget::Internal(resolved)
+                            } else if self.root.join(PAGES).join(&resolved).is_file() {
+                                IframeTarget::InternalFile(resolved)
+                            } else {
+                                IframeTarget::Broken(resolved)
+                            }
+                        } else {
+                            IframeTarget::Broken(src.to_string())
+                        }
+                    } else {
+                        IframeTarget::Missing
+                    };
+                    Iframe {
+                        src: iframe.src,
+                        title: iframe.title,
+                        sandbox: iframe.sandbox,
+                        target,
+                    }
+                })
+                .collect();
             let page = Page {
                 path: path.clone(),
+                kind: page_kind(&relative),
                 title: document.title(),
                 text: document.text(),
                 links,
+                iframes,
             };
             pages.insert(path, StoredPage { page, html });
         }
@@ -460,7 +571,7 @@ impl Project {
     }
 }
 
-fn normalize_page_path(path: &Path) -> Result<PathBuf> {
+fn normalize_relative_path(path: &Path) -> Result<PathBuf> {
     if path.is_absolute() {
         return Err(FractalError::invalid_input("page path must be relative"));
     }
@@ -482,13 +593,103 @@ fn normalize_page_path(path: &Path) -> Result<PathBuf> {
     if output.as_os_str().is_empty() {
         return Err(FractalError::invalid_input("page path cannot be empty"));
     }
-    if output.extension().is_none() {
-        output.set_extension("html");
-    }
-    if output.extension().and_then(|extension| extension.to_str()) != Some("html") {
+    Ok(output)
+}
+
+fn validate_html_path(path: &Path) -> Result<()> {
+    if path.extension().and_then(|extension| extension.to_str()) != Some("html") {
         return Err(FractalError::invalid_input("page path must end in .html"));
     }
+    Ok(())
+}
+
+fn append_native_suffix(path: &Path) -> Result<PathBuf> {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Err(FractalError::invalid_input("invalid native page path"));
+    };
+    let mut output = path.to_path_buf();
+    output.set_file_name(format!("{name}{NATIVE_SUFFIX}"));
     Ok(output)
+}
+
+fn normalize_native_page_path(path: &Path) -> Result<PathBuf> {
+    let path = normalize_relative_path(path)?;
+    let path = if path.extension().is_none() {
+        append_native_suffix(&path)?
+    } else {
+        path
+    };
+    if page_kind(&path) != PageKind::Native {
+        return Err(FractalError::invalid_input(format!(
+            "native page path must end in {NATIVE_SUFFIX}"
+        )));
+    }
+    Ok(path)
+}
+
+fn normalize_destination_page_path(path: &Path, kind: PageKind) -> Result<PathBuf> {
+    let path = normalize_relative_path(path)?;
+    let path = if path.extension().is_none() {
+        match kind {
+            PageKind::Native => append_native_suffix(&path)?,
+            PageKind::Raw => path.with_extension("html"),
+        }
+    } else {
+        path
+    };
+    validate_html_path(&path)?;
+    if page_kind(&path) != kind {
+        return Err(FractalError::invalid_input(
+            "moving a page cannot change whether it is native or raw",
+        ));
+    }
+    Ok(path)
+}
+
+fn page_kind(path: &Path) -> PageKind {
+    if path_string(path).ends_with(NATIVE_SUFFIX) {
+        PageKind::Native
+    } else {
+        PageKind::Raw
+    }
+}
+
+fn native_document_issues(document: &Document) -> Vec<String> {
+    let mut issues = Vec::new();
+    if !document.has_html_doctype() {
+        issues.push("native document needs `<!doctype html>`".into());
+    }
+    if !document.has_native_marker() {
+        issues.push("native document needs `<meta name=\"fractal-format\" content=\"1\">`".into());
+    }
+    if document.title().is_none() {
+        issues.push("native document needs a non-empty `<title>` or `<h1>`".into());
+    }
+    if document.native_root_count() != 1 {
+        issues.push("native document needs exactly one `<main data-fractal-document>`".into());
+    }
+    let outside = document.body_elements_outside_native_root();
+    if !outside.is_empty() {
+        issues.push(format!(
+            "native document body contains elements outside its document root: {}",
+            outside.join(", ")
+        ));
+    }
+    let unsupported = document.unsupported_native_elements();
+    if !unsupported.is_empty() {
+        issues.push(format!(
+            "native document contains unsupported elements: {}",
+            unsupported.join(", ")
+        ));
+    }
+    let unsupported = document.unsupported_native_head_elements();
+    if !unsupported.is_empty() {
+        issues.push(format!(
+            "native document head contains unsupported elements: {}",
+            unsupported.join(", ")
+        ));
+    }
+    issues
 }
 
 fn collect_html(root: &Path, directory: &Path, output: &mut Vec<PathBuf>) -> Result<()> {

@@ -14,7 +14,7 @@ Rust API / thin CLI
 
 ## Source of truth
 
-`fractal.json` and files below `pages/` are the complete source of truth. `Project::open` scans HTML pages and derives titles, visible text, links, and backlinks in memory.
+`fractal.json` and files below `pages/` are the complete source of truth. `Project::open` scans native and raw HTML files and derives titles, visible text, links, backlinks, and iframe references in memory.
 
 Do not add persistent generated state until measured project sizes prove scanning inadequate. If a cache is eventually needed, it must remain disposable and invisible to the format contract.
 
@@ -34,11 +34,15 @@ Prefer a direct function over a framework. Add a module only when one of these f
 - Validate candidate page source before replacing an existing page.
 - Use atomic replacement for single-file writes.
 - Update explicit backlinks when moving a target page.
+- Update links and iframe sources only inside native documents.
+- Never semantically rewrite raw HTML.
 - Reload the in-memory catalog after mutations.
 - Never combine link suggestion with link insertion.
 
 Fractal does not promise database transactions. Multi-file move repair is deliberately straightforward; stronger machinery should be added only in response to demonstrated failure cases.
 
-## Extension boundary
+## Application boundary
 
-Notes, compilation, import/export, semantic search, embeddings, rich metadata, and model-specific context preparation are outside the core. Future implementations should first be ordinary consumers of the public API. They should enter the core only if they become necessary document operations rather than product-specific policy.
+Fractal is an engine, not an editor. Rich-text controls, preview layout, and other UI policy belong in applications that use the crate.
+
+Import/export, repair, indexing, graph queries, metadata, summaries, and semantic tooling belong in the engine when they become concrete project or document operations. Add them directly before introducing a general framework.

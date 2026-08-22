@@ -1,15 +1,10 @@
-# Fractal Format Contract
+# Fractal format contract
 
-Fractal projects are directories of ordinary linked HTML documents.
+A Fractal project may contain native Fractal documents and raw HTML files. Both use HTML as their stored representation, but they have different ownership rules.
 
 ## Project
 
-A project contains:
-
-- `fractal.json`;
-- a `pages/` directory.
-
-The manifest has two fields:
+A project contains `fractal.json` and a `pages/` directory. The manifest has two fields:
 
 ```json
 {
@@ -18,51 +13,75 @@ The manifest has two fields:
 }
 ```
 
-`name` must not be empty. `version` must be supported by the engine.
+`name` must not be empty. `version` must be supported by the engine. There is no required `.fractal/` directory or persistent graph data.
 
-There is no required `.fractal/` directory and no persistent index or graph data.
+All page paths are UTF-8 HTML files below `pages/`. Absolute paths, parent traversal, and non-HTML page paths are rejected. Paths identify pages, so duplicate titles are allowed.
 
-## Pages
+## Native documents
 
-Every page:
+Files ending in `.fractal.html` are native documents. Fractal owns their meaning and may normalize their source while applying semantic mutations.
 
-- is a UTF-8 file below `pages/`;
-- has a relative path ending in `.html`;
-- has a non-empty title identifiable from `<title>` or, as a fallback, the first `<h1>`.
+A native document must have:
 
-Pages may use ordinary HTML. Fractal does not prescribe body structure, metadata, styling, themes, or an element subset. It does not require generated attributes or sections.
+- an HTML doctype;
+- `<meta name="fractal-format" content="1">`;
+- a non-empty title from `<title>` or the first `<h1>`;
+- exactly one `<main data-fractal-document>` as the only body element.
 
-Paths supplied to the engine must remain below `pages/`; absolute paths and parent traversal are rejected. Paths—not titles—identify pages. Duplicate titles are therefore allowed and naturally produce multiple link candidates.
+The native document root accepts the following standard HTML elements:
+
+```text
+a abbr b blockquote br caption cite code col colgroup del em
+figcaption figure h1 h2 h3 h4 h5 h6 hr i iframe img ins kbd
+li mark ol p pre q s samp small span strong sub sup table tbody
+td tfoot th thead time tr u ul var
+```
+
+This vocabulary covers prose, headings, line breaks, images, lists, inline formatting, quotations, code blocks, figures, and tables. Fractal uses normal HTML meaning for these elements. Attributes remain ordinary HTML attributes.
+
+The document head may contain `title`, `meta`, `link`, and `style`. Scripts and base URL overrides are outside the native profile. Raw HTML and iframe targets may use them.
+
+Native validation reports unsupported elements, missing structure, broken internal links, and broken local iframe sources. HTML parsing follows HTML5 recovery rules, but recovery does not make a document valid Fractal.
+
+## Raw HTML
+
+Other `.html` files are raw HTML. Their source belongs to the author.
+
+Fractal may read raw source, extract text and links, search it, preview it, and report references to it. Raw files do not need a title or a native document structure. Problems inside raw HTML do not make the Fractal project invalid.
+
+Fractal does not normalize, repair, insert semantic links into, or automatically rewrite raw HTML. A direct source replacement, move, or deletion is explicit. Moving a raw file may update links and iframe sources in native documents that target it, but the raw file itself remains byte-for-byte unchanged.
+
+If a native document moves, Fractal updates relative references inside that native document and references from other native documents. References inside raw HTML remain untouched.
 
 ## Links
 
 Links are ordinary `<a href="…">` elements.
 
-- Relative internal links are resolved from the source page directory.
-- Root-relative links are resolved from `pages/`.
-- Fragment-only links are retained as local fragments.
+- Relative internal links resolve from the source file's directory.
+- Root-relative links resolve from `pages/`.
+- Fragment-only links remain local fragments.
 - URI schemes and protocol-relative URLs are external.
 - Relative links to existing non-page files are allowed.
-- Internal links whose target file does not exist are validation errors.
-- Query strings and fragments do not change the resolved page target.
+- Query strings and fragments do not change the resolved target.
 
-Manual internal and external links are first-class content. No `data-fractal-*` marker is required.
+Native documents must not contain links to missing local targets. Raw files may contain any links, although Fractal still exposes their resolved state to callers.
 
-Moving a page updates explicit internal links that resolve to the moved target. Fractal does not infer that arbitrary existing links should change based on their visible text.
+## Iframes
 
-## Suggestions
+Native documents may use ordinary `<iframe>` elements. Fractal treats iframes as references distinct from hyperlinks.
 
-Link suggestions are derived from unlinked visible prose and page titles/filename stems. They are not stored in the format and never mutate documents.
+- A relative or root-relative `src` may target a project page or another project file.
+- A remote `src` is allowed.
+- `srcdoc` is allowed and takes precedence over `src`.
+- An iframe without a non-empty `src` or a `srcdoc` attribute is invalid in a native document.
+- A missing local iframe target is invalid in a native document.
 
-A suggestion contains the matched text and all ranked candidates known to the engine. Ambiguity is returned to the caller rather than treated as invalid state. Applying a suggestion is a separate explicit mutation.
+Fractal records `title` and `sandbox` attributes but does not impose permissions. Applications should use sandboxed iframes by default. Remote servers and browser policy may prevent a valid iframe from loading.
 
-## Validation
+Fractal does not interpret an iframe target as part of its containing native document. A raw HTML target remains source-owned.
 
-Validation checks only invariants required for dependable document operations:
+## Suggestions and mutations
 
-- readable supported manifest;
-- existing `pages/` directory;
-- identifiable page titles;
-- resolvable internal page links.
+Link suggestions are derived from unlinked visible text and page titles or filename stems. Suggestions never modify source. Applying one is a separate mutation and is available only for native documents.
 
-HTML parsing follows normal HTML5 recovery behavior. Fractal is not an HTML conformance checker; callers that need strict authoring diagnostics should use a dedicated validator.
+Opening, scanning, searching, validating, and suggesting never write files. Native semantic mutations may serialize affected native documents. Raw source changes require an explicit source or filesystem operation.

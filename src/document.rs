@@ -7,6 +7,13 @@ pub(crate) struct Document {
     root: NodeRef,
 }
 
+pub(crate) struct RawIframe {
+    pub(crate) src: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) sandbox: Option<String>,
+    pub(crate) has_srcdoc: bool,
+}
+
 impl Document {
     pub(crate) fn parse(html: &str) -> Self {
         Self {
@@ -21,6 +28,137 @@ impl Document {
             .or_else(|| self.root.select_first("h1").ok())
             .map(|node| normalize_space(&node.text_contents()))
             .filter(|title| !title.is_empty())
+    }
+
+    pub(crate) fn has_html_doctype(&self) -> bool {
+        self.root
+            .children()
+            .any(|node| matches!(node.data(), NodeData::Doctype(value) if value.name.eq_ignore_ascii_case("html")))
+    }
+
+    pub(crate) fn has_native_marker(&self) -> bool {
+        self.root
+            .select("head meta[name]")
+            .expect("static selector")
+            .any(|node| {
+                let attributes = node.attributes.borrow();
+                attributes
+                    .get("name")
+                    .is_some_and(|value| value.eq_ignore_ascii_case("fractal-format"))
+                    && attributes.get("content") == Some("1")
+            })
+    }
+
+    pub(crate) fn native_root_count(&self) -> usize {
+        self.root
+            .select("main[data-fractal-document]")
+            .expect("static selector")
+            .count()
+    }
+
+    pub(crate) fn body_elements_outside_native_root(&self) -> Vec<String> {
+        let Ok(body) = self.root.select_first("body") else {
+            return Vec::new();
+        };
+        body.as_node()
+            .children()
+            .filter_map(|node| {
+                let element = node.as_element()?;
+                let is_native_root = element.name.local.as_ref() == "main"
+                    && element
+                        .attributes
+                        .borrow()
+                        .contains("data-fractal-document");
+                (!is_native_root).then(|| element.name.local.to_string())
+            })
+            .collect()
+    }
+
+    pub(crate) fn unsupported_native_elements(&self) -> Vec<String> {
+        const ALLOWED: &[&str] = &[
+            "a",
+            "abbr",
+            "b",
+            "blockquote",
+            "br",
+            "caption",
+            "cite",
+            "code",
+            "col",
+            "colgroup",
+            "del",
+            "em",
+            "figcaption",
+            "figure",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "hr",
+            "i",
+            "iframe",
+            "img",
+            "ins",
+            "kbd",
+            "li",
+            "mark",
+            "ol",
+            "p",
+            "pre",
+            "q",
+            "s",
+            "samp",
+            "small",
+            "span",
+            "strong",
+            "sub",
+            "sup",
+            "table",
+            "tbody",
+            "td",
+            "tfoot",
+            "th",
+            "thead",
+            "time",
+            "tr",
+            "u",
+            "ul",
+            "var",
+        ];
+        let Ok(root) = self.root.select_first("main[data-fractal-document]") else {
+            return Vec::new();
+        };
+        let mut unsupported: Vec<_> = root
+            .as_node()
+            .descendants()
+            .filter_map(|node| {
+                let name = node.as_element()?.name.local.to_string();
+                (!ALLOWED.contains(&name.as_str())).then_some(name)
+            })
+            .collect();
+        unsupported.sort();
+        unsupported.dedup();
+        unsupported
+    }
+
+    pub(crate) fn unsupported_native_head_elements(&self) -> Vec<String> {
+        const ALLOWED: &[&str] = &["link", "meta", "style", "title"];
+        let Ok(head) = self.root.select_first("head") else {
+            return Vec::new();
+        };
+        let mut unsupported: Vec<_> = head
+            .as_node()
+            .descendants()
+            .filter_map(|node| {
+                let name = node.as_element()?.name.local.to_string();
+                (!ALLOWED.contains(&name.as_str())).then_some(name)
+            })
+            .collect();
+        unsupported.sort();
+        unsupported.dedup();
+        unsupported
     }
 
     pub(crate) fn text(&self) -> String {
@@ -65,6 +203,22 @@ impl Document {
             .collect()
     }
 
+    pub(crate) fn raw_iframes(&self) -> Vec<RawIframe> {
+        self.root
+            .select("iframe")
+            .expect("static selector")
+            .map(|iframe| {
+                let attributes = iframe.attributes.borrow();
+                RawIframe {
+                    src: attributes.get("src").map(str::to_string),
+                    title: attributes.get("title").map(str::to_string),
+                    sandbox: attributes.get("sandbox").map(str::to_string),
+                    has_srcdoc: attributes.contains("srcdoc"),
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn rewrite_internal_target(
         &self,
         source: &str,
@@ -86,6 +240,25 @@ impl Document {
                 .unwrap_or("");
             let relative = relative_href(source, new_target);
             attributes.insert("href", format!("{relative}{suffix}"));
+            count += 1;
+        }
+        for iframe in self.root.select("iframe[src]").expect("static selector") {
+            let mut attributes = iframe.attributes.borrow_mut();
+            if attributes.contains("srcdoc") {
+                continue;
+            }
+            let Some(src) = attributes.get("src").map(str::to_string) else {
+                continue;
+            };
+            if resolve_internal_href(source, &src).as_deref() != Some(old_target) {
+                continue;
+            }
+            let suffix = src
+                .find(['?', '#'])
+                .map(|index| &src[index..])
+                .unwrap_or("");
+            let relative = relative_href(source, new_target);
+            attributes.insert("src", format!("{relative}{suffix}"));
             count += 1;
         }
         count
@@ -110,6 +283,30 @@ impl Document {
                 .unwrap_or("");
             attributes.insert(
                 "href",
+                format!("{}{}", relative_href(new_source, &target), suffix),
+            );
+            count += 1;
+        }
+        for iframe in self.root.select("iframe[src]").expect("static selector") {
+            let mut attributes = iframe.attributes.borrow_mut();
+            if attributes.contains("srcdoc") {
+                continue;
+            }
+            let Some(src) = attributes.get("src").map(str::to_string) else {
+                continue;
+            };
+            let Some(mut target) = resolve_internal_href(old_source, &src) else {
+                continue;
+            };
+            if target == old_source {
+                target = new_source.to_string();
+            }
+            let suffix = src
+                .find(['?', '#'])
+                .map(|index| &src[index..])
+                .unwrap_or("");
+            attributes.insert(
+                "src",
                 format!("{}{}", relative_href(new_source, &target), suffix),
             );
             count += 1;
