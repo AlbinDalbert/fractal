@@ -15,6 +15,8 @@ A project contains `fractal.json` and a `pages/` directory. The manifest has two
 
 `name` must not be empty. `version` must be supported by the engine. There is no required `.fractal/` directory or persistent graph data.
 
+For read compatibility, Fractal also accepts the former `project_name` field as the project name. Retired manifest fields are ignored. Fractal does not rewrite a legacy manifest when opening it, and legacy `.html` pages remain raw HTML unless an explicit migration converts them to the native document contract.
+
 All page paths are UTF-8 HTML files below `pages/`. Absolute paths, parent traversal, and non-HTML page paths are rejected. Paths identify pages, so duplicate titles are allowed.
 
 ## Native documents
@@ -84,4 +86,6 @@ Fractal does not interpret an iframe target as part of its containing native doc
 
 Link suggestions are derived from unlinked visible text and page titles or filename stems. Suggestions never modify source. Applying one is a separate mutation and is available only for native documents.
 
-Opening, scanning, searching, validating, and suggesting never write files. Native semantic mutations may serialize affected native documents. Raw source changes require an explicit source or filesystem operation.
+Derived links are case-insensitive exact-title matches in unlinked visible text. Fractal reports only matches with one possible target and never stores them in page source. Applications may render these matches as links at runtime. Stored explicit links and derived links remain distinct.
+
+Opening, scanning, searching, validating, suggesting, and deriving links never write files. Native semantic mutations may serialize affected native documents. Raw source changes require an explicit source or filesystem operation.

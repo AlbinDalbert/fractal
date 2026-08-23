@@ -62,6 +62,9 @@ enum Command {
     Suggest {
         page: PathBuf,
     },
+    DerivedLinks {
+        page: PathBuf,
+    },
     Link {
         page: PathBuf,
         text: String,
@@ -116,6 +119,7 @@ pub fn run() -> Result<()> {
                 Command::Backlinks { page } => output(&project.backlinks(page)?, cli.json),
                 Command::EmbeddedBy { page } => output(&project.iframe_backlinks(page)?, cli.json),
                 Command::Suggest { page } => output(&project.suggest_links(page)?, cli.json),
+                Command::DerivedLinks { page } => output(&project.derived_links(page)?, cli.json),
                 Command::Link { page, text, target } => {
                     output(&project.insert_link(page, &text, target)?, cli.json)
                 }

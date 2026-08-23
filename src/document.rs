@@ -14,6 +14,11 @@ pub(crate) struct RawIframe {
     pub(crate) has_srcdoc: bool,
 }
 
+pub(crate) struct UnlinkedTextNode {
+    pub(crate) index: usize,
+    pub(crate) text: String,
+}
+
 impl Document {
     pub(crate) fn parse(html: &str) -> Self {
         Self {
@@ -190,6 +195,38 @@ impl Document {
             parts.push(text.borrow().to_string());
         }
         normalize_space(&parts.join(" "))
+    }
+
+    pub(crate) fn unlinked_text_nodes(&self) -> Vec<UnlinkedTextNode> {
+        let root = self
+            .root
+            .select_first("main[data-fractal-document]")
+            .or_else(|_| self.root.select_first("body"))
+            .map(|node| node.as_node().clone())
+            .unwrap_or_else(|_| self.root.clone());
+        let mut nodes = Vec::new();
+        let mut index = 0;
+        for node in root.descendants() {
+            let NodeData::Text(text) = node.data() else {
+                continue;
+            };
+            let excluded = node.ancestors().any(|ancestor| {
+                ancestor.as_element().is_some_and(|element| {
+                    matches!(
+                        element.name.local.as_ref(),
+                        "a" | "script" | "style" | "code" | "pre"
+                    )
+                })
+            });
+            if !excluded {
+                nodes.push(UnlinkedTextNode {
+                    index,
+                    text: text.borrow().to_string(),
+                });
+            }
+            index += 1;
+        }
+        nodes
     }
 
     pub(crate) fn raw_links(&self) -> Vec<(String, String)> {

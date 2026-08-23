@@ -10,9 +10,9 @@ mod types;
 pub use error::{FractalError, FractalErrorCode};
 pub use project::Project;
 pub use types::{
-    Backlink, Iframe, IframeBacklink, IframeTarget, Link, LinkCandidate, LinkSuggestion,
-    LinkTarget, MatchKind, Mutation, Page, PageKind, ProjectManifest, SearchResult,
-    ValidationIssue, ValidationReport,
+    Backlink, DerivedLink, Iframe, IframeBacklink, IframeTarget, Link, LinkCandidate,
+    LinkSuggestion, LinkTarget, MatchKind, Mutation, Page, PageKind, ProjectManifest, SearchResult,
+    TextOccurrence, TextPosition, ValidationIssue, ValidationReport,
 };
 
 pub type Result<T> = std::result::Result<T, FractalError>;

@@ -372,6 +372,80 @@ impl Project {
         Ok(suggestions)
     }
 
+    /// Finds unambiguous, case-insensitive exact-title matches without changing source.
+    pub fn derived_links(&self, path: impl AsRef<Path>) -> Result<Vec<DerivedLink>> {
+        let source = self.stored(path.as_ref())?;
+        let mut titles: BTreeMap<String, Vec<(&str, &str)>> = BTreeMap::new();
+        for target in self.pages.values() {
+            if target.page.path == source.page.path {
+                continue;
+            }
+            let Some(title) = target.page.title.as_deref() else {
+                continue;
+            };
+            titles
+                .entry(title.to_lowercase())
+                .or_default()
+                .push((&target.page.path, title));
+        }
+        let mut titles: Vec<_> = titles
+            .into_values()
+            .filter_map(|targets| match targets.as_slice() {
+                [(path, title)] => Some((*path, *title)),
+                _ => None,
+            })
+            .collect();
+        titles.sort_by(|(left_path, left_title), (right_path, right_title)| {
+            right_title
+                .chars()
+                .count()
+                .cmp(&left_title.chars().count())
+                .then_with(|| left_path.cmp(right_path))
+        });
+
+        let document = Document::parse(&source.html);
+        let mut links = Vec::new();
+        for node in document.unlinked_text_nodes() {
+            let mut matches = Vec::new();
+            for (target, title) in &titles {
+                for (start, end) in exact_case_insensitive_matches(&node.text, title) {
+                    matches.push((start, end, *target));
+                }
+            }
+            matches.sort_by(
+                |(left_start, left_end, left_target), (right_start, right_end, right_target)| {
+                    left_start
+                        .cmp(right_start)
+                        .then_with(|| (right_end - right_start).cmp(&(left_end - left_start)))
+                        .then_with(|| left_target.cmp(right_target))
+                },
+            );
+
+            let mut claimed_until = 0;
+            for (start, end, target) in matches {
+                if start < claimed_until {
+                    continue;
+                }
+                links.push(DerivedLink {
+                    text: node.text[start..end].to_string(),
+                    target: target.to_string(),
+                    occurrence: TextOccurrence {
+                        start: TextPosition {
+                            text_node: node.index,
+                            offset: node.text[..start].encode_utf16().count(),
+                        },
+                        end: TextPosition {
+                            text_node: node.index,
+                            offset: node.text[..end].encode_utf16().count(),
+                        },
+                    },
+                });
+                claimed_until = end;
+            }
+        }
+        Ok(links)
+    }
+
     pub fn insert_link(
         &mut self,
         page: impl AsRef<Path>,
@@ -748,6 +822,32 @@ fn contains_phrase(haystack: &str, phrase: &str) -> bool {
         let after = haystack[end..].chars().next();
         before.is_none_or(|c| !c.is_alphanumeric()) && after.is_none_or(|c| !c.is_alphanumeric())
     })
+}
+
+fn exact_case_insensitive_matches(haystack: &str, needle: &str) -> Vec<(usize, usize)> {
+    let needle_chars = needle.chars().count();
+    if needle_chars == 0 {
+        return Vec::new();
+    }
+    let needle_lower = needle.to_lowercase();
+    let mut boundaries: Vec<_> = haystack.char_indices().map(|(index, _)| index).collect();
+    boundaries.push(haystack.len());
+    let mut matches = Vec::new();
+    for window in boundaries.windows(needle_chars + 1) {
+        let start = window[0];
+        let end = window[needle_chars];
+        if haystack[start..end].to_lowercase() != needle_lower {
+            continue;
+        }
+        let before = haystack[..start].chars().next_back();
+        let after = haystack[end..].chars().next();
+        if before.is_none_or(|character| !character.is_alphanumeric())
+            && after.is_none_or(|character| !character.is_alphanumeric())
+        {
+            matches.push((start, end));
+        }
+    }
+    matches
 }
 
 fn snippet(text: &str, query: &str) -> String {

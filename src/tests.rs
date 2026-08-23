@@ -24,6 +24,31 @@ fn project_has_no_generated_state() {
 }
 
 #[test]
+fn legacy_manifest_opens_without_rewriting_project_files() {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir(temp.path().join("pages")).unwrap();
+    let manifest = r#"{
+  "project_name": "Legacy project",
+  "version": 1,
+  "default_page": "pages/index.html",
+  "theme": "dark"
+}"#;
+    let page = "<!doctype html><title>Legacy page</title><main><h1>Legacy page</h1></main>";
+    fs::write(temp.path().join("fractal.json"), manifest).unwrap();
+    fs::write(temp.path().join("pages/index.html"), page).unwrap();
+
+    let project = Project::open(temp.path()).unwrap();
+
+    assert_eq!(project.manifest().name, "Legacy project");
+    assert_eq!(project.page("index").unwrap().kind, PageKind::Raw);
+    assert_eq!(project.source("index").unwrap(), page);
+    assert_eq!(
+        fs::read_to_string(temp.path().join("fractal.json")).unwrap(),
+        manifest
+    );
+}
+
+#[test]
 fn ordinary_html_and_explicit_links_work() {
     let (_temp, mut project) = project();
     project.create_page("Stockholm").unwrap();
@@ -356,4 +381,72 @@ fn missing_local_iframe_target_invalidates_a_native_document() {
     let report = project.validate();
     assert!(!report.valid);
     assert!(report.issues[0].message.contains("broken iframe source"));
+}
+
+#[test]
+fn derived_links_report_exact_title_occurrences_without_writing() {
+    let (_temp, mut project) = project();
+    project.create_page("Ada Lovelace").unwrap();
+    project.create_page("Notes").unwrap();
+    project
+        .write_page(
+            "notes",
+            &native(
+                "Notes",
+                "<p>😀 ADA LOVELACE met Ada Lovelace and Ada LovelaceX.</p><p><a href=\"ada-lovelace.fractal.html\">Ada Lovelace</a> Ada Lovelace.</p>",
+            ),
+        )
+        .unwrap();
+    let before = project.source("notes").unwrap();
+
+    let links = project.derived_links("notes").unwrap();
+
+    assert_eq!(links.len(), 3);
+    assert_eq!(links[0].text, "ADA LOVELACE");
+    assert_eq!(links[0].target, "ada-lovelace.fractal.html");
+    assert_eq!(links[0].occurrence.start.text_node, 1);
+    assert_eq!(links[0].occurrence.start.offset, 3);
+    assert_eq!(links[0].occurrence.end.offset, 15);
+    assert_eq!(links[1].text, "Ada Lovelace");
+    assert_eq!(links[2].occurrence.start.text_node, 3);
+    assert_eq!(project.source("notes").unwrap(), before);
+}
+
+#[test]
+fn derived_links_skip_ambiguous_titles() {
+    let (_temp, mut project) = project();
+    project
+        .create_page_at("people/ada", "Ada Lovelace")
+        .unwrap();
+    project
+        .create_page_at("scientists/ada", "Ada Lovelace")
+        .unwrap();
+    project.create_page("Notes").unwrap();
+    project
+        .write_page("notes", &native("Notes", "<p>Ada Lovelace</p>"))
+        .unwrap();
+
+    assert!(project.derived_links("notes").unwrap().is_empty());
+}
+
+#[test]
+fn derived_links_prefer_the_longest_exact_title() {
+    let (_temp, mut project) = project();
+    project.create_page("Stockholm").unwrap();
+    project.create_page("Stockholm City").unwrap();
+    project.create_page("Sweden").unwrap();
+    project
+        .write_page(
+            "sweden",
+            &native("Sweden", "<p>Stockholm City and Stockholm.</p>"),
+        )
+        .unwrap();
+
+    let links = project.derived_links("sweden").unwrap();
+
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0].text, "Stockholm City");
+    assert_eq!(links[0].target, "stockholm-city.fractal.html");
+    assert_eq!(links[1].text, "Stockholm");
+    assert_eq!(links[1].target, "stockholm.fractal.html");
 }

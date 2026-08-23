@@ -50,6 +50,7 @@ The `Project` API provides:
 - inspect iframes and find pages that embed a project file;
 - search page titles and visible text;
 - suggest possible links without changing files;
+- derive unambiguous exact-title links for runtime rendering;
 - explicitly insert a selected link;
 - validate titles and internal link targets.
 
@@ -88,6 +89,7 @@ fractal --project <root> iframes <page>
 fractal --project <root> backlinks <page>
 fractal --project <root> embedded-by <page>
 fractal --project <root> suggest <page>
+fractal --project <root> derived-links <page>
 fractal --project <root> link <page> <text> <target>
 fractal --project <root> check
 ```

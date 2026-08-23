@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectManifest {
+    #[serde(alias = "project_name")]
     pub name: String,
     pub version: u32,
 }
@@ -91,6 +92,30 @@ pub struct LinkCandidate {
     pub title: String,
     pub match_kind: MatchKind,
     pub score: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DerivedLink {
+    pub text: String,
+    pub target: String,
+    pub occurrence: TextOccurrence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TextOccurrence {
+    pub start: TextPosition,
+    pub end: TextPosition,
+}
+
+/// A DOM text-node ordinal and UTF-16 code-unit offset within it.
+///
+/// Text nodes are numbered in document order below the native document root,
+/// or below `body` for raw HTML. Counting includes text nodes that Fractal does
+/// not derive links inside, so a DOM `TreeWalker` can resolve the ordinal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TextPosition {
+    pub text_node: usize,
+    pub offset: usize,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
