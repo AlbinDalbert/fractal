@@ -291,87 +291,6 @@ impl Project {
             .collect()
     }
 
-    pub fn suggest_links(&self, path: impl AsRef<Path>) -> Result<Vec<LinkSuggestion>> {
-        let source = self.stored(path.as_ref())?;
-        let text = Document::parse(&source.html).unlinked_text();
-        let text_lower = text.to_lowercase();
-        let existing: BTreeSet<_> = source
-            .page
-            .links
-            .iter()
-            .filter_map(|link| match &link.target {
-                LinkTarget::Internal(path) => Some(path.clone()),
-                _ => None,
-            })
-            .collect();
-        let words: BTreeSet<String> = text
-            .split(|character: char| !character.is_alphanumeric())
-            .filter(|word| word.chars().count() >= 3)
-            .map(str::to_lowercase)
-            .collect();
-        let mut grouped: BTreeMap<String, (String, Vec<LinkCandidate>)> = BTreeMap::new();
-
-        for target in self.pages.values() {
-            if target.page.path == source.page.path || existing.contains(&target.page.path) {
-                continue;
-            }
-            let Some(title) = target.page.title.as_deref() else {
-                continue;
-            };
-            let title_lower = title.to_lowercase();
-            let stem = Path::new(&target.page.path)
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .unwrap_or("")
-                .replace(['-', '_'], " ");
-            let stem_lower = stem.to_lowercase();
-
-            let (mention, match_kind, score) = if contains_phrase(&text_lower, &title_lower) {
-                (title.to_string(), MatchKind::ExactTitle, 100)
-            } else if stem_lower != title_lower && contains_phrase(&text_lower, &stem_lower) {
-                (stem, MatchKind::ExactStem, 95)
-            } else {
-                let title_words: Vec<_> = title
-                    .split(|character: char| !character.is_alphanumeric())
-                    .filter(|word| word.chars().count() >= 3)
-                    .collect();
-                let Some(matched) = title_words
-                    .iter()
-                    .find(|word| words.contains(&word.to_lowercase()))
-                else {
-                    continue;
-                };
-                let overlap = title_words
-                    .iter()
-                    .filter(|word| words.contains(&word.to_lowercase()))
-                    .count();
-                let score = 60 + ((overlap * 20) / title_words.len().max(1)) as u8;
-                ((*matched).to_string(), MatchKind::TokenOverlap, score)
-            };
-            let key = mention.to_lowercase();
-            grouped
-                .entry(key)
-                .or_insert_with(|| (mention, vec![]))
-                .1
-                .push(LinkCandidate {
-                    page: target.page.path.clone(),
-                    title: title.to_string(),
-                    match_kind,
-                    score,
-                });
-        }
-
-        let mut suggestions: Vec<_> = grouped
-            .into_values()
-            .map(|(text, mut candidates)| {
-                candidates.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.page.cmp(&b.page)));
-                LinkSuggestion { text, candidates }
-            })
-            .collect();
-        suggestions.sort_by_key(|suggestion| suggestion.text.to_lowercase());
-        Ok(suggestions)
-    }
-
     /// Finds unambiguous, case-insensitive exact-title matches without changing source.
     pub fn derived_links(&self, path: impl AsRef<Path>) -> Result<Vec<DerivedLink>> {
         let source = self.stored(path.as_ref())?;
@@ -810,18 +729,6 @@ fn slug(title: &str) -> Result<String> {
     } else {
         Ok(output)
     }
-}
-
-fn contains_phrase(haystack: &str, phrase: &str) -> bool {
-    if phrase.is_empty() {
-        return false;
-    }
-    haystack.match_indices(phrase).any(|(start, value)| {
-        let end = start + value.len();
-        let before = haystack[..start].chars().next_back();
-        let after = haystack[end..].chars().next();
-        before.is_none_or(|c| !c.is_alphanumeric()) && after.is_none_or(|c| !c.is_alphanumeric())
-    })
 }
 
 fn exact_case_insensitive_matches(haystack: &str, needle: &str) -> Vec<(usize, usize)> {

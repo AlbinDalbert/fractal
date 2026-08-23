@@ -59,9 +59,6 @@ enum Command {
     EmbeddedBy {
         page: PathBuf,
     },
-    Suggest {
-        page: PathBuf,
-    },
     DerivedLinks {
         page: PathBuf,
     },
@@ -118,7 +115,6 @@ pub fn run() -> Result<()> {
                 Command::Iframes { page } => output(&project.iframes(page)?, cli.json),
                 Command::Backlinks { page } => output(&project.backlinks(page)?, cli.json),
                 Command::EmbeddedBy { page } => output(&project.iframe_backlinks(page)?, cli.json),
-                Command::Suggest { page } => output(&project.suggest_links(page)?, cli.json),
                 Command::DerivedLinks { page } => output(&project.derived_links(page)?, cli.json),
                 Command::Link { page, text, target } => {
                     output(&project.insert_link(page, &text, target)?, cli.json)

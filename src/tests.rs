@@ -1,4 +1,4 @@
-use crate::{IframeTarget, LinkTarget, MatchKind, PageKind, Project};
+use crate::{IframeTarget, LinkTarget, PageKind, Project};
 use std::fs;
 use tempfile::TempDir;
 
@@ -76,31 +76,7 @@ fn ordinary_html_and_explicit_links_work() {
 }
 
 #[test]
-fn suggestions_group_ambiguous_candidates_without_writing() {
-    let (_temp, mut project) = project();
-    project.create_page("Stockholm").unwrap();
-    project.create_page("Stockholm City").unwrap();
-    project.create_page("Sweden").unwrap();
-    project
-        .write_page(
-            "sweden",
-            &native("Sweden", "<p>Stockholm is the capital.</p>"),
-        )
-        .unwrap();
-
-    let before = project.source("sweden").unwrap();
-    let suggestions = project.suggest_links("sweden").unwrap();
-    let stockholm = suggestions
-        .iter()
-        .find(|suggestion| suggestion.text.eq_ignore_ascii_case("stockholm"))
-        .unwrap();
-    assert_eq!(stockholm.candidates.len(), 2);
-    assert_eq!(stockholm.candidates[0].match_kind, MatchKind::ExactTitle);
-    assert_eq!(project.source("sweden").unwrap(), before);
-}
-
-#[test]
-fn inserting_a_suggested_link_is_explicit() {
+fn inserting_a_link_is_explicit() {
     let (_temp, mut project) = project();
     project.create_page("Stockholm").unwrap();
     project.create_page("Sweden").unwrap();
@@ -114,7 +90,6 @@ fn inserting_a_suggested_link_is_explicit() {
         .source("sweden")
         .unwrap()
         .contains("<a href=\"stockholm.fractal.html\">Stockholm</a>"));
-    assert!(project.suggest_links("sweden").unwrap().is_empty());
 }
 
 #[test]

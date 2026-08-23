@@ -81,20 +81,6 @@ pub struct SearchResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LinkSuggestion {
-    pub text: String,
-    pub candidates: Vec<LinkCandidate>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LinkCandidate {
-    pub page: String,
-    pub title: String,
-    pub match_kind: MatchKind,
-    pub score: u8,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DerivedLink {
     pub text: String,
     pub target: String,
@@ -116,14 +102,6 @@ pub struct TextOccurrence {
 pub struct TextPosition {
     pub text_node: usize,
     pub offset: usize,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
-pub enum MatchKind {
-    ExactTitle,
-    ExactStem,
-    TokenOverlap,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -10,8 +10,7 @@ Native documents use the `.fractal.html` suffix and a small semantic HTML profil
 - **Files are the source of truth.** Fractal scans pages into memory when a project is opened. There are no persistent index or graph files to synchronize.
 - **Links are explicit.** Fractal reads, validates, inserts, and preserves links. It never rewrites unlinked prose automatically.
 - **Iframes are embeds.** Native documents may embed project files, inline `srcdoc`, or remote pages with ordinary `<iframe>` elements.
-- **Suggestions are advisory.** Fractal can find link opportunities and return ranked candidate pages, including ambiguous candidates. Applying one is a separate explicit operation.
-- **Derived data stays derived.** Search, links, backlinks, and suggestions are views over the current files.
+- **Derived data stays derived.** Search, links, backlinks, and derived links are views over the current files.
 - **The library is the product.** The CLI is a thin adapter over the Rust API.
 
 Fractal does not try to make small models smart. It makes document operations cheap enough for any caller to compose.
@@ -49,29 +48,11 @@ The `Project` API provides:
 - inspect explicit links and derived backlinks;
 - inspect iframes and find pages that embed a project file;
 - search page titles and visible text;
-- suggest possible links without changing files;
 - derive unambiguous exact-title links for runtime rendering;
 - explicitly insert a selected link;
 - validate titles and internal link targets.
 
 Moving a page updates explicit internal links that target it. Single-file writes use atomic replacement.
-
-## Link suggestions
-
-Suppose a page contains "Stockholm" and the project contains:
-
-- `stockholm.fractal.html`, titled "Stockholm";
-- `stockholm-city.fractal.html`, titled "Stockholm City".
-
-Fractal groups both under the same suggestion. The exact title match ranks first and the partial token match remains available as an alternative. Existing explicit links are not suggested again.
-
-Initial ranking is intentionally understandable:
-
-1. exact title;
-2. exact filename stem;
-3. title-token overlap.
-
-Suggestions never mutate source. `insert_link` is a separate operation that links a caller-selected occurrence to a caller-selected target.
 
 ## CLI
 
@@ -88,7 +69,6 @@ fractal --project <root> links <page>
 fractal --project <root> iframes <page>
 fractal --project <root> backlinks <page>
 fractal --project <root> embedded-by <page>
-fractal --project <root> suggest <page>
 fractal --project <root> derived-links <page>
 fractal --project <root> link <page> <text> <target>
 fractal --project <root> check

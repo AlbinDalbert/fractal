@@ -176,27 +176,6 @@ impl Document {
         normalize_space(&node.text_contents())
     }
 
-    pub(crate) fn unlinked_text(&self) -> String {
-        let mut parts = Vec::new();
-        for node in self.root.descendants() {
-            let NodeData::Text(text) = node.data() else {
-                continue;
-            };
-            if node.ancestors().any(|ancestor| {
-                ancestor.as_element().is_some_and(|element| {
-                    matches!(
-                        element.name.local.as_ref(),
-                        "a" | "title" | "script" | "style" | "code" | "pre"
-                    )
-                })
-            }) {
-                continue;
-            }
-            parts.push(text.borrow().to_string());
-        }
-        normalize_space(&parts.join(" "))
-    }
-
     pub(crate) fn unlinked_text_nodes(&self) -> Vec<UnlinkedTextNode> {
         let root = self
             .root

@@ -20,7 +20,7 @@ Do not add persistent generated state until measured project sizes prove scannin
 
 ## Modules
 
-- `project.rs`: project loading, catalog construction, operations, search, backlinks, validation, and suggestions.
+- `project.rs`: project loading, catalog construction, operations, search, backlinks, validation, and derived links.
 - `document.rs`: small parser-backed HTML extraction and mutation helpers.
 - `types.rs`: serializable public values.
 - `error.rs`: the compact public error type.
@@ -37,7 +37,6 @@ Prefer a direct function over a framework. Add a module only when one of these f
 - Update links and iframe sources only inside native documents.
 - Never semantically rewrite raw HTML.
 - Reload the in-memory catalog after mutations.
-- Never combine link suggestion with link insertion.
 
 Fractal does not promise database transactions. Multi-file move repair is deliberately straightforward; stronger machinery should be added only in response to demonstrated failure cases.
 

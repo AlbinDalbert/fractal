@@ -82,10 +82,8 @@ Fractal records `title` and `sandbox` attributes but does not impose permissions
 
 Fractal does not interpret an iframe target as part of its containing native document. A raw HTML target remains source-owned.
 
-## Suggestions and mutations
-
-Link suggestions are derived from unlinked visible text and page titles or filename stems. Suggestions never modify source. Applying one is a separate mutation and is available only for native documents.
+## Derived links and mutations
 
 Derived links are case-insensitive exact-title matches in unlinked visible text. Fractal reports only matches with one possible target and never stores them in page source. Applications may render these matches as links at runtime. Stored explicit links and derived links remain distinct.
 
-Opening, scanning, searching, validating, suggesting, and deriving links never write files. Native semantic mutations may serialize affected native documents. Raw source changes require an explicit source or filesystem operation.
+Opening, scanning, searching, validating, and deriving links never write files. Native semantic mutations may serialize affected native documents. Raw source changes require an explicit source or filesystem operation.
