@@ -186,10 +186,11 @@ fn new_pages_are_native_documents() {
     let page = project.page("native-page").unwrap();
     assert_eq!(page.path, "native-page.fractal.html");
     assert_eq!(page.kind, PageKind::Native);
-    assert!(project
-        .source("native-page")
-        .unwrap()
-        .contains("<meta name=\"fractal-format\" content=\"1\">"));
+    let source = project.source("native-page").unwrap();
+    assert!(source.contains("<meta name=\"fractal-format\" content=\"1\">"));
+    assert!(source.contains("<meta name=\"viewport\""));
+    assert!(source.contains("background: #0c0c0a"));
+    assert!(source.contains("a { color: #e8bb4d"));
     assert!(project.validate().valid);
 }
 
