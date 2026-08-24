@@ -11,11 +11,11 @@ cli = ["dep:clap"]
 [dependencies]
 clap = { version = "4.4", features = ["derive"], optional = true } # CLI argument parsing
 brik = "0.10"                                           # HTML5 parsing/querying
+fs2 = "0.4"                                             # Cross-process project locking
 serde = { version = "1.0", features = ["derive"] }      # Serialization
 serde_json = "1.0"                                      # JSON support
-
-[dev-dependencies]
-tempfile = "3"
+sha2 = "0.10"                                           # Page content hashes
+tempfile = "3"                                          # Same-filesystem transaction staging
 
 [[bin]]
 name = "fractal"

@@ -1,14 +1,19 @@
 use crate::document::{is_external_href, relative_href, resolve_internal_href, Document};
 use crate::types::*;
 use crate::{FractalError, Result};
+use fs2::FileExt;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 const MANIFEST: &str = "fractal.json";
 const PAGES: &str = "pages";
 const VERSION: u32 = 1;
 const NATIVE_SUFFIX: &str = ".fractal.html";
+const TRANSACTION_PREFIX: &str = ".fractal-transaction-";
 
 #[derive(Debug)]
 pub struct Project {
@@ -53,6 +58,8 @@ impl Project {
                 manifest_path.display()
             )));
         }
+        let _lock = ProjectLock::exclusive(&manifest_path)?;
+        recover_transactions(&root)?;
         let manifest: ProjectManifest = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
         if manifest.version != VERSION {
             return Err(FractalError::unsupported_version(format!(
@@ -95,18 +102,24 @@ impl Project {
         Ok(self.stored(path.as_ref())?.html.clone())
     }
 
+    pub fn content_hash(&self, path: impl AsRef<Path>) -> Result<String> {
+        Ok(self.stored(path.as_ref())?.page.content_hash.clone())
+    }
+
     pub fn create_page(&mut self, title: &str) -> Result<Mutation> {
         let stem = slug(title)?;
         self.create_page_at(format!("{stem}{NATIVE_SUFFIX}"), title)
     }
 
     pub fn create_page_at(&mut self, path: impl AsRef<Path>, title: &str) -> Result<Mutation> {
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
         if title.trim().is_empty() {
             return Err(FractalError::invalid_input("title cannot be empty"));
         }
         let relative = normalize_native_page_path(path.as_ref())?;
         let destination = self.root.join(PAGES).join(&relative);
-        if destination.exists() {
+        if path_exists(&destination) {
             return Err(FractalError::already_exists(format!(
                 "page already exists: {}",
                 relative.display()
@@ -127,7 +140,40 @@ impl Project {
     }
 
     pub fn write_page(&mut self, path: impl AsRef<Path>, html: &str) -> Result<Mutation> {
+        self.write_page_inner(path.as_ref(), html, None)
+    }
+
+    /// Replaces a page only when its current source hash matches `expected_hash`.
+    ///
+    /// Fractal holds the project lock while it refreshes the page, compares the
+    /// hash, and atomically replaces the file.
+    pub fn write_page_if_unchanged(
+        &mut self,
+        path: impl AsRef<Path>,
+        html: &str,
+        expected_hash: &str,
+    ) -> Result<Mutation> {
+        self.write_page_inner(path.as_ref(), html, Some(expected_hash))
+    }
+
+    fn write_page_inner(
+        &mut self,
+        path: &Path,
+        html: &str,
+        expected_hash: Option<&str>,
+    ) -> Result<Mutation> {
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
         let relative = self.existing_path(path.as_ref())?;
+        if let Some(expected_hash) = expected_hash {
+            let actual_hash = &self.stored(&relative)?.page.content_hash;
+            if actual_hash != expected_hash {
+                return Err(FractalError::conflict(format!(
+                    "page changed since it was read: {} (expected {expected_hash}, found {actual_hash})",
+                    relative.display()
+                )));
+            }
+        }
         if page_kind(&relative) == PageKind::Native {
             let issues = native_document_issues(&Document::parse(html));
             if let Some(issue) = issues.first() {
@@ -145,6 +191,8 @@ impl Project {
     }
 
     pub fn move_page(&mut self, from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<Mutation> {
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
         let from = self.existing_path(from.as_ref())?;
         let kind = page_kind(&from);
         let to = normalize_destination_page_path(to.as_ref(), kind)?;
@@ -155,7 +203,7 @@ impl Project {
             });
         }
         let destination = self.root.join(PAGES).join(&to);
-        if destination.exists() {
+        if path_exists(&destination) {
             return Err(FractalError::already_exists(format!(
                 "page already exists: {}",
                 to.display()
@@ -164,12 +212,13 @@ impl Project {
 
         let from_string = path_string(&from);
         let to_string = path_string(&to);
+        let source_html = self.stored(&from)?.html.clone();
         let moved_html = if kind == PageKind::Native {
-            let moved_document = Document::parse(&self.stored(&from)?.html);
+            let moved_document = Document::parse(&source_html);
             moved_document.rewrite_source_location(&from_string, &to_string);
-            Some(moved_document.serialize()?)
+            moved_document.serialize()?
         } else {
-            None
+            source_html
         };
 
         let mut rewrites = Vec::new();
@@ -183,18 +232,13 @@ impl Project {
             }
         }
 
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::rename(self.root.join(PAGES).join(&from), &destination)?;
-        if let Some(moved_html) = moved_html {
-            atomic_write(&destination, &moved_html)?;
-        }
+        let mut writes = vec![(to.clone(), moved_html)];
         let mut changed = vec![to.clone()];
         for (path, html) in rewrites {
-            atomic_write(&self.root.join(PAGES).join(&path), &html)?;
+            writes.push((PathBuf::from(&path), html));
             changed.push(PathBuf::from(path));
         }
+        commit_file_transaction(&self.root, writes, vec![from.clone()])?;
         self.reload()?;
         Ok(Mutation {
             changed,
@@ -203,22 +247,74 @@ impl Project {
     }
 
     pub fn delete_page(&mut self, path: impl AsRef<Path>) -> Result<Mutation> {
-        let relative = self.existing_path(path.as_ref())?;
-        let backlinks = self.backlinks(&relative)?;
-        let iframe_backlinks = self.iframe_backlinks(&relative)?;
-        if !backlinks.is_empty() || !iframe_backlinks.is_empty() {
-            return Err(FractalError::invalid_input(format!(
-                "cannot delete {} while {} link(s) and {} iframe(s) target it",
-                relative.display(),
-                backlinks.len(),
-                iframe_backlinks.len()
-            )));
+        self.delete_pages([path])
+    }
+
+    /// Deletes a set of pages as one locked project operation.
+    ///
+    /// References between pages in the set do not block deletion. References
+    /// from pages that survive do block it.
+    pub fn delete_pages<I, P>(&mut self, paths: I) -> Result<Mutation>
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        let requested: Vec<PathBuf> = paths
+            .into_iter()
+            .map(|path| path.as_ref().to_path_buf())
+            .collect();
+        if requested.is_empty() {
+            return Err(FractalError::invalid_input(
+                "page deletion needs at least one path",
+            ));
         }
-        fs::remove_file(self.root.join(PAGES).join(&relative))?;
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
+        let mut relative = BTreeSet::new();
+        for path in requested {
+            relative.insert(self.existing_path(&path)?);
+        }
+        let targets: BTreeSet<String> = relative.iter().map(|path| path_string(path)).collect();
+        self.reject_references_into(&targets, &targets)?;
+        let deleted: Vec<PathBuf> = relative.into_iter().collect();
+        commit_file_transaction(&self.root, vec![], deleted.clone())?;
         self.reload()?;
         Ok(Mutation {
             changed: vec![],
-            deleted: vec![relative],
+            deleted,
+        })
+    }
+
+    /// Deletes a folder below `pages/` with a single namespace rename.
+    ///
+    /// The returned `deleted` list includes every file that was below the
+    /// folder, including non-HTML assets.
+    pub fn delete_folder(&mut self, path: impl AsRef<Path>) -> Result<Mutation> {
+        let folder = normalize_relative_path(path.as_ref())?;
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
+        let absolute = self.root.join(PAGES).join(&folder);
+        if !fs::symlink_metadata(&absolute).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+            return Err(FractalError::not_found(format!(
+                "folder does not exist: {}",
+                folder.display()
+            )));
+        }
+        let mut deleted = Vec::new();
+        collect_files(&self.root.join(PAGES), &absolute, &mut deleted)?;
+        let targets: BTreeSet<String> = deleted.iter().map(|path| path_string(path)).collect();
+        let deleted_pages: BTreeSet<String> = self
+            .pages
+            .keys()
+            .filter(|path| path_starts_with(Path::new(path), &folder))
+            .cloned()
+            .collect();
+        self.reject_references_into(&targets, &deleted_pages)?;
+        commit_file_transaction(&self.root, vec![], vec![folder])?;
+        self.reload()?;
+        Ok(Mutation {
+            changed: vec![],
+            deleted,
         })
     }
 
@@ -371,6 +467,8 @@ impl Project {
         text: &str,
         target: impl AsRef<Path>,
     ) -> Result<Mutation> {
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
         let page = self.existing_path(page.as_ref())?;
         let target = self.existing_path(target.as_ref())?;
         if page_kind(&page) != PageKind::Native {
@@ -448,6 +546,48 @@ impl Project {
             valid: issues.is_empty(),
             issues,
         }
+    }
+
+    fn lock_for_mutation(&self) -> Result<ProjectLock> {
+        let lock = ProjectLock::exclusive(&self.root.join(MANIFEST))?;
+        recover_transactions(&self.root)?;
+        Ok(lock)
+    }
+
+    fn reject_references_into(
+        &self,
+        targets: &BTreeSet<String>,
+        deleted_pages: &BTreeSet<String>,
+    ) -> Result<()> {
+        let mut links = 0;
+        let mut iframes = 0;
+        for stored in self.pages.values() {
+            if deleted_pages.contains(&stored.page.path) {
+                continue;
+            }
+            links += stored
+                .page
+                .links
+                .iter()
+                .filter(|link| {
+                    link_target_path(&link.target).is_some_and(|path| targets.contains(path))
+                })
+                .count();
+            iframes += stored
+                .page
+                .iframes
+                .iter()
+                .filter(|iframe| {
+                    iframe_target_path(&iframe.target).is_some_and(|path| targets.contains(path))
+                })
+                .count();
+        }
+        if links == 0 && iframes == 0 {
+            return Ok(());
+        }
+        Err(FractalError::invalid_input(format!(
+            "cannot delete while {links} link(s) and {iframes} iframe(s) from surviving pages target the selection"
+        )))
     }
 
     fn stored(&self, path: &Path) -> Result<&StoredPage> {
@@ -551,6 +691,7 @@ impl Project {
                 .collect();
             let page = Page {
                 path: path.clone(),
+                content_hash: content_hash(&html),
                 kind: page_kind(&relative),
                 title: document.title(),
                 text: document.text(),
@@ -699,14 +840,241 @@ fn collect_html(root: &Path, directory: &Path, output: &mut Vec<PathBuf>) -> Res
     Ok(())
 }
 
+fn collect_files(root: &Path, directory: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            collect_files(root, &path, output)?;
+        } else {
+            output.push(path.strip_prefix(root)?.to_path_buf());
+        }
+    }
+    output.sort();
+    Ok(())
+}
+
 fn atomic_write(path: &Path, contents: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| FractalError::invalid_input("file path needs a parent directory"))?;
+    fs::create_dir_all(parent)?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    temp.write_all(contents.as_bytes())?;
+    temp.as_file().sync_all()?;
+    temp.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TransactionPlan {
+    affected: Vec<PathBuf>,
+    originals: BTreeSet<PathBuf>,
+}
+
+struct ProjectLock {
+    _file: File,
+}
+
+impl ProjectLock {
+    fn exclusive(path: &Path) -> Result<Self> {
+        let file = OpenOptions::new().read(true).write(true).open(path)?;
+        FileExt::lock_exclusive(&file)?;
+        Ok(Self { _file: file })
+    }
+}
+
+fn commit_file_transaction(
+    root: &Path,
+    writes: Vec<(PathBuf, String)>,
+    deletes: Vec<PathBuf>,
+) -> Result<()> {
+    let writes: BTreeMap<PathBuf, String> = writes.into_iter().collect();
+    let mut affected: BTreeSet<PathBuf> = writes.keys().cloned().collect();
+    affected.extend(deletes);
+    if affected.is_empty() {
+        return Ok(());
+    }
+    reject_overlapping_transaction_paths(&affected)?;
+
+    let pages = root.join(PAGES);
+    let transaction = tempfile::Builder::new()
+        .prefix(TRANSACTION_PREFIX)
+        .tempdir_in(root)?;
+    let transaction_root = transaction.path();
+    let new_root = transaction_root.join("new");
+    let old_root = transaction_root.join("old");
+    let originals = affected
+        .iter()
+        .filter(|path| path_exists(&pages.join(path)))
+        .cloned()
+        .collect();
+    let plan = TransactionPlan {
+        affected: affected.iter().cloned().collect(),
+        originals,
+    };
+    atomic_write(
+        &transaction_root.join("plan.json"),
+        &serde_json::to_string(&plan)?,
+    )?;
+
+    for (path, contents) in &writes {
+        atomic_write(&new_root.join(path), contents)?;
+    }
+
+    let result = (|| -> Result<()> {
+        for path in &plan.affected {
+            let source = pages.join(path);
+            if path_exists(&source) {
+                let backup = old_root.join(path);
+                create_parent(&backup)?;
+                fs::rename(source, backup)?;
+            }
+        }
+        for path in writes.keys() {
+            let source = new_root.join(path);
+            let destination = pages.join(path);
+            create_parent(&destination)?;
+            fs::rename(source, destination)?;
+        }
+        let committed = File::create(transaction_root.join("committed"))?;
+        committed.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        if let Err(recovery_error) = recover_transaction(transaction_root) {
+            let preserved = transaction.keep();
+            return Err(FractalError::new(
+                crate::FractalErrorCode::Io,
+                format!(
+                    "transaction failed: {error}; rollback also failed: {recovery_error}; recovery files remain at {}",
+                    preserved.display()
+                ),
+            ));
+        }
+        return Err(error);
+    }
+
+    drop(transaction);
+    Ok(())
+}
+
+fn recover_transactions(root: &Path) -> Result<()> {
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir()
+            || !entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(TRANSACTION_PREFIX)
+        {
+            continue;
+        }
+        if !entry.path().join("plan.json").is_file() {
+            continue;
+        }
+        recover_transaction(&entry.path())?;
+    }
+    Ok(())
+}
+
+fn recover_transaction(transaction_root: &Path) -> Result<()> {
+    let plan_path = transaction_root.join("plan.json");
+    if !plan_path.is_file() || transaction_root.join("committed").is_file() {
+        fs::remove_dir_all(transaction_root)?;
+        return Ok(());
+    }
+    let plan: TransactionPlan = serde_json::from_str(&fs::read_to_string(plan_path)?)?;
+    let affected: BTreeSet<PathBuf> = plan.affected.iter().cloned().collect();
+    reject_overlapping_transaction_paths(&affected)?;
+    let root = transaction_root
+        .parent()
+        .ok_or_else(|| FractalError::invalid_project("transaction has no project root"))?;
+    let pages = root.join(PAGES);
+    let old_root = transaction_root.join("old");
+    for path in plan.affected.iter().rev() {
+        let current = pages.join(path);
+        let backup = old_root.join(path);
+        if path_exists(&backup) {
+            remove_path_if_present(&current)?;
+            create_parent(&current)?;
+            fs::rename(backup, current)?;
+        } else if !plan.originals.contains(path) {
+            remove_path_if_present(&current)?;
+        }
+    }
+    fs::remove_dir_all(transaction_root)?;
+    Ok(())
+}
+
+fn reject_overlapping_transaction_paths(paths: &BTreeSet<PathBuf>) -> Result<()> {
+    for path in paths {
+        if path.as_os_str().is_empty()
+            || path
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(FractalError::invalid_project(format!(
+                "transaction contains an invalid path: {}",
+                path.display()
+            )));
+        }
+        if paths
+            .iter()
+            .any(|other| other != path && path_starts_with(path, other))
+        {
+            return Err(FractalError::invalid_input(
+                "transaction paths cannot contain one another",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn create_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temp = path.with_extension("fractal-tmp");
-    fs::write(&temp, contents)?;
-    fs::rename(temp, path)?;
     Ok(())
+}
+
+fn path_exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+fn remove_path_if_present(path: &Path) -> Result<()> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    if metadata.file_type().is_dir() {
+        fs::remove_dir_all(path)?;
+    } else {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn path_starts_with(path: &Path, parent: &Path) -> bool {
+    path.starts_with(parent)
+}
+
+fn link_target_path(target: &LinkTarget) -> Option<&str> {
+    match target {
+        LinkTarget::Internal(path) | LinkTarget::InternalFile(path) => Some(path),
+        _ => None,
+    }
+}
+
+fn iframe_target_path(target: &IframeTarget) -> Option<&str> {
+    match target {
+        IframeTarget::Internal(path) | IframeTarget::InternalFile(path) => Some(path),
+        _ => None,
+    }
+}
+
+fn content_hash(contents: &str) -> String {
+    format!("sha256:{:x}", Sha256::digest(contents.as_bytes()))
 }
 
 fn slug(title: &str) -> Result<String> {

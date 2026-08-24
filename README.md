@@ -11,6 +11,7 @@ Native documents use the `.fractal.html` suffix and a small semantic HTML profil
 - **Links are explicit.** Fractal reads, validates, inserts, and preserves links. It never rewrites unlinked prose automatically.
 - **Iframes are embeds.** Native documents may embed project files, inline `srcdoc`, or remote pages with ordinary `<iframe>` elements.
 - **Derived data stays derived.** Search, links, backlinks, and derived links are views over the current files.
+- **Hashes guard writes.** Every page exposes a SHA-256 source hash. Callers can require that hash when saving so an old editor revision cannot replace a newer file.
 - **The library is the product.** The CLI is a thin adapter over the Rust API.
 
 Fractal does not try to make small models smart. It makes document operations cheap enough for any caller to compose.
@@ -45,6 +46,8 @@ The `Project` API provides:
 
 - initialize and open projects;
 - list, read, create, write, move, and delete pages;
+- compare and write a page using its content hash;
+- delete page batches or complete folders;
 - inspect explicit links and derived backlinks;
 - inspect iframes and find pages that embed a project file;
 - search page titles and visible text;
@@ -52,7 +55,9 @@ The `Project` API provides:
 - explicitly insert a selected link;
 - validate titles and internal link targets.
 
-Moving a page updates explicit internal links that target it. Single-file writes use atomic replacement.
+Every mutation takes an exclusive lock on `fractal.json` and refreshes the in-memory catalog before checking paths or hashes. `Project::write_page_if_unchanged` compares the caller's hash and replaces the file while holding that lock. A mismatch returns `FractalErrorCode::Conflict`.
+
+Moving a page and rewriting its backlinks is one recoverable project transaction. Folder deletion commits with one same-filesystem rename. Batch deletion stages every selected page under the same lock and rolls back if staging fails. If a process stops partway through a multi-file transaction, the next `Project::open` restores the pre-operation files before loading the project.
 
 ## CLI
 
@@ -61,9 +66,11 @@ fractal init <path> [--name <name>]
 fractal --project <root> list
 fractal --project <root> read <page> [--source]
 fractal --project <root> new <title> [--path <path>]
-fractal --project <root> write <page> --file <html-file>
+fractal --project <root> write <page> --file <html-file> [--expected-hash <hash>]
 fractal --project <root> move <page> <destination>
 fractal --project <root> delete <page>
+fractal --project <root> delete-pages <page>...
+fractal --project <root> delete-folder <folder>
 fractal --project <root> search <query>
 fractal --project <root> links <page>
 fractal --project <root> iframes <page>

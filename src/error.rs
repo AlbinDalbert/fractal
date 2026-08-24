@@ -26,6 +26,9 @@ impl FractalError {
     pub fn already_exists(message: impl Into<String>) -> Self {
         Self::new(FractalErrorCode::AlreadyExists, message)
     }
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self::new(FractalErrorCode::Conflict, message)
+    }
     pub fn unsupported_version(message: impl Into<String>) -> Self {
         Self::new(FractalErrorCode::UnsupportedVersion, message)
     }
@@ -68,6 +71,7 @@ impl From<std::path::StripPrefixError> for FractalError {
 #[serde(rename_all = "snake_case")]
 pub enum FractalErrorCode {
     AlreadyExists,
+    Conflict,
     InvalidInput,
     InvalidProject,
     Io,

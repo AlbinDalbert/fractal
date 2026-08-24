@@ -32,16 +32,22 @@ Prefer a direct function over a framework. Add a module only when one of these f
 
 - Resolve and contain paths before accessing files.
 - Validate candidate page source before replacing an existing page.
+- Lock `fractal.json` across each mutation and refresh the catalog after taking the lock.
+- Hash exact page source bytes with SHA-256. Do not use modification times for conflict checks.
+- Compare an expected hash and replace the page inside the same locked operation.
 - Use atomic replacement for single-file writes.
-- Update explicit backlinks when moving a target page.
+- Treat a page move and its backlink rewrites as one recoverable file transaction.
+- Commit folder deletion with one same-filesystem rename. Stage batch deletion as a recoverable locked transaction.
 - Update links and iframe sources only inside native documents.
 - Never semantically rewrite raw HTML.
 - Reload the in-memory catalog after mutations.
 
-Fractal does not promise database transactions. Multi-file move repair is deliberately straightforward; stronger machinery should be added only in response to demonstrated failure cases.
+Filesystem observers that ignore Fractal's project lock can see the individual renames in a disjoint batch or multi-file move. Fractal callers cannot. An interrupted transaction is rolled back when the next process opens or mutates the project.
 
 ## Application boundary
 
 Fractal is an engine, not an editor. Rich-text controls, preview layout, and other UI policy belong in applications that use the crate.
+
+Fractal owns stored content hashes, conditional writes, cross-process locking, page and folder deletion, and page moves with backlink repair. An editor owns unsaved revisions, save timing, keystrokes received during a save, and conflict dialogs.
 
 Import/export, repair, indexing, graph queries, metadata, summaries, and semantic tooling belong in the engine when they become concrete project or document operations. Add them directly before introducing a general framework.

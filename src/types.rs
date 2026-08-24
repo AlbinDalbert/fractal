@@ -11,6 +11,8 @@ pub struct ProjectManifest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Page {
     pub path: String,
+    /// SHA-256 of the exact UTF-8 source bytes, prefixed with `sha256:`.
+    pub content_hash: String,
     pub kind: PageKind,
     pub title: Option<String>,
     pub text: String,

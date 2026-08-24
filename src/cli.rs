@@ -36,6 +36,8 @@ enum Command {
         page: PathBuf,
         #[arg(long)]
         file: PathBuf,
+        #[arg(long)]
+        expected_hash: Option<String>,
     },
     Move {
         page: PathBuf,
@@ -43,6 +45,12 @@ enum Command {
     },
     Delete {
         page: PathBuf,
+    },
+    DeletePages {
+        pages: Vec<PathBuf>,
+    },
+    DeleteFolder {
+        folder: PathBuf,
     },
     Search {
         query: String,
@@ -102,14 +110,27 @@ pub fn run() -> Result<()> {
                     };
                     output(&result, cli.json);
                 }
-                Command::Write { page, file } => output(
-                    &project.write_page(page, &std::fs::read_to_string(file)?)?,
-                    cli.json,
-                ),
+                Command::Write {
+                    page,
+                    file,
+                    expected_hash,
+                } => {
+                    let source = std::fs::read_to_string(file)?;
+                    let result = if let Some(expected_hash) = expected_hash {
+                        project.write_page_if_unchanged(page, &source, &expected_hash)?
+                    } else {
+                        project.write_page(page, &source)?
+                    };
+                    output(&result, cli.json)
+                }
                 Command::Move { page, destination } => {
                     output(&project.move_page(page, destination)?, cli.json)
                 }
                 Command::Delete { page } => output(&project.delete_page(page)?, cli.json),
+                Command::DeletePages { pages } => output(&project.delete_pages(pages)?, cli.json),
+                Command::DeleteFolder { folder } => {
+                    output(&project.delete_folder(folder)?, cli.json)
+                }
                 Command::Search { query } => output(&project.search(&query), cli.json),
                 Command::Links { page } => output(&project.links(page)?, cli.json),
                 Command::Iframes { page } => output(&project.iframes(page)?, cli.json),

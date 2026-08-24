@@ -1,4 +1,4 @@
-use crate::{IframeTarget, LinkTarget, PageKind, Project};
+use crate::{FractalErrorCode, IframeTarget, LinkTarget, PageKind, Project};
 use std::fs;
 use tempfile::TempDir;
 
@@ -199,6 +199,58 @@ fn explicit_raw_source_write_preserves_the_supplied_bytes() {
 }
 
 #[test]
+fn page_hashes_cover_the_exact_source_bytes() {
+    let (temp, _project) = project();
+    fs::write(temp.path().join("pages/raw.html"), "abc").unwrap();
+    let project = Project::open(temp.path()).unwrap();
+
+    let hash = "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    assert_eq!(project.content_hash("raw").unwrap(), hash);
+    assert_eq!(project.page("raw").unwrap().content_hash, hash);
+}
+
+#[test]
+fn conditional_write_rejects_a_stale_editor_revision() {
+    let (temp, mut editor) = project();
+    editor.create_page("Draft").unwrap();
+    let expected_hash = editor.content_hash("draft").unwrap();
+
+    let mut other_process = Project::open(temp.path()).unwrap();
+    let winner = native("Draft", "<p>Written elsewhere.</p>");
+    other_process.write_page("draft", &winner).unwrap();
+
+    let error = editor
+        .write_page_if_unchanged(
+            "draft",
+            &native("Draft", "<p>Stale editor contents.</p>"),
+            &expected_hash,
+        )
+        .unwrap_err();
+
+    assert_eq!(error.code, FractalErrorCode::Conflict);
+    assert_eq!(editor.source("draft").unwrap(), winner);
+    assert_eq!(
+        fs::read_to_string(temp.path().join("pages/draft.fractal.html")).unwrap(),
+        winner
+    );
+}
+
+#[test]
+fn conditional_write_accepts_the_current_hash_and_exposes_the_new_hash() {
+    let (_temp, mut project) = project();
+    project.create_page("Draft").unwrap();
+    let expected_hash = project.content_hash("draft").unwrap();
+    let replacement = native("Draft", "<p>Saved.</p>");
+
+    project
+        .write_page_if_unchanged("draft", &replacement, &expected_hash)
+        .unwrap();
+
+    assert_ne!(project.content_hash("draft").unwrap(), expected_hash);
+    assert_eq!(project.source("draft").unwrap(), replacement);
+}
+
+#[test]
 fn semantic_link_insertion_rejects_raw_html() {
     let (temp, _project) = project();
     fs::write(
@@ -342,6 +394,126 @@ fn deleting_an_embedded_page_is_rejected() {
 
     let error = project.delete_page("widget").unwrap_err();
     assert!(error.message.contains("1 iframe(s)"));
+}
+
+#[test]
+fn batch_delete_allows_references_within_the_selection() {
+    let (_temp, mut project) = project();
+    project.create_page("One").unwrap();
+    project.create_page("Two").unwrap();
+    project
+        .write_page(
+            "one",
+            &native("One", "<a href=\"two.fractal.html\">Two</a>"),
+        )
+        .unwrap();
+
+    let mutation = project.delete_pages(["one", "two"]).unwrap();
+
+    assert_eq!(mutation.deleted.len(), 2);
+    assert!(project.pages().is_empty());
+}
+
+#[test]
+fn batch_delete_checks_every_path_before_deleting_any_page() {
+    let (_temp, mut project) = project();
+    project.create_page("Keep").unwrap();
+
+    let error = project.delete_pages(["keep", "missing"]).unwrap_err();
+
+    assert_eq!(error.code, FractalErrorCode::NotFound);
+    assert!(project.page("keep").is_ok());
+}
+
+#[test]
+fn folder_delete_removes_nested_pages_and_assets() {
+    let (temp, mut project) = project();
+    project.create_page_at("section/one", "One").unwrap();
+    project.create_page_at("section/nested/two", "Two").unwrap();
+    project.create_page("Keep").unwrap();
+    fs::write(temp.path().join("pages/section/image.png"), "image").unwrap();
+    project = Project::open(temp.path()).unwrap();
+
+    let mutation = project.delete_folder("section").unwrap();
+
+    assert_eq!(
+        mutation.deleted,
+        vec![
+            std::path::PathBuf::from("section/image.png"),
+            std::path::PathBuf::from("section/nested/two.fractal.html"),
+            std::path::PathBuf::from("section/one.fractal.html"),
+        ]
+    );
+    assert!(!temp.path().join("pages/section").exists());
+    assert!(project.page("keep").is_ok());
+}
+
+#[test]
+fn folder_delete_rejects_references_from_surviving_pages() {
+    let (_temp, mut project) = project();
+    project.create_page_at("section/one", "One").unwrap();
+    project.create_page("Keep").unwrap();
+    project
+        .write_page(
+            "keep",
+            &native("Keep", "<a href=\"section/one.fractal.html\">One</a>"),
+        )
+        .unwrap();
+
+    let error = project.delete_folder("section").unwrap_err();
+
+    assert!(error.message.contains("1 link(s)"));
+    assert!(project.page("section/one").is_ok());
+}
+
+#[test]
+fn move_refreshes_the_catalog_before_rewriting_backlinks() {
+    let (temp, mut first_process) = project();
+    first_process.create_page("Target").unwrap();
+    let mut second_process = Project::open(temp.path()).unwrap();
+    second_process.create_page("Late backlink").unwrap();
+    second_process
+        .write_page(
+            "late-backlink",
+            &native(
+                "Late backlink",
+                "<a href=\"target.fractal.html\">Target</a>",
+            ),
+        )
+        .unwrap();
+
+    first_process.move_page("target", "moved/target").unwrap();
+
+    assert!(first_process
+        .source("late-backlink")
+        .unwrap()
+        .contains("moved/target.fractal.html"));
+}
+
+#[test]
+fn opening_a_project_rolls_back_an_interrupted_file_transaction() {
+    let (temp, mut project) = project();
+    project.create_page("Draft").unwrap();
+    let source = project.source("draft").unwrap();
+    drop(project);
+
+    let transaction = temp.path().join(".fractal-transaction-test");
+    fs::create_dir_all(transaction.join("old")).unwrap();
+    fs::rename(
+        temp.path().join("pages/draft.fractal.html"),
+        transaction.join("old/draft.fractal.html"),
+    )
+    .unwrap();
+    fs::write(
+        transaction.join("plan.json"),
+        r#"{"affected":["draft.fractal.html"],"originals":["draft.fractal.html"]}"#,
+    )
+    .unwrap();
+
+    let recovered = Project::open(temp.path()).unwrap();
+
+    assert_eq!(recovered.source("draft").unwrap(), source);
+    assert!(!transaction.exists());
 }
 
 #[test]
