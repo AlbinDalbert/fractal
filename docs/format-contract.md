@@ -92,6 +92,6 @@ Opening, scanning, searching, validating, and deriving links never write files. 
 
 `Project::export_html` accepts one native document and writes one HTML file. It does not export a project or copy a set of files.
 
-The export keeps the source document's HTML content and inline styles, removes the Fractal format marker and document-root attribute, drops external stylesheet links, and replaces images and iframes with `[image]` and `[iframe]` text markers. External links and fragment-only links remain links. Local links are unwrapped to their content.
+The export keeps the source document's HTML content and inline styles, removes the Fractal format marker and document-root attribute, drops external stylesheet links, and replaces images and iframes with `[image]` and `[iframe]` text markers. External links and fragment-only links remain links. Links to native documents become fragment links to their reference blocks. Links to other local files are unwrapped to their content.
 
 Direct links from the source document to other native documents become one-level references in a collapsed `<details>` section at the bottom of the output. Referenced documents contribute their visible text only. Links inside referenced documents do not add more references. Links to raw HTML or other local project files are unwrapped and do not create references. Derived native links can be included with the export option.

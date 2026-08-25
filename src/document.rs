@@ -1,6 +1,8 @@
+use crate::types::DerivedLink;
 use crate::{FractalError, Result};
 use brik::traits::*;
 use brik::{NodeData, NodeRef};
+use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 pub(crate) struct Document {
@@ -381,7 +383,12 @@ impl Document {
         Ok(String::from_utf8(bytes)?)
     }
 
-    pub(crate) fn flatten_for_html(&self, source: &str) -> Result<()> {
+    pub(crate) fn flatten_for_html(
+        &self,
+        source: &str,
+        native_targets: &BTreeSet<String>,
+        derived_links: &[DerivedLink],
+    ) -> Result<()> {
         let links: Vec<_> = self
             .root
             .select("a[href]")
@@ -395,10 +402,19 @@ impl Document {
             if href.starts_with('#') || is_external_href(&href) {
                 continue;
             }
-            if resolve_internal_href(source, &href).is_some() {
+            let Some(target) = resolve_internal_href(source, &href) else {
+                continue;
+            };
+            if native_targets.contains(&target) {
+                link.attributes
+                    .borrow_mut()
+                    .insert("href", export_reference_href(&target));
+            } else {
                 unwrap_element(link.as_node().clone());
             }
         }
+
+        insert_derived_reference_links(self, derived_links)?;
 
         let media: Vec<_> = self
             .root
@@ -469,21 +485,114 @@ impl Document {
         normalize_space(&text)
     }
 
-    pub(crate) fn append_to_body(&self, html: &str) -> Result<()> {
-        let body = self
+    pub(crate) fn append_to_main(&self, html: &str) -> Result<()> {
+        let main = self
             .root
-            .select_first("body")
-            .map_err(|_| FractalError::invalid_input("native document needs a body"))?;
+            .select_first("main")
+            .map_err(|_| FractalError::invalid_input("native document needs a main element"))?;
         let fragment = brik::parse_html().one(format!("<body>{html}</body>"));
         let fragment_body = fragment
             .select_first("body")
             .map_err(|_| FractalError::invalid_input("could not create export content"))?;
         let children: Vec<_> = fragment_body.as_node().children().collect();
         for child in children {
-            body.as_node().append(child);
+            main.as_node().append(child);
         }
         Ok(())
     }
+}
+
+pub(crate) fn export_reference_id(path: &str) -> String {
+    format!("fractal-reference-{path}")
+}
+
+fn export_reference_href(path: &str) -> String {
+    format!("#{}", export_reference_id(path))
+}
+
+fn insert_derived_reference_links(document: &Document, links: &[DerivedLink]) -> Result<()> {
+    if links.is_empty() {
+        return Ok(());
+    }
+    let root = document
+        .root
+        .select_first("main[data-fractal-document]")
+        .or_else(|_| document.root.select_first("body"))
+        .map(|node| node.as_node().clone())
+        .unwrap_or_else(|_| document.root.clone());
+    let text_nodes: Vec<_> = root
+        .descendants()
+        .filter(|node| matches!(node.data(), NodeData::Text(_)))
+        .collect();
+    let mut by_node: std::collections::BTreeMap<usize, Vec<&DerivedLink>> =
+        std::collections::BTreeMap::new();
+    for link in links {
+        by_node
+            .entry(link.occurrence.start.text_node)
+            .or_default()
+            .push(link);
+    }
+
+    for (node_index, mut matches) in by_node {
+        let Some(node) = text_nodes.get(node_index) else {
+            continue;
+        };
+        let original = node
+            .as_text()
+            .expect("derived link position points to a text node")
+            .borrow()
+            .clone();
+        matches.sort_by_key(|link| link.occurrence.start.offset);
+        let mut cursor = 0;
+        let mut replacements = Vec::new();
+        for link in matches {
+            let Some(start) = utf16_offset_to_byte(&original, link.occurrence.start.offset) else {
+                continue;
+            };
+            let Some(end) = utf16_offset_to_byte(&original, link.occurrence.end.offset) else {
+                continue;
+            };
+            if start < cursor || end <= start || end > original.len() {
+                continue;
+            }
+            if start > cursor {
+                replacements.push(NodeRef::new_text(&original[cursor..start]));
+            }
+            replacements.push(parse_link(
+                &export_reference_href(&link.target),
+                &original[start..end],
+            )?);
+            cursor = end;
+        }
+        if replacements.is_empty() {
+            continue;
+        }
+        if cursor < original.len() {
+            replacements.push(NodeRef::new_text(&original[cursor..]));
+        }
+        for replacement in replacements {
+            node.insert_before(replacement);
+        }
+        node.detach();
+    }
+    Ok(())
+}
+
+fn utf16_offset_to_byte(value: &str, offset: usize) -> Option<usize> {
+    if offset == 0 {
+        return Some(0);
+    }
+    let mut utf16_offset = 0;
+    for (byte, character) in value.char_indices() {
+        if utf16_offset == offset {
+            return Some(byte);
+        }
+        utf16_offset += character.len_utf16();
+        if utf16_offset > offset {
+            return None;
+        }
+    }
+    (utf16_offset == offset).then_some(value.len())
 }
 
 fn unwrap_element(node: NodeRef) {

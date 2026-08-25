@@ -629,7 +629,9 @@ fn html_export_flattens_direct_native_links_into_text_references() {
     let exported = fs::read_to_string(&output).unwrap();
 
     assert_eq!(report.references, vec!["reference.fractal.html"]);
-    assert!(exported.contains("Read <strong>Reference</strong> and Widget."));
+    assert!(exported.contains(
+        "Read <strong><a href=\"#fractal-reference-reference.fractal.html\">Reference</a></strong> and Widget."
+    ));
     assert!(exported.contains("<a href=\"https://example.com\">External</a>"));
     assert!(exported.contains("[image]"));
     assert!(exported.contains("[iframe]"));
@@ -639,9 +641,15 @@ fn html_export_flattens_direct_native_links_into_text_references() {
     assert!(!exported.contains("data-fractal-document"));
     assert!(exported.contains("<section id=\"fractal-references\">"));
     assert!(exported.contains("<details id=\"fractal-reference-reference.fractal.html\">"));
+    let main_start = exported.find("<main").unwrap();
+    let references_start = exported
+        .find("<section id=\"fractal-references\">")
+        .unwrap();
+    let main_end = exported.find("</main>").unwrap();
+    assert!(main_start < references_start && references_start < main_end);
     assert!(exported.contains("Reference text. Nested"));
     assert!(!exported.contains("Nested text"));
-    assert!(!exported.contains("reference.fractal.html\">Reference"));
+    assert!(!exported.contains("href=\"reference.fractal.html\">Reference"));
 }
 
 #[test]
@@ -673,9 +681,9 @@ fn html_export_can_include_derived_native_references() {
         )
         .unwrap();
     assert_eq!(with.references, vec!["target.fractal.html"]);
-    assert!(fs::read_to_string(output_with)
-        .unwrap()
-        .contains("<summary>Target</summary>"));
+    let exported = fs::read_to_string(output_with).unwrap();
+    assert!(exported.contains("<a href=\"#fractal-reference-target.fractal.html\">Target</a>"));
+    assert!(exported.contains("<summary>Target</summary>"));
 }
 
 #[test]

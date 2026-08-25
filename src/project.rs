@@ -1,5 +1,6 @@
 use crate::document::{
-    escape_attribute, is_external_href, relative_href, resolve_internal_href, Document,
+    escape_attribute, export_reference_id, is_external_href, relative_href, resolve_internal_href,
+    Document,
 };
 use crate::types::*;
 use crate::{FractalError, Result};
@@ -126,6 +127,7 @@ impl Project {
 
         let mut references = Vec::new();
         let mut seen = BTreeSet::new();
+        let mut derived_references = Vec::new();
         let add_reference =
             |target: &str, references: &mut Vec<String>, seen: &mut BTreeSet<String>| {
                 if target == page_path_string || !seen.insert(target.to_string()) {
@@ -148,12 +150,20 @@ impl Project {
         }
         if options.include_derived_links {
             for link in self.derived_links(&page_path)? {
-                add_reference(&link.target, &mut references, &mut seen);
+                if self
+                    .pages
+                    .get(&link.target)
+                    .is_some_and(|page| page.page.kind == PageKind::Native)
+                {
+                    add_reference(&link.target, &mut references, &mut seen);
+                    derived_references.push(link);
+                }
             }
         }
 
         let export = Document::parse(&stored.html);
-        export.flatten_for_html(&page_path_string)?;
+        let native_targets: BTreeSet<_> = references.iter().cloned().collect();
+        export.flatten_for_html(&page_path_string, &native_targets, &derived_references)?;
         if !references.is_empty() {
             let mut section = String::from(
                 r#"<section id="fractal-references">
@@ -173,13 +183,13 @@ impl Project {
                 let text = Document::parse(&referenced.html).export_text();
                 section.push_str(&format!(
                     "  <details id=\"{}\">\n    <summary>{}</summary>\n    <p>{}</p>\n  </details>\n",
-                    escape_attribute(&format!("fractal-reference-{reference}")),
+                    escape_attribute(&export_reference_id(reference)),
                     escape_html(&title),
                     escape_html(&text),
                 ));
             }
             section.push_str("</section>");
-            export.append_to_body(&section)?;
+            export.append_to_main(&section)?;
         }
 
         let output = output.as_ref().to_path_buf();
