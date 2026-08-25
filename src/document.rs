@@ -380,6 +380,176 @@ impl Document {
         self.root.serialize(&mut bytes)?;
         Ok(String::from_utf8(bytes)?)
     }
+
+    pub(crate) fn flatten_for_html(&self, source: &str) -> Result<()> {
+        let links: Vec<_> = self
+            .root
+            .select("a[href]")
+            .expect("static selector")
+            .collect();
+        for link in links {
+            let href = link.attributes.borrow().get("href").map(str::to_string);
+            let Some(href) = href else {
+                continue;
+            };
+            if href.starts_with('#') || is_external_href(&href) {
+                continue;
+            }
+            if resolve_internal_href(source, &href).is_some() {
+                unwrap_element(link.as_node().clone());
+            }
+        }
+
+        let media: Vec<_> = self
+            .root
+            .select("img, iframe")
+            .expect("static selector")
+            .filter(|node| {
+                !node.as_node().ancestors().any(|ancestor| {
+                    ancestor.as_element().is_some_and(|element| {
+                        matches!(element.name.local.as_ref(), "img" | "iframe")
+                    })
+                })
+            })
+            .collect();
+        for media in media {
+            let marker = match media.name.local.as_ref() {
+                "img" => " [image] ",
+                "iframe" => " [iframe] ",
+                _ => continue,
+            };
+            media.as_node().insert_before(NodeRef::new_text(marker));
+            media.as_node().detach();
+        }
+
+        let links: Vec<_> = self
+            .root
+            .select("link")
+            .expect("static selector")
+            .filter(|node| {
+                node.attributes.borrow().get("rel").is_some_and(|rel| {
+                    rel.split_ascii_whitespace()
+                        .any(|value| value.eq_ignore_ascii_case("stylesheet"))
+                })
+            })
+            .collect();
+        for link in links {
+            link.as_node().detach();
+        }
+
+        let markers: Vec<_> = self
+            .root
+            .select("meta[name]")
+            .expect("static selector")
+            .filter(|node| {
+                node.attributes
+                    .borrow()
+                    .get("name")
+                    .is_some_and(|name| name.eq_ignore_ascii_case("fractal-format"))
+            })
+            .collect();
+        for marker in markers {
+            marker.as_node().detach();
+        }
+
+        if let Ok(root) = self.root.select_first("main[data-fractal-document]") {
+            root.attributes.borrow_mut().remove("data-fractal-document");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn export_text(&self) -> String {
+        let root = self
+            .root
+            .select_first("body")
+            .map(|node| node.as_node().clone())
+            .unwrap_or_else(|_| self.root.clone());
+        let mut text = String::new();
+        append_export_text(&root, &mut text);
+        normalize_space(&text)
+    }
+
+    pub(crate) fn append_to_body(&self, html: &str) -> Result<()> {
+        let body = self
+            .root
+            .select_first("body")
+            .map_err(|_| FractalError::invalid_input("native document needs a body"))?;
+        let fragment = brik::parse_html().one(format!("<body>{html}</body>"));
+        let fragment_body = fragment
+            .select_first("body")
+            .map_err(|_| FractalError::invalid_input("could not create export content"))?;
+        let children: Vec<_> = fragment_body.as_node().children().collect();
+        for child in children {
+            body.as_node().append(child);
+        }
+        Ok(())
+    }
+}
+
+fn unwrap_element(node: NodeRef) {
+    let children: Vec<_> = node.children().collect();
+    for child in children {
+        node.insert_before(child);
+    }
+    node.detach();
+}
+
+fn append_export_text(node: &NodeRef, output: &mut String) {
+    match node.data() {
+        NodeData::Text(text) => output.push_str(&text.borrow()),
+        NodeData::Element(element) => {
+            let name = element.name.local.as_ref();
+            match name {
+                "img" => output.push_str(" [image] "),
+                "iframe" => output.push_str(" [iframe] "),
+                "script" | "style" => {}
+                _ => {
+                    let block = matches!(
+                        name,
+                        "address"
+                            | "article"
+                            | "blockquote"
+                            | "dd"
+                            | "div"
+                            | "dl"
+                            | "dt"
+                            | "figcaption"
+                            | "figure"
+                            | "footer"
+                            | "h1"
+                            | "h2"
+                            | "h3"
+                            | "h4"
+                            | "h5"
+                            | "h6"
+                            | "header"
+                            | "li"
+                            | "main"
+                            | "nav"
+                            | "ol"
+                            | "p"
+                            | "pre"
+                            | "section"
+                            | "table"
+                            | "td"
+                            | "th"
+                            | "tr"
+                            | "ul"
+                    );
+                    if block {
+                        output.push(' ');
+                    }
+                    for child in node.children() {
+                        append_export_text(&child, output);
+                    }
+                    if block {
+                        output.push(' ');
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn parse_link(href: &str, text: &str) -> Result<NodeRef> {
@@ -480,6 +650,6 @@ fn escape_html(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
-fn escape_attribute(value: &str) -> String {
+pub(crate) fn escape_attribute(value: &str) -> String {
     escape_html(value).replace('"', "&quot;")
 }

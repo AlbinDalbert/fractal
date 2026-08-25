@@ -123,3 +123,14 @@ pub struct Mutation {
     pub changed: Vec<PathBuf>,
     pub deleted: Vec<PathBuf>,
 }
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HtmlExportOptions {
+    pub include_derived_links: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HtmlExportReport {
+    pub output: PathBuf,
+    pub references: Vec<String>,
+}

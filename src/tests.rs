@@ -1,4 +1,4 @@
-use crate::{FractalErrorCode, IframeTarget, LinkTarget, PageKind, Project};
+use crate::{FractalErrorCode, HtmlExportOptions, IframeTarget, LinkTarget, PageKind, Project};
 use std::fs;
 use tempfile::TempDir;
 
@@ -597,4 +597,103 @@ fn derived_links_prefer_the_longest_exact_title() {
     assert_eq!(links[0].target, "stockholm-city.fractal.html");
     assert_eq!(links[1].text, "Stockholm");
     assert_eq!(links[1].target, "stockholm.fractal.html");
+}
+
+#[test]
+fn html_export_flattens_direct_native_links_into_text_references() {
+    let (temp, mut project) = project();
+    project.create_page("Source").unwrap();
+    project.create_page("Reference").unwrap();
+    project.create_page("Nested").unwrap();
+    fs::write(temp.path().join("pages/widget.html"), "<p>Raw widget</p>").unwrap();
+    project
+        .write_page(
+            "reference",
+            &native(
+                "Reference",
+                "<p>Reference text. <a href=\"nested.fractal.html\">Nested</a></p>",
+            ),
+        )
+        .unwrap();
+    project
+        .write_page(
+            "source",
+            "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><meta name=\"viewport\" content=\"width=device-width\"><link rel=\"stylesheet\" href=\"theme.css\"><style>body { color: red }</style><title>Source</title></head><body><main data-fractal-document><h1>Source</h1><p>Read <strong><a href=\"reference.fractal.html\">Reference</a></strong> and <a href=\"widget.html\">Widget</a>. <a href=\"https://example.com\">External</a>.</p><img src=\"image.png\"><iframe src=\"frame.html\"></iframe></main></body></html>",
+        )
+        .unwrap();
+
+    let output = temp.path().join("export.html");
+    let report = project
+        .export_html("source", &output, HtmlExportOptions::default())
+        .unwrap();
+    let exported = fs::read_to_string(&output).unwrap();
+
+    assert_eq!(report.references, vec!["reference.fractal.html"]);
+    assert!(exported.contains("Read <strong>Reference</strong> and Widget."));
+    assert!(exported.contains("<a href=\"https://example.com\">External</a>"));
+    assert!(exported.contains("[image]"));
+    assert!(exported.contains("[iframe]"));
+    assert!(exported.contains("<style>body { color: red }</style>"));
+    assert!(!exported.contains("theme.css"));
+    assert!(!exported.contains("fractal-format"));
+    assert!(!exported.contains("data-fractal-document"));
+    assert!(exported.contains("<section id=\"fractal-references\">"));
+    assert!(exported.contains("<details id=\"fractal-reference-reference.fractal.html\">"));
+    assert!(exported.contains("Reference text. Nested"));
+    assert!(!exported.contains("Nested text"));
+    assert!(!exported.contains("reference.fractal.html\">Reference"));
+}
+
+#[test]
+fn html_export_can_include_derived_native_references() {
+    let (temp, mut project) = project();
+    project.create_page("Target").unwrap();
+    project.create_page("Source").unwrap();
+    project
+        .write_page(
+            "source",
+            &native("Source", "<p>Target is mentioned here.</p>"),
+        )
+        .unwrap();
+
+    let output_without = temp.path().join("without.html");
+    let without = project
+        .export_html("source", &output_without, HtmlExportOptions::default())
+        .unwrap();
+    assert!(without.references.is_empty());
+
+    let output_with = temp.path().join("with.html");
+    let with = project
+        .export_html(
+            "source",
+            &output_with,
+            HtmlExportOptions {
+                include_derived_links: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(with.references, vec!["target.fractal.html"]);
+    assert!(fs::read_to_string(output_with)
+        .unwrap()
+        .contains("<summary>Target</summary>"));
+}
+
+#[test]
+fn html_export_rejects_raw_html_pages() {
+    let (temp, _project) = project();
+    fs::write(temp.path().join("pages/raw.html"), "<p>Raw</p>").unwrap();
+    let project = Project::open(temp.path()).unwrap();
+
+    let error = project
+        .export_html(
+            "raw",
+            temp.path().join("export.html"),
+            HtmlExportOptions::default(),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.code, FractalErrorCode::InvalidInput);
+    assert!(error
+        .message
+        .contains("only available for native documents"));
 }

@@ -1,4 +1,6 @@
-use crate::document::{is_external_href, relative_href, resolve_internal_href, Document};
+use crate::document::{
+    escape_attribute, is_external_href, relative_href, resolve_internal_href, Document,
+};
 use crate::types::*;
 use crate::{FractalError, Result};
 use fs2::FileExt;
@@ -100,6 +102,89 @@ impl Project {
 
     pub fn source(&self, path: impl AsRef<Path>) -> Result<String> {
         Ok(self.stored(path.as_ref())?.html.clone())
+    }
+
+    pub fn export_html(
+        &self,
+        path: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        options: HtmlExportOptions,
+    ) -> Result<HtmlExportReport> {
+        let page_path = self.existing_path(path.as_ref())?;
+        let page_path_string = path_string(&page_path);
+        let stored = self.stored(&page_path)?;
+        if stored.page.kind != PageKind::Native {
+            return Err(FractalError::invalid_input(
+                "HTML export is only available for native documents",
+            ));
+        }
+        if let Some(issue) = native_document_issues(&Document::parse(&stored.html)).first() {
+            return Err(FractalError::invalid_input(format!(
+                "cannot export invalid native document: {issue}"
+            )));
+        }
+
+        let mut references = Vec::new();
+        let mut seen = BTreeSet::new();
+        let add_reference =
+            |target: &str, references: &mut Vec<String>, seen: &mut BTreeSet<String>| {
+                if target == page_path_string || !seen.insert(target.to_string()) {
+                    return;
+                }
+                if self
+                    .pages
+                    .get(target)
+                    .is_some_and(|page| page.page.kind == PageKind::Native)
+                {
+                    references.push(target.to_string());
+                }
+            };
+
+        let document = Document::parse(&stored.html);
+        for (href, _) in document.raw_links() {
+            if let Some(target) = resolve_internal_href(&page_path_string, &href) {
+                add_reference(&target, &mut references, &mut seen);
+            }
+        }
+        if options.include_derived_links {
+            for link in self.derived_links(&page_path)? {
+                add_reference(&link.target, &mut references, &mut seen);
+            }
+        }
+
+        let export = Document::parse(&stored.html);
+        export.flatten_for_html(&page_path_string)?;
+        if !references.is_empty() {
+            let mut section = String::from(
+                r#"<section id="fractal-references">
+  <h2>References</h2>
+"#,
+            );
+            for reference in &references {
+                let referenced = self
+                    .pages
+                    .get(reference)
+                    .expect("reference was collected from the project");
+                let title = referenced
+                    .page
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| reference.clone());
+                let text = Document::parse(&referenced.html).export_text();
+                section.push_str(&format!(
+                    "  <details id=\"{}\">\n    <summary>{}</summary>\n    <p>{}</p>\n  </details>\n",
+                    escape_attribute(&format!("fractal-reference-{reference}")),
+                    escape_html(&title),
+                    escape_html(&text),
+                ));
+            }
+            section.push_str("</section>");
+            export.append_to_body(&section)?;
+        }
+
+        let output = output.as_ref().to_path_buf();
+        atomic_write(&output, &export.serialize()?)?;
+        Ok(HtmlExportReport { output, references })
     }
 
     pub fn content_hash(&self, path: impl AsRef<Path>) -> Result<String> {

@@ -87,3 +87,11 @@ Fractal does not interpret an iframe target as part of its containing native doc
 Derived links are case-insensitive exact-title matches in unlinked visible text. Fractal reports only matches with one possible target and never stores them in page source. Applications may render these matches as links at runtime. Stored explicit links and derived links remain distinct.
 
 Opening, scanning, searching, validating, and deriving links never write files. Native semantic mutations may serialize affected native documents. Raw source changes require an explicit source or filesystem operation.
+
+## Single-file HTML export
+
+`Project::export_html` accepts one native document and writes one HTML file. It does not export a project or copy a set of files.
+
+The export keeps the source document's HTML content and inline styles, removes the Fractal format marker and document-root attribute, drops external stylesheet links, and replaces images and iframes with `[image]` and `[iframe]` text markers. External links and fragment-only links remain links. Local links are unwrapped to their content.
+
+Direct links from the source document to other native documents become one-level references in a collapsed `<details>` section at the bottom of the output. Referenced documents contribute their visible text only. Links inside referenced documents do not add more references. Links to raw HTML or other local project files are unwrapped and do not create references. Derived native links can be included with the export option.

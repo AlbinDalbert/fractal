@@ -78,10 +78,13 @@ fractal --project <root> backlinks <page>
 fractal --project <root> embedded-by <page>
 fractal --project <root> derived-links <page>
 fractal --project <root> link <page> <text> <target>
+fractal --project <root> export-html <page> --output <file> [--include-derived-links]
 fractal --project <root> check
 ```
 
 Every command supports `--json`. The default output is also deliberately simple and serializable while the CLI is young.
+
+`export-html` accepts one native document and writes one standalone HTML file. It keeps the source document's HTML content and inline styles, removes Fractal's native marker, replaces images and iframes with `[image]` and `[iframe]`, drops external stylesheet links, and unwraps local links. Direct links to other native documents add one-level text references in a collapsed section at the bottom. Links to non-native project files are unwrapped without adding a reference. Derived native links can be included with `--include-derived-links`.
 
 ## Deliberate non-goals
 

@@ -75,6 +75,13 @@ enum Command {
         text: String,
         target: PathBuf,
     },
+    ExportHtml {
+        page: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        include_derived_links: bool,
+    },
     Check,
 }
 
@@ -140,6 +147,20 @@ pub fn run() -> Result<()> {
                 Command::Link { page, text, target } => {
                     output(&project.insert_link(page, &text, target)?, cli.json)
                 }
+                Command::ExportHtml {
+                    page,
+                    output: destination,
+                    include_derived_links,
+                } => output(
+                    &project.export_html(
+                        page,
+                        destination,
+                        crate::HtmlExportOptions {
+                            include_derived_links,
+                        },
+                    )?,
+                    cli.json,
+                ),
                 Command::Check => output(&project.validate(), cli.json),
                 Command::Init { .. } => unreachable!(),
             }
