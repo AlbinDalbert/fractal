@@ -1,4 +1,7 @@
-use crate::{FractalErrorCode, HtmlExportOptions, IframeTarget, LinkTarget, PageKind, Project};
+use crate::{
+    FolderChildKind, FolderChildStatus, FractalErrorCode, HtmlExportOptions, IframeTarget,
+    LinkTarget, PageKind, Project,
+};
 use std::fs;
 use tempfile::TempDir;
 
@@ -21,6 +24,7 @@ fn project_has_no_generated_state() {
     assert!(temp.path().join("fractal.json").is_file());
     assert!(temp.path().join("pages").is_dir());
     assert!(!temp.path().join(".fractal").exists());
+    assert_eq!(project.manifest().version, 2);
 }
 
 #[test]
@@ -46,6 +50,54 @@ fn legacy_manifest_opens_without_rewriting_project_files() {
         fs::read_to_string(temp.path().join("fractal.json")).unwrap(),
         manifest
     );
+}
+
+#[test]
+fn first_folder_metadata_mutation_upgrades_v1_to_v2() {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir(temp.path().join("pages")).unwrap();
+    fs::write(
+        temp.path().join("fractal.json"),
+        r#"{"name":"Version one","version":1}"#,
+    )
+    .unwrap();
+    let mut project = Project::open(temp.path()).unwrap();
+
+    project.set_folder_title(".", "Renamed").unwrap();
+
+    assert_eq!(project.manifest().version, 2);
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join("fractal.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["version"], 2);
+    assert!(temp.path().join("pages/fractal.json").is_file());
+}
+
+#[test]
+fn v1_projects_preserve_nested_fractal_json_as_an_ordinary_asset() {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir(temp.path().join("pages")).unwrap();
+    fs::write(
+        temp.path().join("fractal.json"),
+        r#"{"name":"Version one","version":1}"#,
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("pages/fractal.json"),
+        r#"{"title":"Pages"}"#,
+    )
+    .unwrap();
+
+    let original = fs::read_to_string(temp.path().join("pages/fractal.json")).unwrap();
+    let mut project = Project::open(temp.path()).unwrap();
+    assert_eq!(project.folder(".").unwrap().title, "Version one");
+    let error = project.set_folder_title(".", "Pages").unwrap_err();
+    assert_eq!(error.code, FractalErrorCode::Conflict);
+    assert_eq!(
+        fs::read_to_string(temp.path().join("pages/fractal.json")).unwrap(),
+        original
+    );
+    assert_eq!(project.manifest().version, 1);
 }
 
 #[test]
@@ -704,4 +756,147 @@ fn html_export_rejects_raw_html_pages() {
     assert!(error
         .message
         .contains("only available for native documents"));
+}
+
+#[test]
+fn folders_default_to_folders_first_then_native_files() {
+    let (temp, mut project) = project();
+    fs::create_dir_all(temp.path().join("pages/z-folder")).unwrap();
+    fs::create_dir_all(temp.path().join("pages/a-folder")).unwrap();
+    fs::write(temp.path().join("pages/raw.html"), "<p>Raw</p>").unwrap();
+    project.create_page_at("z.fractal.html", "Z").unwrap();
+    project.create_page_at("a.fractal.html", "A").unwrap();
+
+    let project = Project::open(temp.path()).unwrap();
+    let folder = project.folder(".").unwrap();
+    assert_eq!(folder.title, "Test");
+    assert_eq!(folder.order, None);
+    assert_eq!(
+        folder
+            .children
+            .iter()
+            .map(|child| (child.name.as_str(), child.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("a-folder", FolderChildKind::Folder),
+            ("z-folder", FolderChildKind::Folder),
+            ("a.fractal.html", FolderChildKind::Native),
+            ("z.fractal.html", FolderChildKind::Native),
+        ]
+    );
+}
+
+#[test]
+fn reorder_is_complete_and_preserves_missing_children_as_ghosts() {
+    let (temp, mut project) = project();
+    project.create_page("One").unwrap();
+    project.create_page("Two").unwrap();
+    project
+        .reorder_folder(".", ["two.fractal.html", "one.fractal.html"])
+        .unwrap();
+    fs::remove_file(temp.path().join("pages/one.fractal.html")).unwrap();
+
+    let mut project = Project::open(temp.path()).unwrap();
+    let folder = project.folder(".").unwrap();
+    assert_eq!(folder.children[1].status, FolderChildStatus::Missing);
+    assert!(!project.validate().valid);
+    assert!(project
+        .reorder_folder(".", ["two.fractal.html"])
+        .unwrap_err()
+        .message
+        .contains("one.fractal.html"));
+    project
+        .reorder_folder(".", ["one.fractal.html", "two.fractal.html"])
+        .unwrap();
+}
+
+#[test]
+fn external_and_engine_created_children_append_to_explicit_order() {
+    let (temp, mut project) = project();
+    project.create_page("One").unwrap();
+    project.reorder_folder(".", ["one.fractal.html"]).unwrap();
+    fs::write(
+        temp.path().join("pages/two.fractal.html"),
+        native("Two", ""),
+    )
+    .unwrap();
+
+    let mut project = Project::open(temp.path()).unwrap();
+    assert_eq!(
+        project.folder(".").unwrap().order.unwrap(),
+        vec!["one.fractal.html", "two.fractal.html"]
+    );
+    project.create_page("Three").unwrap();
+    assert_eq!(
+        project.folder(".").unwrap().order.unwrap(),
+        vec!["one.fractal.html", "two.fractal.html", "three.fractal.html"]
+    );
+}
+
+#[test]
+fn deleting_a_ghost_removes_only_its_order_entry() {
+    let (temp, mut project) = project();
+    project.create_page("Gone").unwrap();
+    project.reorder_folder(".", ["gone.fractal.html"]).unwrap();
+    fs::remove_file(temp.path().join("pages/gone.fractal.html")).unwrap();
+
+    let mut project = Project::open(temp.path()).unwrap();
+    let mutation = project.delete_page("gone").unwrap();
+    assert_eq!(
+        mutation.deleted,
+        vec![std::path::PathBuf::from("gone.fractal.html")]
+    );
+    assert!(project.folder(".").unwrap().children.is_empty());
+    assert!(temp.path().join("pages/fractal.json").is_file());
+}
+
+#[test]
+fn deleting_a_missing_ordered_folder_removes_its_ghost() {
+    let (temp, _) = project();
+    fs::create_dir(temp.path().join("pages/appendix")).unwrap();
+    let mut project = Project::open(temp.path()).unwrap();
+    project.reorder_folder(".", ["appendix"]).unwrap();
+    fs::remove_dir(temp.path().join("pages/appendix")).unwrap();
+
+    let mut project = Project::open(temp.path()).unwrap();
+    let mutation = project.delete_folder("appendix").unwrap();
+    assert_eq!(
+        mutation.changed,
+        vec![std::path::PathBuf::from("fractal.json")]
+    );
+    assert!(mutation.deleted.is_empty());
+    assert!(project.folder(".").unwrap().children.is_empty());
+}
+
+#[test]
+fn moving_a_native_page_preserves_its_order_position() {
+    let (_temp, mut project) = project();
+    project.create_page("One").unwrap();
+    project.create_page("Two").unwrap();
+    project
+        .reorder_folder(".", ["two.fractal.html", "one.fractal.html"])
+        .unwrap();
+
+    project.move_page("two", "renamed").unwrap();
+
+    assert_eq!(
+        project.folder(".").unwrap().order.unwrap(),
+        vec!["renamed.fractal.html", "one.fractal.html"]
+    );
+}
+
+#[test]
+fn folder_titles_are_independent_of_directory_names() {
+    let (temp, _) = project();
+    fs::create_dir(temp.path().join("pages/draft-name")).unwrap();
+    let mut project = Project::open(temp.path()).unwrap();
+    project
+        .set_folder_title("draft-name", "The Glass Garden")
+        .unwrap();
+
+    let reopened = Project::open(temp.path()).unwrap();
+    assert_eq!(
+        reopened.folder("draft-name").unwrap().title,
+        "The Glass Garden"
+    );
 }

@@ -27,16 +27,20 @@ my-project/
         └── map.html
 ```
 
-`fractal.json` contains only a project name and format version:
+The root `fractal.json` contains only a project name and format version:
 
 ```json
 {
   "name": "My project",
-  "version": 1
+  "version": 2
 }
 ```
 
+The manifest version identifies the Fractal project format, independently of the crate or CLI version. Format v1 is the stable contract recorded by the `contract-v1` Git tag. Format v2 is the active, unstable contract. New contract work remains part of v2 until a later `contract-v*` tag establishes another stable boundary.
+
 A native document needs a safe relative `.fractal.html` path, a format marker, an identifiable title, and one document root. Its content uses standard semantic HTML. A raw `.html` file has no Fractal structure requirements.
+
+Any folder below `pages/`, including `pages/` itself, may contain its own `fractal.json` with a display title and an explicit order for direct child folders and native documents. Without that file, the title comes from the folder name and children use folder-first alphabetical order. The pages root uses the project name as its default title.
 
 See [`docs/format-contract.md`](docs/format-contract.md) for the complete contract.
 
@@ -45,6 +49,7 @@ See [`docs/format-contract.md`](docs/format-contract.md) for the complete contra
 The `Project` API provides:
 
 - initialize and open projects;
+- inspect folders, set folder titles, and explicitly order folder children;
 - list, read, create, write, move, and delete pages;
 - compare and write a page using its content hash;
 - delete page batches or complete folders;
@@ -64,6 +69,10 @@ Moving a page and rewriting its backlinks is one recoverable project transaction
 ```text
 fractal init <path> [--name <name>]
 fractal --project <root> list
+fractal --project <root> folders
+fractal --project <root> folder <folder>
+fractal --project <root> set-folder-title <folder> <title>
+fractal --project <root> reorder-folder <folder> <child>...
 fractal --project <root> read <page> [--source]
 fractal --project <root> new <title> [--path <path>]
 fractal --project <root> write <page> --file <html-file> [--expected-hash <hash>]

@@ -14,7 +14,9 @@ Rust API / thin CLI
 
 ## Source of truth
 
-`fractal.json` and files below `pages/` are the complete source of truth. `Project::open` scans native and raw HTML files and derives titles, visible text, links, backlinks, and iframe references in memory.
+The root `fractal.json`, folder `fractal.json` files, and content below `pages/` are the complete source of truth. `Project::open` scans folders, native documents, and raw HTML files. It derives document titles, visible text, links, backlinks, and iframe references in memory. Folder titles and explicit child orders are stored user data, not generated indexes.
+
+Project format versions are contract versions, not crate releases. The `contract-v1` Git tag identifies the stable v1 contract. Current development uses the unstable v2 contract until another `contract-v*` tag establishes a stable boundary. Do not bump the project version for every compatible commit made within that development window.
 
 Do not add persistent generated state until measured project sizes prove scanning inadequate. If a cache is eventually needed, it must remain disposable and invisible to the format contract.
 
@@ -37,6 +39,9 @@ Prefer a direct function over a framework. Add a module only when one of these f
 - Compare an expected hash and replace the page inside the same locked operation.
 - Use atomic replacement for single-file writes.
 - Treat a page move and its backlink rewrites as one recoverable file transaction.
+- Update explicit folder orders in the same transaction as Fractal-managed child mutations.
+- Preserve missing ordered children as ghosts until an explicit delete removes them.
+- Append newly discovered children to an existing explicit order.
 - Commit folder deletion with one same-filesystem rename. Stage batch deletion as a recoverable locked transaction.
 - Update links and iframe sources only inside native documents.
 - Never semantically rewrite raw HTML.

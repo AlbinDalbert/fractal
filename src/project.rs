@@ -14,7 +14,8 @@ use std::path::{Component, Path, PathBuf};
 
 const MANIFEST: &str = "fractal.json";
 const PAGES: &str = "pages";
-const VERSION: u32 = 1;
+const MIN_SUPPORTED_VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const NATIVE_SUFFIX: &str = ".fractal.html";
 const TRANSACTION_PREFIX: &str = ".fractal-transaction-";
 
@@ -23,12 +24,27 @@ pub struct Project {
     root: PathBuf,
     manifest: ProjectManifest,
     pages: BTreeMap<String, StoredPage>,
+    folders: BTreeMap<String, StoredFolder>,
 }
 
 #[derive(Debug, Clone)]
 struct StoredPage {
     page: Page,
     html: String,
+}
+
+#[derive(Debug, Clone)]
+struct StoredFolder {
+    folder: Folder,
+    metadata: Option<FolderMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FolderMetadata {
+    title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    order: Option<Vec<String>>,
 }
 
 impl Project {
@@ -64,7 +80,7 @@ impl Project {
         let _lock = ProjectLock::exclusive(&manifest_path)?;
         recover_transactions(&root)?;
         let manifest: ProjectManifest = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
-        if manifest.version != VERSION {
+        if !(MIN_SUPPORTED_VERSION..=VERSION).contains(&manifest.version) {
             return Err(FractalError::unsupported_version(format!(
                 "unsupported project version {}",
                 manifest.version
@@ -77,6 +93,7 @@ impl Project {
             root,
             manifest,
             pages: BTreeMap::new(),
+            folders: BTreeMap::new(),
         };
         project.reload()?;
         Ok(project)
@@ -95,6 +112,123 @@ impl Project {
             .values()
             .map(|stored| stored.page.clone())
             .collect()
+    }
+
+    pub fn folders(&self) -> Vec<Folder> {
+        self.folders
+            .values()
+            .map(|stored| stored.folder.clone())
+            .collect()
+    }
+
+    pub fn folder(&self, path: impl AsRef<Path>) -> Result<Folder> {
+        let path = normalize_folder_path(path.as_ref())?;
+        self.folders
+            .get(&path_string(&path))
+            .map(|stored| stored.folder.clone())
+            .ok_or_else(|| {
+                FractalError::not_found(format!(
+                    "folder does not exist: {}",
+                    display_folder_path(&path)
+                ))
+            })
+    }
+
+    pub fn set_folder_title(&mut self, path: impl AsRef<Path>, title: &str) -> Result<Mutation> {
+        if title.trim().is_empty() {
+            return Err(FractalError::invalid_input("folder title cannot be empty"));
+        }
+        let path = normalize_folder_path(path.as_ref())?;
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
+        let stored = self.folders.get(&path_string(&path)).ok_or_else(|| {
+            FractalError::not_found(format!(
+                "folder does not exist: {}",
+                display_folder_path(&path)
+            ))
+        })?;
+        let metadata = FolderMetadata {
+            title: title.trim().to_owned(),
+            order: stored
+                .metadata
+                .as_ref()
+                .and_then(|value| value.order.clone()),
+        };
+        self.upgrade_contract_for_folder_metadata()?;
+        let metadata_path = folder_metadata_relative_path(&path);
+        commit_file_transaction(
+            &self.root,
+            vec![(
+                metadata_path.clone(),
+                serde_json::to_string_pretty(&metadata)?,
+            )],
+            vec![],
+        )?;
+        self.reload()?;
+        Ok(Mutation {
+            changed: vec![metadata_path],
+            deleted: vec![],
+        })
+    }
+
+    pub fn reorder_folder<I, S>(&mut self, path: impl AsRef<Path>, order: I) -> Result<Mutation>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let path = normalize_folder_path(path.as_ref())?;
+        let order: Vec<String> = order.into_iter().map(Into::into).collect();
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
+        let stored = self.folders.get(&path_string(&path)).ok_or_else(|| {
+            FractalError::not_found(format!(
+                "folder does not exist: {}",
+                display_folder_path(&path)
+            ))
+        })?;
+        let expected: BTreeSet<String> = stored
+            .folder
+            .children
+            .iter()
+            .map(|child| child.name.clone())
+            .collect();
+        let mut provided = BTreeSet::new();
+        for name in &order {
+            validate_order_name(name)?;
+            if !provided.insert(name.clone()) {
+                return Err(FractalError::invalid_input(format!(
+                    "ordered child appears more than once: {name}"
+                )));
+            }
+        }
+        if provided != expected {
+            let missing: Vec<_> = expected.difference(&provided).cloned().collect();
+            let unknown: Vec<_> = provided.difference(&expected).cloned().collect();
+            return Err(FractalError::invalid_input(format!(
+                "order must contain every present and missing child exactly once; missing: [{}]; unknown: [{}]",
+                missing.join(", "),
+                unknown.join(", ")
+            )));
+        }
+        let metadata = FolderMetadata {
+            title: stored.folder.title.clone(),
+            order: Some(order),
+        };
+        self.upgrade_contract_for_folder_metadata()?;
+        let metadata_path = folder_metadata_relative_path(&path);
+        commit_file_transaction(
+            &self.root,
+            vec![(
+                metadata_path.clone(),
+                serde_json::to_string_pretty(&metadata)?,
+            )],
+            vec![],
+        )?;
+        self.reload()?;
+        Ok(Mutation {
+            changed: vec![metadata_path],
+            deleted: vec![],
+        })
     }
 
     pub fn page(&self, path: impl AsRef<Path>) -> Result<Page> {
@@ -213,8 +347,7 @@ impl Project {
             return Err(FractalError::invalid_input("title cannot be empty"));
         }
         let relative = normalize_native_page_path(path.as_ref())?;
-        let destination = self.root.join(PAGES).join(&relative);
-        if path_exists(&destination) {
+        if path_exists(&self.root.join(PAGES).join(&relative)) {
             return Err(FractalError::already_exists(format!(
                 "page already exists: {}",
                 relative.display()
@@ -226,10 +359,26 @@ impl Project {
             escape_html(title),
             escape_html(title)
         );
-        atomic_write(&destination, &html)?;
+        let mut writes = vec![(relative.clone(), html)];
+        let mut changed = vec![relative.clone()];
+        if let Some(write) = self.folder_metadata_child_change(
+            relative.parent().unwrap_or_else(|| Path::new("")),
+            None,
+            Some(
+                relative
+                    .file_name()
+                    .expect("page has a name")
+                    .to_string_lossy()
+                    .as_ref(),
+            ),
+        )? {
+            changed.push(write.0.clone());
+            writes.push(write);
+        }
+        commit_file_transaction(&self.root, writes, vec![])?;
         self.reload()?;
         Ok(Mutation {
-            changed: vec![relative],
+            changed,
             deleted: vec![],
         })
     }
@@ -333,6 +482,35 @@ impl Project {
             writes.push((PathBuf::from(&path), html));
             changed.push(PathBuf::from(path));
         }
+        if kind == PageKind::Native {
+            let from_parent = from.parent().unwrap_or_else(|| Path::new(""));
+            let to_parent = to.parent().unwrap_or_else(|| Path::new(""));
+            let from_name = from.file_name().expect("page has a name").to_string_lossy();
+            let to_name = to.file_name().expect("page has a name").to_string_lossy();
+            if from_parent == to_parent {
+                if let Some(write) = self.folder_metadata_replace_child(
+                    from_parent,
+                    from_name.as_ref(),
+                    to_name.as_ref(),
+                )? {
+                    changed.push(write.0.clone());
+                    writes.push(write);
+                }
+            } else {
+                if let Some(write) =
+                    self.folder_metadata_child_change(from_parent, Some(from_name.as_ref()), None)?
+                {
+                    changed.push(write.0.clone());
+                    writes.push(write);
+                }
+                if let Some(write) =
+                    self.folder_metadata_child_change(to_parent, None, Some(to_name.as_ref()))?
+                {
+                    changed.push(write.0.clone());
+                    writes.push(write);
+                }
+            }
+        }
         commit_file_transaction(&self.root, writes, vec![from.clone()])?;
         self.reload()?;
         Ok(Mutation {
@@ -367,17 +545,51 @@ impl Project {
         self.reload()?;
         let mut relative = BTreeSet::new();
         for path in requested {
-            relative.insert(self.existing_path(&path)?);
+            relative.insert(self.existing_or_ghost_native_path(&path)?);
         }
         let targets: BTreeSet<String> = relative.iter().map(|path| path_string(path)).collect();
         self.reject_references_into(&targets, &targets)?;
-        let deleted: Vec<PathBuf> = relative.into_iter().collect();
-        commit_file_transaction(&self.root, vec![], deleted.clone())?;
+        let deleted: Vec<PathBuf> = relative.iter().cloned().collect();
+        let mut metadata = BTreeMap::<PathBuf, FolderMetadata>::new();
+        for path in &relative {
+            let parent = path.parent().unwrap_or_else(|| Path::new(""));
+            let key = parent.to_path_buf();
+            if !metadata.contains_key(&key) {
+                if let Some(value) = self
+                    .folders
+                    .get(&path_string(parent))
+                    .and_then(|stored| stored.metadata.clone())
+                    .filter(|value| value.order.is_some())
+                {
+                    metadata.insert(key.clone(), value);
+                }
+            }
+            if let Some(order) = metadata
+                .get_mut(&key)
+                .and_then(|value| value.order.as_mut())
+            {
+                let name = path.file_name().expect("page has a name").to_string_lossy();
+                order.retain(|entry| entry != name.as_ref());
+            }
+        }
+        let writes = metadata
+            .into_iter()
+            .map(|(folder, metadata)| {
+                Ok((
+                    folder_metadata_relative_path(&folder),
+                    serde_json::to_string_pretty(&metadata)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let changed = writes.iter().map(|(path, _)| path.clone()).collect();
+        let physical_deletes: Vec<_> = deleted
+            .iter()
+            .filter(|path| path_exists(&self.root.join(PAGES).join(path)))
+            .cloned()
+            .collect();
+        commit_file_transaction(&self.root, writes, physical_deletes)?;
         self.reload()?;
-        Ok(Mutation {
-            changed: vec![],
-            deleted,
-        })
+        Ok(Mutation { changed, deleted })
     }
 
     /// Deletes a folder below `pages/` with a single namespace rename.
@@ -389,14 +601,33 @@ impl Project {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
         let absolute = self.root.join(PAGES).join(&folder);
-        if !fs::symlink_metadata(&absolute).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+        let exists =
+            fs::symlink_metadata(&absolute).is_ok_and(|metadata| metadata.file_type().is_dir());
+        let parent = folder.parent().unwrap_or_else(|| Path::new(""));
+        let name = folder
+            .file_name()
+            .expect("folder has a name")
+            .to_string_lossy();
+        let is_ghost = self
+            .folders
+            .get(&path_string(parent))
+            .is_some_and(|stored| {
+                stored.folder.children.iter().any(|child| {
+                    child.name == name
+                        && child.kind == FolderChildKind::Folder
+                        && child.status == FolderChildStatus::Missing
+                })
+            });
+        if !exists && !is_ghost {
             return Err(FractalError::not_found(format!(
                 "folder does not exist: {}",
                 folder.display()
             )));
         }
         let mut deleted = Vec::new();
-        collect_files(&self.root.join(PAGES), &absolute, &mut deleted)?;
+        if exists {
+            collect_files(&self.root.join(PAGES), &absolute, &mut deleted)?;
+        }
         let targets: BTreeSet<String> = deleted.iter().map(|path| path_string(path)).collect();
         let deleted_pages: BTreeSet<String> = self
             .pages
@@ -405,12 +636,15 @@ impl Project {
             .cloned()
             .collect();
         self.reject_references_into(&targets, &deleted_pages)?;
-        commit_file_transaction(&self.root, vec![], vec![folder])?;
+        let writes: Vec<_> = self
+            .folder_metadata_child_change(parent, Some(name.as_ref()), None)?
+            .into_iter()
+            .collect();
+        let changed = writes.iter().map(|(path, _)| path.clone()).collect();
+        let deletes = exists.then_some(folder.clone()).into_iter().collect();
+        commit_file_transaction(&self.root, writes, deletes)?;
         self.reload()?;
-        Ok(Mutation {
-            changed: vec![],
-            deleted,
-        })
+        Ok(Mutation { changed, deleted })
     }
 
     pub fn links(&self, path: impl AsRef<Path>) -> Result<Vec<Link>> {
@@ -598,6 +832,18 @@ impl Project {
                 message: "project name is empty".into(),
             });
         }
+        for stored in self.folders.values() {
+            for issue in &stored.folder.issues {
+                issues.push(ValidationIssue {
+                    path: Some(if stored.folder.path.is_empty() {
+                        format!("{PAGES}/{MANIFEST}")
+                    } else {
+                        format!("{}/{MANIFEST}", stored.folder.path)
+                    }),
+                    message: format!("{}: {}", issue.name, issue.message),
+                });
+            }
+        }
         for stored in self.pages.values() {
             if stored.page.kind != PageKind::Native {
                 continue;
@@ -649,6 +895,31 @@ impl Project {
         Ok(lock)
     }
 
+    fn upgrade_contract_for_folder_metadata(&mut self) -> Result<()> {
+        if self.manifest.version >= 2 {
+            return Ok(());
+        }
+        let pages_root = self.root.join(PAGES);
+        let mut folders = Vec::new();
+        collect_directories(&pages_root, &pages_root, &mut folders)?;
+        folders.insert(0, PathBuf::new());
+        if let Some(conflict) = folders
+            .into_iter()
+            .map(|folder| pages_root.join(folder).join(MANIFEST))
+            .find(|path| path_exists(path))
+        {
+            return Err(FractalError::conflict(format!(
+                "cannot upgrade to project format version 2 because the reserved folder metadata path already exists: {}",
+                conflict.display()
+            )));
+        }
+        self.manifest.version = VERSION;
+        atomic_write(
+            &self.root.join(MANIFEST),
+            &serde_json::to_string_pretty(&self.manifest)?,
+        )
+    }
+
     fn reject_references_into(
         &self,
         targets: &BTreeSet<String>,
@@ -682,6 +953,61 @@ impl Project {
         }
         Err(FractalError::invalid_input(format!(
             "cannot delete while {links} link(s) and {iframes} iframe(s) from surviving pages target the selection"
+        )))
+    }
+
+    fn folder_metadata_child_change(
+        &self,
+        folder: &Path,
+        remove: Option<&str>,
+        append: Option<&str>,
+    ) -> Result<Option<(PathBuf, String)>> {
+        let Some(stored) = self.folders.get(&path_string(folder)) else {
+            return Ok(None);
+        };
+        let Some(mut metadata) = stored.metadata.clone() else {
+            return Ok(None);
+        };
+        let Some(order) = metadata.order.as_mut() else {
+            return Ok(None);
+        };
+        if let Some(remove) = remove {
+            order.retain(|name| name != remove);
+        }
+        if let Some(append) = append {
+            if !order.iter().any(|name| name == append) {
+                order.push(append.to_owned());
+            }
+        }
+        Ok(Some((
+            folder_metadata_relative_path(folder),
+            serde_json::to_string_pretty(&metadata)?,
+        )))
+    }
+
+    fn folder_metadata_replace_child(
+        &self,
+        folder: &Path,
+        old: &str,
+        new: &str,
+    ) -> Result<Option<(PathBuf, String)>> {
+        let Some(stored) = self.folders.get(&path_string(folder)) else {
+            return Ok(None);
+        };
+        let Some(mut metadata) = stored.metadata.clone() else {
+            return Ok(None);
+        };
+        let Some(order) = metadata.order.as_mut() else {
+            return Ok(None);
+        };
+        if let Some(name) = order.iter_mut().find(|name| name.as_str() == old) {
+            *name = new.to_owned();
+        } else if !order.iter().any(|name| name == new) {
+            order.push(new.to_owned());
+        }
+        Ok(Some((
+            folder_metadata_relative_path(folder),
+            serde_json::to_string_pretty(&metadata)?,
         )))
     }
 
@@ -720,7 +1046,38 @@ impl Project {
         }
     }
 
+    fn existing_or_ghost_native_path(&self, path: &Path) -> Result<PathBuf> {
+        if let Ok(path) = self.existing_path(path) {
+            return Ok(path);
+        }
+        let normalized = normalize_native_page_path(path)?;
+        let parent = normalized.parent().unwrap_or_else(|| Path::new(""));
+        let name = normalized
+            .file_name()
+            .expect("native path has a name")
+            .to_string_lossy();
+        if self
+            .folders
+            .get(&path_string(parent))
+            .is_some_and(|stored| {
+                stored.folder.children.iter().any(|child| {
+                    child.name == name
+                        && child.kind == FolderChildKind::Native
+                        && child.status == FolderChildStatus::Missing
+                })
+            })
+        {
+            Ok(normalized)
+        } else {
+            Err(FractalError::not_found(format!(
+                "page does not exist: {}",
+                path.display()
+            )))
+        }
+    }
+
     fn reload(&mut self) -> Result<()> {
+        self.reload_folders()?;
         let mut files = Vec::new();
         collect_html(&self.root.join(PAGES), &self.root.join(PAGES), &mut files)?;
         let known: BTreeSet<String> = files.iter().map(|path| path_string(path)).collect();
@@ -798,6 +1155,232 @@ impl Project {
         self.pages = pages;
         Ok(())
     }
+
+    fn reload_folders(&mut self) -> Result<()> {
+        let pages_root = self.root.join(PAGES);
+        let mut paths = Vec::new();
+        collect_directories(&pages_root, &pages_root, &mut paths)?;
+        paths.insert(0, PathBuf::new());
+        let mut folders = BTreeMap::new();
+        for relative in paths {
+            let absolute = pages_root.join(&relative);
+            let metadata_path = absolute.join(MANIFEST);
+            let mut metadata: Option<FolderMetadata> =
+                if self.manifest.version >= 2 && metadata_path.is_file() {
+                    Some(
+                        serde_json::from_str(&fs::read_to_string(&metadata_path)?).map_err(
+                            |error| {
+                                FractalError::invalid_project(format!(
+                                    "invalid folder metadata at {}: {error}",
+                                    metadata_path.display()
+                                ))
+                            },
+                        )?,
+                    )
+                } else {
+                    None
+                };
+            if metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.title.trim().is_empty())
+            {
+                return Err(FractalError::invalid_project(format!(
+                    "folder title is empty: {}",
+                    display_folder_path(&relative)
+                )));
+            }
+            let present = direct_orderable_children(&absolute)?;
+            if let Some(stored) = metadata.as_mut() {
+                if let Some(order) = stored.order.as_mut() {
+                    validate_stored_order(&relative, order, &present)?;
+                    let known: BTreeSet<&str> = order.iter().map(String::as_str).collect();
+                    let additions: Vec<String> = present
+                        .keys()
+                        .filter(|name| !known.contains(name.as_str()))
+                        .cloned()
+                        .collect();
+                    if !additions.is_empty() {
+                        order.extend(additions);
+                        atomic_write(&metadata_path, &serde_json::to_string_pretty(stored)?)?;
+                    }
+                }
+            }
+            let title = metadata
+                .as_ref()
+                .map(|metadata| metadata.title.clone())
+                .unwrap_or_else(|| default_folder_title(&self.manifest.name, &relative));
+            let order = metadata
+                .as_ref()
+                .and_then(|metadata| metadata.order.clone());
+            let names = order.clone().unwrap_or_else(|| {
+                present
+                    .iter()
+                    .filter(|(_, kind)| **kind == FolderChildKind::Folder)
+                    .chain(
+                        present
+                            .iter()
+                            .filter(|(_, kind)| **kind == FolderChildKind::Native),
+                    )
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            });
+            let mut issues = Vec::new();
+            let children = names
+                .into_iter()
+                .map(|name| {
+                    let (kind, status) = match present.get(&name) {
+                        Some(kind) => (*kind, FolderChildStatus::Present),
+                        None => {
+                            issues.push(FolderIssue {
+                                name: name.clone(),
+                                message: "ordered child is missing".into(),
+                            });
+                            (ordered_name_kind(&name), FolderChildStatus::Missing)
+                        }
+                    };
+                    FolderChild { name, kind, status }
+                })
+                .collect();
+            let key = path_string(&relative);
+            folders.insert(
+                key.clone(),
+                StoredFolder {
+                    folder: Folder {
+                        path: key,
+                        title,
+                        order,
+                        children,
+                        issues,
+                    },
+                    metadata,
+                },
+            );
+        }
+        self.folders = folders;
+        Ok(())
+    }
+}
+
+fn normalize_folder_path(path: &Path) -> Result<PathBuf> {
+    if path.as_os_str().is_empty() || path == Path::new(".") || path == Path::new(PAGES) {
+        return Ok(PathBuf::new());
+    }
+    normalize_relative_path(path)
+}
+
+fn display_folder_path(path: &Path) -> String {
+    if path.as_os_str().is_empty() {
+        PAGES.into()
+    } else {
+        path.display().to_string()
+    }
+}
+
+fn folder_metadata_relative_path(folder: &Path) -> PathBuf {
+    folder.join(MANIFEST)
+}
+
+fn default_folder_title(project_name: &str, path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| project_name.to_owned())
+}
+
+fn ordered_name_kind(name: &str) -> FolderChildKind {
+    if name.ends_with(NATIVE_SUFFIX) {
+        FolderChildKind::Native
+    } else {
+        FolderChildKind::Folder
+    }
+}
+
+fn direct_orderable_children(directory: &Path) -> Result<BTreeMap<String, FolderChildKind>> {
+    let mut children = BTreeMap::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| FractalError::invalid_project("folder child name is not valid UTF-8"))?;
+        let kind = if file_type.is_dir() {
+            if name.ends_with(NATIVE_SUFFIX) {
+                return Err(FractalError::invalid_project(format!(
+                    "folder name uses the reserved native document suffix: {name}"
+                )));
+            }
+            Some(FolderChildKind::Folder)
+        } else if file_type.is_file() && name.ends_with(NATIVE_SUFFIX) {
+            Some(FolderChildKind::Native)
+        } else {
+            None
+        };
+        if let Some(kind) = kind {
+            children.insert(name, kind);
+        }
+    }
+    Ok(children)
+}
+
+fn validate_stored_order(
+    folder: &Path,
+    order: &[String],
+    present: &BTreeMap<String, FolderChildKind>,
+) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for name in order {
+        validate_order_name(name).map_err(|error| {
+            FractalError::invalid_project(format!(
+                "invalid order in {}: {}",
+                display_folder_path(folder),
+                error.message
+            ))
+        })?;
+        if !seen.insert(name) {
+            return Err(FractalError::invalid_project(format!(
+                "duplicate ordered child `{name}` in {}",
+                display_folder_path(folder)
+            )));
+        }
+        if let Some(actual) = present.get(name) {
+            let expected = ordered_name_kind(name);
+            if *actual != expected {
+                return Err(FractalError::invalid_project(format!(
+                    "ordered child `{name}` has the wrong type in {}",
+                    display_folder_path(folder)
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_order_name(name: &str) -> Result<()> {
+    let path = Path::new(name);
+    if name.is_empty()
+        || name == MANIFEST
+        || path.components().count() != 1
+        || !matches!(path.components().next(), Some(Component::Normal(_)))
+    {
+        return Err(FractalError::invalid_input(format!(
+            "invalid ordered child name: {name}"
+        )));
+    }
+    Ok(())
+}
+
+fn collect_directories(root: &Path, directory: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            let path = entry.path();
+            output.push(path.strip_prefix(root)?.to_path_buf());
+            collect_directories(root, &path, output)?;
+        }
+    }
+    output.sort();
+    Ok(())
 }
 
 fn normalize_relative_path(path: &Path) -> Result<PathBuf> {

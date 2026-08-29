@@ -9,15 +9,44 @@ A project contains `fractal.json` and a `pages/` directory. The manifest has two
 ```json
 {
   "name": "Project name",
-  "version": 1
+  "version": 2
 }
 ```
 
 `name` must not be empty. `version` must be supported by the engine. There is no required `.fractal/` directory or persistent graph data.
 
+The manifest version identifies the project format, not the engine package version or a user-managed project revision. Format v1 is stable and corresponds to the repository's `contract-v1` Git tag. Format v2 is the current unstable contract. Changes may accumulate under v2 until a later `contract-v*` tag marks a new stable contract boundary. New projects use v2. The engine can still open v1 projects, but folder metadata is available only in v2. The first folder metadata mutation on a v1 project upgrades its root manifest to v2. A v1 project may contain ordinary assets named `fractal.json` below `pages/`; the engine preserves them and refuses the upgrade until the naming conflict is explicitly resolved.
+
 For read compatibility, Fractal also accepts the former `project_name` field as the project name. Retired manifest fields are ignored. Fractal does not rewrite a legacy manifest when opening it, and legacy `.html` pages remain raw HTML unless an explicit migration converts them to the native document contract.
 
 All page paths are UTF-8 HTML files below `pages/`. Absolute paths, parent traversal, and non-HTML page paths are rejected. Paths identify pages, so duplicate titles are allowed.
+
+## Folders
+
+Every directory below `pages/`, and `pages/` itself, is a Fractal folder. A folder may contain a `fractal.json` file:
+
+```json
+{
+  "title": "The Glass Garden",
+  "order": [
+    "opening.fractal.html",
+    "the-crossing.fractal.html",
+    "appendix"
+  ]
+}
+```
+
+Folder metadata accepts only `title` and `order`. The title must be a non-empty string. Without metadata, a nested folder's title is its directory name and the pages root's title is the project name. Fractal creates folder metadata when a caller sets a title or submits an explicit order.
+
+Only direct child directories and native `.fractal.html` documents participate in folder order. Raw HTML and other files do not. The default order sorts direct child folders alphabetically first, followed by native documents alphabetically. Sorting is case-sensitive Unicode code-point order and does not use a locale.
+
+An explicit `order` is a complete permutation of the folder's known children. Each entry is one direct child name, with no path separators, absolute paths, parent traversal, duplicates, or `fractal.json`. Directory names ending in `.fractal.html` are reserved because that suffix identifies native documents. A reorder request must contain every present child and every missing ordered child exactly once.
+
+If an explicitly ordered child disappears outside Fractal, its entry remains as a missing child. Validation reports it, and folder inspection returns it with a missing status. A normal page or folder deletion operation removes this ghost entry even though no filesystem object remains.
+
+If Fractal discovers a new direct child while an explicit order exists, it appends that child to the stored order. Fractal-managed creation, movement, renaming, and deletion update affected explicit orders as part of the mutation. Folders without an explicit order remain unordered during those operations.
+
+`fractal.json` is reserved inside every folder. It is metadata, never a page or ordinary asset. Fractal does not follow symlinked directories as folders.
 
 ## Native documents
 
@@ -86,7 +115,7 @@ Fractal does not interpret an iframe target as part of its containing native doc
 
 Derived links are case-insensitive exact-title matches in unlinked visible text. Fractal reports only matches with one possible target and never stores them in page source. Applications may render these matches as links at runtime. Stored explicit links and derived links remain distinct.
 
-Opening, scanning, searching, validating, and deriving links never write files. Native semantic mutations may serialize affected native documents. Raw source changes require an explicit source or filesystem operation.
+Opening a project may append newly discovered children to an existing explicit folder order. Other scanning, searching, validation, and link derivation do not write files. Native semantic mutations may serialize affected native documents. Raw source changes require an explicit source or filesystem operation.
 
 ## Single-file HTML export
 

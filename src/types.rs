@@ -20,6 +20,45 @@ pub struct Page {
     pub iframes: Vec<Iframe>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Folder {
+    /// Path below `pages/`. The pages root is represented by an empty string.
+    pub path: String,
+    pub title: String,
+    /// The stored explicit order. `None` means the default folder-first order.
+    pub order: Option<Vec<String>>,
+    /// Children in effective display order, including missing ordered children.
+    pub children: Vec<FolderChild>,
+    pub issues: Vec<FolderIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FolderChild {
+    pub name: String,
+    pub kind: FolderChildKind,
+    pub status: FolderChildStatus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderChildKind {
+    Folder,
+    Native,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderChildStatus {
+    Present,
+    Missing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FolderIssue {
+    pub name: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PageKind {

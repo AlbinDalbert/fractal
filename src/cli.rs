@@ -22,6 +22,18 @@ enum Command {
         name: Option<String>,
     },
     List,
+    Folders,
+    Folder {
+        folder: PathBuf,
+    },
+    SetFolderTitle {
+        folder: PathBuf,
+        title: String,
+    },
+    ReorderFolder {
+        folder: PathBuf,
+        children: Vec<String>,
+    },
     Read {
         page: PathBuf,
         #[arg(long)]
@@ -102,6 +114,14 @@ pub fn run() -> Result<()> {
             let mut project = Project::open(&cli.project)?;
             match command {
                 Command::List => output(&project.pages(), cli.json),
+                Command::Folders => output(&project.folders(), cli.json),
+                Command::Folder { folder } => output(&project.folder(folder)?, cli.json),
+                Command::SetFolderTitle { folder, title } => {
+                    output(&project.set_folder_title(folder, &title)?, cli.json)
+                }
+                Command::ReorderFolder { folder, children } => {
+                    output(&project.reorder_folder(folder, children)?, cli.json)
+                }
                 Command::Read { page, source } => {
                     if source {
                         output(&project.source(page)?, cli.json)
