@@ -173,3 +173,27 @@ pub struct HtmlExportReport {
     pub output: PathBuf,
     pub references: Vec<String>,
 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FolderHtmlExportOptions {
+    /// Relative page or folder paths. An empty list exports the whole folder.
+    pub selections: Vec<PathBuf>,
+    pub number_sections: bool,
+    pub include_derived_links: bool,
+    /// Skip invalid selected pages instead of refusing the export.
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FolderHtmlExportReport {
+    pub output: PathBuf,
+    pub pages: Vec<String>,
+    pub skipped: Vec<SkippedExportPage>,
+    pub references: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkippedExportPage {
+    pub path: String,
+    pub reason: String,
+}

@@ -50,6 +50,7 @@ The `Project` API provides:
 
 - initialize and open projects;
 - inspect folders, set folder titles, and explicitly order folder children;
+- export an ordered folder tree as one HTML document;
 - list, read, create, write, move, and delete pages;
 - compare and write a page using its content hash;
 - delete page batches or complete folders;
@@ -88,12 +89,15 @@ fractal --project <root> embedded-by <page>
 fractal --project <root> derived-links <page>
 fractal --project <root> link <page> <text> <target>
 fractal --project <root> export-html <page> --output <file> [--include-derived-links]
+fractal --project <root> export-folder-html <folder> [selection]... --output <file> [--number-sections] [--include-derived-links] [--force]
 fractal --project <root> check
 ```
 
 Every command supports `--json`. The default output is also deliberately simple and serializable while the CLI is young.
 
 `export-html` accepts one native document and writes one standalone HTML file. It keeps the source document's HTML content and inline styles, removes Fractal's native marker, replaces images and iframes with `[image]` and `[iframe]`, and drops external stylesheet links. Direct links to other native documents become links to one-level text references in a collapsed section at the bottom. Links to non-native project files are unwrapped without adding a reference. Derived native links can be included with `--include-derived-links`.
+
+`export-folder-html` walks folders depth-first in their effective order and combines their native documents into one neutral HTML document. Each page receives a generated `<h1>` and an `<hr>` separates pages. Optional selections name relative pages or folders. A folder selection expands to all descendants unless more specific selections below it narrow the result. Included pages can be numbered from one. Ghosts are ignored. Invalid selected pages stop the export unless `--force` skips and reports them. Links between included pages become fragment links, while one-level references appear once at the end of the combined document. Optional derived links follow the same rule.
 
 ## Deliberate non-goals
 

@@ -124,3 +124,15 @@ Opening a project may append newly discovered children to an existing explicit f
 The export keeps the source document's HTML content and inline styles, removes the Fractal format marker and document-root attribute, drops external stylesheet links, and replaces images and iframes with `[image]` and `[iframe]` text markers. External links and fragment-only links remain links. Links to native documents become fragment links to their reference blocks. Links to other local files are unwrapped to their content.
 
 Direct links from the source document to other native documents become one-level references in a collapsed `<details>` section at the bottom of the output. Referenced documents contribute their visible text only. Links inside referenced documents do not add more references. Links to raw HTML or other local project files are unwrapped and do not create references. Derived native links can be included with the export option.
+
+## Folder HTML export
+
+Folder HTML export produces one standalone HTML document from an ordered folder tree. It recursively walks direct child folders and native documents depth-first using each folder's effective order. Missing ordered pages and folders are ignored. Raw HTML and other assets do not participate.
+
+Without selections, the export includes every present native document below the requested folder. Selections are page or folder paths relative to that folder. Selecting a page includes exactly that page. Selecting a folder without a more specific selected descendant includes its full subtree. If descendants of a selected folder are also selected, only those selected descendants and their required container path participate. The caller's selection order does not alter document order. Unknown selections are errors; selected ghosts produce no output.
+
+The exporter generates a neutral document shell whose `<title>` is the effective folder title. It does not merge source document styles. Every included page becomes a section identified by its project path. The exporter replaces the source page's first top-level `<h1>` with a generated `<h1>` using the native document title. An `<hr>` separates adjacent page sections. Optional numbering prefixes exported page headings from one after selection, validation, and ghost filtering.
+
+Links between included pages become fragment links to their generated sections. Direct links to excluded native pages become one-level collapsed text references at the end of the combined document. When derived links are enabled, they link to included sections or add one-level references by the same rule. The reference section always follows every exported page and does not recursively collect more references. Links to local non-native files are unwrapped. Images and iframes become `[image]` and `[iframe]` markers.
+
+Every included native document must satisfy the native contract. By default, one invalid document refuses the entire export and identifies its path. Force mode skips invalid documents and records their paths and reasons in the export report. A folder export with no remaining pages still produces a valid empty HTML document.

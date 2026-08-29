@@ -47,6 +47,8 @@ Prefer a direct function over a framework. Add a module only when one of these f
 - Never semantically rewrite raw HTML.
 - Reload the in-memory catalog after mutations.
 
+Folder HTML export is a derived read operation. It walks the in-memory folder catalog, validates selected native documents, rewrites links in temporary DOMs, and writes only the requested output file. It does not rewrite project documents or folder metadata.
+
 Filesystem observers that ignore Fractal's project lock can see the individual renames in a disjoint batch or multi-file move. Fractal callers cannot. An interrupted transaction is rolled back when the next process opens or mutates the project.
 
 ## Application boundary

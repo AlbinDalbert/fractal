@@ -2,7 +2,7 @@ use crate::types::DerivedLink;
 use crate::{FractalError, Result};
 use brik::traits::*;
 use brik::{NodeData, NodeRef};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 pub(crate) struct Document {
@@ -414,7 +414,7 @@ impl Document {
             }
         }
 
-        insert_derived_reference_links(self, derived_links)?;
+        insert_derived_export_links(self, derived_links, &BTreeMap::new())?;
 
         let media: Vec<_> = self
             .root
@@ -474,6 +474,78 @@ impl Document {
         Ok(())
     }
 
+    pub(crate) fn folder_export_content(
+        &self,
+        source: &str,
+        included_targets: &BTreeMap<String, String>,
+        reference_targets: &BTreeSet<String>,
+        derived_links: &[DerivedLink],
+    ) -> Result<String> {
+        let links: Vec<_> = self
+            .root
+            .select("a[href]")
+            .expect("static selector")
+            .collect();
+        for link in links {
+            let href = link.attributes.borrow().get("href").map(str::to_string);
+            let Some(href) = href else {
+                continue;
+            };
+            if href.starts_with('#') || is_external_href(&href) {
+                continue;
+            }
+            let Some(target) = resolve_internal_href(source, &href) else {
+                continue;
+            };
+            if let Some(id) = included_targets.get(&target) {
+                link.attributes
+                    .borrow_mut()
+                    .insert("href", format!("#{id}"));
+            } else if reference_targets.contains(&target) {
+                link.attributes
+                    .borrow_mut()
+                    .insert("href", export_reference_href(&target));
+            } else {
+                unwrap_element(link.as_node().clone());
+            }
+        }
+        insert_derived_export_links(self, derived_links, included_targets)?;
+
+        let media: Vec<_> = self
+            .root
+            .select("img, iframe")
+            .expect("static selector")
+            .collect();
+        for media in media {
+            let marker = match media.name.local.as_ref() {
+                "img" => " [image] ",
+                "iframe" => " [iframe] ",
+                _ => continue,
+            };
+            media.as_node().insert_before(NodeRef::new_text(marker));
+            media.as_node().detach();
+        }
+
+        let main = self
+            .root
+            .select_first("main[data-fractal-document]")
+            .map_err(|_| FractalError::invalid_input("native document needs a document root"))?;
+        let mut skipped_title = false;
+        let mut output = Vec::new();
+        for child in main.as_node().children() {
+            if !skipped_title
+                && child
+                    .as_element()
+                    .is_some_and(|element| element.name.local.as_ref() == "h1")
+            {
+                skipped_title = true;
+                continue;
+            }
+            child.serialize(&mut output)?;
+        }
+        Ok(String::from_utf8(output)?)
+    }
+
     pub(crate) fn export_text(&self) -> String {
         let root = self
             .root
@@ -510,7 +582,11 @@ fn export_reference_href(path: &str) -> String {
     format!("#{}", export_reference_id(path))
 }
 
-fn insert_derived_reference_links(document: &Document, links: &[DerivedLink]) -> Result<()> {
+fn insert_derived_export_links(
+    document: &Document,
+    links: &[DerivedLink],
+    included_targets: &BTreeMap<String, String>,
+) -> Result<()> {
     if links.is_empty() {
         return Ok(());
     }
@@ -558,10 +634,11 @@ fn insert_derived_reference_links(document: &Document, links: &[DerivedLink]) ->
             if start > cursor {
                 replacements.push(NodeRef::new_text(&original[cursor..start]));
             }
-            replacements.push(parse_link(
-                &export_reference_href(&link.target),
-                &original[start..end],
-            )?);
+            let href = included_targets
+                .get(&link.target)
+                .map(|id| format!("#{id}"))
+                .unwrap_or_else(|| export_reference_href(&link.target));
+            replacements.push(parse_link(&href, &original[start..end])?);
             cursor = end;
         }
         if replacements.is_empty() {

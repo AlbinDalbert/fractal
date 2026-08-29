@@ -1,6 +1,6 @@
 use crate::{
-    FolderChildKind, FolderChildStatus, FractalErrorCode, HtmlExportOptions, IframeTarget,
-    LinkTarget, PageKind, Project,
+    FolderChildKind, FolderChildStatus, FolderHtmlExportOptions, FractalErrorCode,
+    HtmlExportOptions, IframeTarget, LinkTarget, PageKind, Project,
 };
 use std::fs;
 use tempfile::TempDir;
@@ -756,6 +756,173 @@ fn html_export_rejects_raw_html_pages() {
     assert!(error
         .message
         .contains("only available for native documents"));
+}
+
+#[test]
+fn folder_html_export_follows_recursive_order_and_numbers_pages() {
+    let (temp, mut project) = project();
+    project
+        .create_page_at("intro.fractal.html", "Intro")
+        .unwrap();
+    project
+        .create_page_at("part/two.fractal.html", "Two")
+        .unwrap();
+    project
+        .create_page_at("part/one.fractal.html", "One")
+        .unwrap();
+    project
+        .reorder_folder("part", ["two.fractal.html", "one.fractal.html"])
+        .unwrap();
+    project
+        .reorder_folder(".", ["intro.fractal.html", "part"])
+        .unwrap();
+
+    let output = temp.path().join("folder.html");
+    let report = project
+        .export_folder_html(
+            ".",
+            &output,
+            FolderHtmlExportOptions {
+                number_sections: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let html = fs::read_to_string(output).unwrap();
+
+    assert_eq!(
+        report.pages,
+        vec![
+            "intro.fractal.html",
+            "part/two.fractal.html",
+            "part/one.fractal.html"
+        ]
+    );
+    assert!(html.find("<h1>1. Intro</h1>").unwrap() < html.find("<h1>2. Two</h1>").unwrap());
+    assert!(html.find("<h1>2. Two</h1>").unwrap() < html.find("<h1>3. One</h1>").unwrap());
+    assert_eq!(html.matches("<hr>").count(), 2);
+    assert_eq!(html.matches("<h1>").count(), 3);
+    assert!(html.contains("<title>Test</title>"));
+}
+
+#[test]
+fn folder_export_selections_expand_only_unqualified_folders() {
+    let (temp, mut project) = project();
+    project
+        .create_page_at("part/one.fractal.html", "One")
+        .unwrap();
+    project
+        .create_page_at("part/two.fractal.html", "Two")
+        .unwrap();
+
+    let whole_folder = project
+        .export_folder_html(
+            ".",
+            temp.path().join("whole.html"),
+            FolderHtmlExportOptions {
+                selections: vec!["part".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(whole_folder.pages.len(), 2);
+
+    let selected_child = project
+        .export_folder_html(
+            ".",
+            temp.path().join("selected.html"),
+            FolderHtmlExportOptions {
+                selections: vec!["part".into(), "part/two.fractal.html".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(selected_child.pages, vec!["part/two.fractal.html"]);
+}
+
+#[test]
+fn folder_export_force_skips_invalid_and_ghost_pages() {
+    let (temp, mut project) = project();
+    project.create_page("Good").unwrap();
+    project.create_page("Ghost").unwrap();
+    project.create_page("Bad").unwrap();
+    project
+        .reorder_folder(
+            ".",
+            [
+                "good.fractal.html",
+                "ghost.fractal.html",
+                "bad.fractal.html",
+            ],
+        )
+        .unwrap();
+    fs::remove_file(temp.path().join("pages/ghost.fractal.html")).unwrap();
+    fs::write(
+        temp.path().join("pages/bad.fractal.html"),
+        "<html><body>bad</body></html>",
+    )
+    .unwrap();
+    project = Project::open(temp.path()).unwrap();
+
+    assert!(project
+        .export_folder_html(
+            ".",
+            temp.path().join("refused.html"),
+            FolderHtmlExportOptions::default(),
+        )
+        .unwrap_err()
+        .message
+        .contains("bad.fractal.html"));
+    let report = project
+        .export_folder_html(
+            ".",
+            temp.path().join("forced.html"),
+            FolderHtmlExportOptions {
+                force: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(report.pages, vec!["good.fractal.html"]);
+    assert_eq!(report.skipped.len(), 1);
+    assert_eq!(report.skipped[0].path, "bad.fractal.html");
+}
+
+#[test]
+fn folder_export_links_included_pages_and_places_derived_references_last() {
+    let (temp, mut project) = project();
+    project.create_page("First").unwrap();
+    project.create_page("Second").unwrap();
+    project.create_page("Reference").unwrap();
+    project
+        .write_page(
+            "first",
+            &native(
+                "First",
+                "<p><a href=\"second.fractal.html\">Second</a> and Reference.</p>",
+            ),
+        )
+        .unwrap();
+
+    let output = temp.path().join("links.html");
+    let report = project
+        .export_folder_html(
+            ".",
+            &output,
+            FolderHtmlExportOptions {
+                selections: vec!["first.fractal.html".into(), "second.fractal.html".into()],
+                include_derived_links: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let html = fs::read_to_string(output).unwrap();
+    assert!(html.contains("href=\"#fractal-page-"));
+    assert!(!html.contains("href=\"#fractal-reference-second.fractal.html\""));
+    assert_eq!(report.references, vec!["reference.fractal.html"]);
+    assert!(
+        html.find("id=\"fractal-references\"").unwrap() > html.find("<h1>Second</h1>").unwrap()
+    );
 }
 
 #[test]

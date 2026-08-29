@@ -94,6 +94,18 @@ enum Command {
         #[arg(long)]
         include_derived_links: bool,
     },
+    ExportFolderHtml {
+        folder: PathBuf,
+        selections: Vec<PathBuf>,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        number_sections: bool,
+        #[arg(long)]
+        include_derived_links: bool,
+        #[arg(long)]
+        force: bool,
+    },
     Check,
 }
 
@@ -177,6 +189,26 @@ pub fn run() -> Result<()> {
                         destination,
                         crate::HtmlExportOptions {
                             include_derived_links,
+                        },
+                    )?,
+                    cli.json,
+                ),
+                Command::ExportFolderHtml {
+                    folder,
+                    selections,
+                    output: destination,
+                    number_sections,
+                    include_derived_links,
+                    force,
+                } => output(
+                    &project.export_folder_html(
+                        folder,
+                        destination,
+                        crate::FolderHtmlExportOptions {
+                            selections,
+                            number_sections,
+                            include_derived_links,
+                            force,
                         },
                     )?,
                     cli.json,

@@ -331,6 +331,147 @@ impl Project {
         Ok(HtmlExportReport { output, references })
     }
 
+    pub fn export_folder_html(
+        &self,
+        folder: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        options: FolderHtmlExportOptions,
+    ) -> Result<FolderHtmlExportReport> {
+        let folder = normalize_folder_path(folder.as_ref())?;
+        let stored_folder = self.folders.get(&path_string(&folder)).ok_or_else(|| {
+            FractalError::not_found(format!(
+                "folder does not exist: {}",
+                display_folder_path(&folder)
+            ))
+        })?;
+        let selections = normalize_export_selections(&options.selections)?;
+        for selection in &selections {
+            if !self.export_selection_exists(&folder, selection) {
+                return Err(FractalError::not_found(format!(
+                    "export selection does not exist: {selection}"
+                )));
+            }
+        }
+
+        let mut candidates = Vec::new();
+        self.collect_folder_export_pages(
+            &folder,
+            Path::new(""),
+            selections.is_empty(),
+            &selections,
+            &mut candidates,
+        )?;
+        let mut pages = Vec::new();
+        let mut skipped = Vec::new();
+        for path in candidates {
+            let stored = self
+                .pages
+                .get(&path)
+                .expect("folder traversal returned a present native page");
+            if let Some(issue) = native_document_issues(&Document::parse(&stored.html)).first() {
+                let reason = format!("invalid native document: {issue}");
+                if !options.force {
+                    return Err(FractalError::invalid_input(format!(
+                        "cannot export invalid native document `{path}`: {issue}"
+                    )));
+                }
+                skipped.push(SkippedExportPage { path, reason });
+            } else {
+                pages.push(path);
+            }
+        }
+
+        let included_targets: BTreeMap<String, String> = pages
+            .iter()
+            .map(|path| (path.clone(), folder_export_page_id(path)))
+            .collect();
+        let included: BTreeSet<String> = pages.iter().cloned().collect();
+        let mut references = Vec::new();
+        let mut seen_references = BTreeSet::new();
+        let mut derived_by_page = BTreeMap::<String, Vec<DerivedLink>>::new();
+        for path in &pages {
+            let stored = self.pages.get(path).expect("included page exists");
+            for link in &stored.page.links {
+                if let LinkTarget::Internal(target) = &link.target {
+                    if !included.contains(target)
+                        && self
+                            .pages
+                            .get(target)
+                            .is_some_and(|page| page.page.kind == PageKind::Native)
+                        && seen_references.insert(target.clone())
+                    {
+                        references.push(target.clone());
+                    }
+                }
+            }
+            if options.include_derived_links {
+                let derived = self.derived_links(path)?;
+                for link in &derived {
+                    if !included.contains(&link.target)
+                        && seen_references.insert(link.target.clone())
+                    {
+                        references.push(link.target.clone());
+                    }
+                }
+                derived_by_page.insert(path.clone(), derived);
+            }
+        }
+        let reference_targets: BTreeSet<String> = references.iter().cloned().collect();
+
+        let mut main = String::new();
+        for (index, path) in pages.iter().enumerate() {
+            if index > 0 {
+                main.push_str("\n<hr>\n");
+            }
+            let stored = self.pages.get(path).expect("included page exists");
+            let title = stored.page.title.as_deref().unwrap_or(path);
+            let heading = if options.number_sections {
+                format!("{}. {title}", index + 1)
+            } else {
+                title.to_owned()
+            };
+            let document = Document::parse(&stored.html);
+            let content = document.folder_export_content(
+                path,
+                &included_targets,
+                &reference_targets,
+                derived_by_page.get(path).map(Vec::as_slice).unwrap_or(&[]),
+            )?;
+            main.push_str(&format!(
+                "<section id=\"{}\" data-fractal-source=\"{}\">\n  <h1>{}</h1>{}\n</section>",
+                escape_attribute(included_targets.get(path).expect("included page has an id")),
+                escape_attribute(path),
+                escape_html(&heading),
+                content
+            ));
+        }
+        if !references.is_empty() {
+            main.push_str("\n<section id=\"fractal-references\">\n  <h2>References</h2>\n");
+            for reference in &references {
+                let referenced = self.pages.get(reference).expect("reference target exists");
+                let title = referenced.page.title.as_deref().unwrap_or(reference);
+                let text = Document::parse(&referenced.html).export_text();
+                main.push_str(&format!(
+                    "  <details id=\"{}\">\n    <summary>{}</summary>\n    <p>{}</p>\n  </details>\n",
+                    escape_attribute(&export_reference_id(reference)),
+                    escape_html(title),
+                    escape_html(&text),
+                ));
+            }
+            main.push_str("</section>");
+        }
+
+        let html = folder_export_shell(&stored_folder.folder.title, &main);
+        let output = output.as_ref().to_path_buf();
+        atomic_write(&output, &html)?;
+        Ok(FolderHtmlExportReport {
+            output,
+            pages,
+            skipped,
+            references,
+        })
+    }
+
     pub fn content_hash(&self, path: impl AsRef<Path>) -> Result<String> {
         Ok(self.stored(path.as_ref())?.page.content_hash.clone())
     }
@@ -1011,6 +1152,80 @@ impl Project {
         )))
     }
 
+    fn collect_folder_export_pages(
+        &self,
+        folder: &Path,
+        relative: &Path,
+        include_all: bool,
+        selections: &BTreeSet<String>,
+        output: &mut Vec<String>,
+    ) -> Result<()> {
+        let stored = self.folders.get(&path_string(folder)).ok_or_else(|| {
+            FractalError::not_found(format!(
+                "folder does not exist: {}",
+                display_folder_path(folder)
+            ))
+        })?;
+        for child in &stored.folder.children {
+            if child.status == FolderChildStatus::Missing {
+                continue;
+            }
+            let child_relative = relative.join(&child.name);
+            let child_selection = path_string(&child_relative);
+            match child.kind {
+                FolderChildKind::Native => {
+                    if include_all || selections.contains(&child_selection) {
+                        output.push(path_string(&folder.join(&child.name)));
+                    }
+                }
+                FolderChildKind::Folder => {
+                    let has_exact = selections.contains(&child_selection);
+                    let prefix = format!("{child_selection}/");
+                    let has_descendant = selections
+                        .iter()
+                        .any(|selection| selection.starts_with(&prefix));
+                    if include_all || has_exact || has_descendant {
+                        self.collect_folder_export_pages(
+                            &folder.join(&child.name),
+                            &child_relative,
+                            include_all || (has_exact && !has_descendant),
+                            selections,
+                            output,
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn export_selection_exists(&self, folder: &Path, selection: &str) -> bool {
+        let absolute = folder.join(selection);
+        if self
+            .pages
+            .get(&path_string(&absolute))
+            .is_some_and(|stored| stored.page.kind == PageKind::Native)
+            || self.folders.contains_key(&path_string(&absolute))
+        {
+            return true;
+        }
+        let Some(parent) = absolute.parent() else {
+            return false;
+        };
+        let Some(name) = absolute.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        self.folders
+            .get(&path_string(parent))
+            .is_some_and(|stored| {
+                stored
+                    .folder
+                    .children
+                    .iter()
+                    .any(|child| child.name == name)
+            })
+    }
+
     fn stored(&self, path: &Path) -> Result<&StoredPage> {
         let path = path_string(&self.existing_path(path)?);
         self.pages
@@ -1259,6 +1474,29 @@ impl Project {
         self.folders = folders;
         Ok(())
     }
+}
+
+fn normalize_export_selections(selections: &[PathBuf]) -> Result<BTreeSet<String>> {
+    selections
+        .iter()
+        .map(|selection| normalize_relative_path(selection).map(|path| path_string(&path)))
+        .collect()
+}
+
+fn folder_export_page_id(path: &str) -> String {
+    let mut id = String::from("fractal-page-");
+    for byte in path.as_bytes() {
+        id.push_str(&format!("{byte:02x}"));
+    }
+    id
+}
+
+fn folder_export_shell(title: &str, main: &str) -> String {
+    format!(
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{}</title>\n  <style>\n    * {{ box-sizing: border-box; }}\n    body {{ margin: 0; color: #222; background: #fff; font: 1.05rem/1.65 ui-serif, Georgia, serif; }}\n    main {{ width: min(100% - 2rem, 48rem); margin: 0 auto; padding: 4rem 0; }}\n    section[data-fractal-source] {{ break-before: page; }}\n    section[data-fractal-source]:first-child {{ break-before: auto; }}\n    h1 {{ font-size: 2.25rem; line-height: 1.15; margin: 0 0 2rem; }}\n    h2, h3, h4, h5, h6 {{ line-height: 1.25; }}\n    p, ul, ol, blockquote, pre, figure, table {{ margin: 1.25rem 0; }}\n    hr {{ border: 0; border-top: 1px solid #bbb; margin: 4rem 0; }}\n    a {{ color: #174ea6; text-underline-offset: 0.15em; }}\n    code, pre {{ font-family: ui-monospace, monospace; }}\n  </style>\n</head>\n<body>\n<main>\n{}\n</main>\n</body>\n</html>\n",
+        escape_html(title),
+        main
+    )
 }
 
 fn normalize_folder_path(path: &Path) -> Result<PathBuf> {

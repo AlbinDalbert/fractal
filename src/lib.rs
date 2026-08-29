@@ -10,9 +10,10 @@ mod types;
 pub use error::{FractalError, FractalErrorCode};
 pub use project::Project;
 pub use types::{
-    Backlink, DerivedLink, Folder, FolderChild, FolderChildKind, FolderChildStatus, FolderIssue,
-    HtmlExportOptions, HtmlExportReport, Iframe, IframeBacklink, IframeTarget, Link, LinkTarget,
-    Mutation, Page, PageKind, ProjectManifest, SearchResult, TextOccurrence, TextPosition,
+    Backlink, DerivedLink, Folder, FolderChild, FolderChildKind, FolderChildStatus,
+    FolderHtmlExportOptions, FolderHtmlExportReport, FolderIssue, HtmlExportOptions,
+    HtmlExportReport, Iframe, IframeBacklink, IframeTarget, Link, LinkTarget, Mutation, Page,
+    PageKind, ProjectManifest, SearchResult, SkippedExportPage, TextOccurrence, TextPosition,
     ValidationIssue, ValidationReport,
 };
 
