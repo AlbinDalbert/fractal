@@ -3,7 +3,64 @@ use crate::{
     HtmlExportOptions, IframeTarget, LinkTarget, PageKind, Project,
 };
 use std::fs;
+use std::path::Path;
 use tempfile::TempDir;
+
+// Existing behavioral tests use complete native documents as fixtures. This
+// helper bypasses the public editing API so those fixtures do not weaken the
+// section-only production boundary.
+trait NativeFixtureWrite {
+    fn write_page(&mut self, path: impl AsRef<Path>, html: &str) -> crate::Result<crate::Mutation>;
+    fn write_page_if_unchanged(
+        &mut self,
+        path: impl AsRef<Path>,
+        html: &str,
+        expected_hash: &str,
+    ) -> crate::Result<crate::Mutation>;
+}
+
+impl NativeFixtureWrite for Project {
+    fn write_page(&mut self, path: impl AsRef<Path>, html: &str) -> crate::Result<crate::Mutation> {
+        let page = self.page(path)?;
+        let relative = std::path::PathBuf::from(&page.path);
+        let original = self.source(&relative)?;
+        fs::write(self.root().join("pages").join(&relative), html)?;
+        *self = Project::open(self.root())?;
+        if let Some(issue) = self.validate().issues.into_iter().find(|issue| {
+            issue.path.as_deref() == Some(page.path.as_str())
+                && (issue.message.contains("unsupported elements")
+                    || issue.message.contains("needs exactly one"))
+        }) {
+            fs::write(self.root().join("pages").join(&relative), original)?;
+            *self = Project::open(self.root())?;
+            return Err(crate::FractalError::invalid_input(format!(
+                "invalid native document: {}",
+                issue.message
+            )));
+        }
+        Ok(crate::Mutation {
+            changed: vec![relative],
+            deleted: vec![],
+        })
+    }
+
+    fn write_page_if_unchanged(
+        &mut self,
+        path: impl AsRef<Path>,
+        html: &str,
+        expected_hash: &str,
+    ) -> crate::Result<crate::Mutation> {
+        let current = Project::open(self.root())?;
+        let page = current.page(path.as_ref())?;
+        *self = current;
+        if page.content_hash != expected_hash {
+            return Err(crate::FractalError::conflict(
+                "page changed since it was read",
+            ));
+        }
+        self.write_page(path, html)
+    }
+}
 
 fn project() -> (TempDir, Project) {
     let temp = TempDir::new().unwrap();
@@ -13,7 +70,7 @@ fn project() -> (TempDir, Project) {
 
 fn native(title: &str, body: &str) -> String {
     format!(
-        "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><title>{title}</title></head><body><main data-fractal-document><h1>{title}</h1>{body}</main></body></html>"
+        "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><title>{title}</title><style data-fractal-style></style></head><body><main data-fractal-document><h1 data-fractal-title>{title}</h1>{body}</main></body></html>"
     )
 }
 
@@ -190,7 +247,7 @@ fn validation_reports_missing_titles_and_broken_links() {
     let project = Project::open(temp.path()).unwrap();
     let report = project.validate();
     assert!(!report.valid);
-    assert_eq!(report.issues.len(), 2);
+    assert_eq!(report.issues.len(), 4);
 }
 
 #[test]
@@ -354,7 +411,7 @@ fn native_documents_reject_elements_outside_the_profile() {
 fn native_documents_reject_scripts_in_the_head() {
     let (_temp, mut project) = project();
     project.create_page("Strict").unwrap();
-    let source = "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><title>Strict</title><script>alert(1)</script></head><body><main data-fractal-document><p>Text</p></main></body></html>";
+    let source = "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><title>Strict</title><style data-fractal-style></style><script>alert(1)</script></head><body><main data-fractal-document><h1 data-fractal-title>Strict</h1><p>Text</p></main></body></html>";
 
     let error = project.write_page("strict", source).unwrap_err();
 
@@ -670,7 +727,7 @@ fn html_export_flattens_direct_native_links_into_text_references() {
     project
         .write_page(
             "source",
-            "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><meta name=\"viewport\" content=\"width=device-width\"><link rel=\"stylesheet\" href=\"theme.css\"><style>body { color: red }</style><title>Source</title></head><body><main data-fractal-document><h1>Source</h1><p>Read <strong><a href=\"reference.fractal.html\">Reference</a></strong> and <a href=\"widget.html\">Widget</a>. <a href=\"https://example.com\">External</a>.</p><img src=\"image.png\"><iframe src=\"frame.html\"></iframe></main></body></html>",
+            "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><meta name=\"viewport\" content=\"width=device-width\"><link rel=\"stylesheet\" href=\"theme.css\"><style data-fractal-style>body { color: red }</style><title>Source</title></head><body><main data-fractal-document><h1 data-fractal-title>Source</h1><p>Read <strong><a href=\"reference.fractal.html\">Reference</a></strong> and <a href=\"widget.html\">Widget</a>. <a href=\"https://example.com\">External</a>.</p><img src=\"image.png\"><iframe src=\"frame.html\"></iframe></main></body></html>",
         )
         .unwrap();
 
@@ -687,7 +744,7 @@ fn html_export_flattens_direct_native_links_into_text_references() {
     assert!(exported.contains("<a href=\"https://example.com\">External</a>"));
     assert!(exported.contains("[image]"));
     assert!(exported.contains("[iframe]"));
-    assert!(exported.contains("<style>body { color: red }</style>"));
+    assert!(exported.contains("<style data-fractal-style=\"\">body { color: red }</style>"));
     assert!(!exported.contains("theme.css"));
     assert!(!exported.contains("fractal-format"));
     assert!(!exported.contains("data-fractal-document"));
@@ -1151,6 +1208,106 @@ fn setting_a_page_title_renames_it_and_rewrites_explicit_links() {
         .source("index")
         .unwrap()
         .contains("guns-akimbo-and-other-stuff.fractal.html"));
+}
+
+#[test]
+fn native_sections_merge_disjoint_concurrent_changes() {
+    let (temp, mut content_editor) = project();
+    content_editor.create_page("Draft").unwrap();
+    let mut style_editor = Project::open(temp.path()).unwrap();
+    let content_parts = content_editor.native_document_parts("draft").unwrap();
+    let style_parts = style_editor.native_document_parts("draft").unwrap();
+
+    style_editor
+        .set_page_style("draft", "body { color: hotpink; }", &style_parts.style_hash)
+        .unwrap();
+    content_editor
+        .set_page_content(
+            "draft",
+            "<p>Written concurrently.</p>",
+            &content_parts.content_hash,
+        )
+        .unwrap();
+
+    let reopened = Project::open(temp.path()).unwrap();
+    let parts = reopened.native_document_parts("draft").unwrap();
+    assert_eq!(parts.style_css, "body { color: hotpink; }");
+    assert!(parts.content_html.contains("Written concurrently."));
+    assert!(!parts.content_html.contains("data-fractal-title"));
+}
+
+#[test]
+fn native_section_hash_rejects_a_stale_change_to_the_same_section() {
+    let (_temp, mut project) = project();
+    project.create_page("Draft").unwrap();
+    let parts = project.native_document_parts("draft").unwrap();
+    project
+        .set_page_content("draft", "<p>First</p>", &parts.content_hash)
+        .unwrap();
+    let error = project
+        .set_page_content("draft", "<p>Stale</p>", &parts.content_hash)
+        .unwrap_err();
+    assert_eq!(error.code, FractalErrorCode::Conflict);
+}
+
+#[test]
+fn raw_writes_cannot_replace_a_native_document() {
+    let (_temp, mut project) = project();
+    project.create_page("Native").unwrap();
+    let error = project
+        .write_raw_page("native", "<p>replacement</p>")
+        .unwrap_err();
+    assert!(error.message.contains("only available for raw HTML"));
+}
+
+#[test]
+fn structure_repair_marks_legacy_title_and_style() {
+    let (temp, _project) = project();
+    fs::write(
+        temp.path().join("pages/legacy.fractal.html"),
+        "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><title>Legacy</title><style>p { color: red; }</style></head><body><main data-fractal-document><h1>Legacy</h1><p>Text</p></main></body></html>",
+    )
+    .unwrap();
+    let mut project = Project::open(temp.path()).unwrap();
+    assert!(project.native_document_parts("legacy").is_err());
+    project.repair_page_structure("legacy").unwrap();
+    let source = project.source("legacy").unwrap();
+    assert!(source.contains("data-fractal-title"));
+    assert!(source.contains("data-fractal-style"));
+    assert!(source.contains("p { color: red; }"));
+}
+
+#[test]
+fn metadata_and_head_links_are_contained_sections() {
+    let (_temp, mut project) = project();
+    project.create_page("Sections").unwrap();
+    let parts = project.native_document_parts("sections").unwrap();
+    project
+        .set_page_metadata(
+            "sections",
+            "<meta name=\"description\" content=\"Example\">",
+            &parts.metadata_hash,
+        )
+        .unwrap();
+    let parts = project.native_document_parts("sections").unwrap();
+    project
+        .set_page_head_links(
+            "sections",
+            "<link rel=\"stylesheet\" href=\"theme.css\">",
+            &parts.head_links_hash,
+        )
+        .unwrap();
+    let parts = project.native_document_parts("sections").unwrap();
+    assert!(parts.metadata_html.contains("description"));
+    assert!(parts.head_links_html.contains("theme.css"));
+    let error = project
+        .set_page_metadata(
+            "sections",
+            "<meta name=\"fractal-format\" content=\"9\">",
+            &parts.metadata_hash,
+        )
+        .unwrap_err();
+    assert!(error.message.contains("cannot be changed"));
 }
 
 #[test]

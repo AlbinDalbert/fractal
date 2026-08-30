@@ -60,6 +60,8 @@ A native document must have:
 - `<meta name="fractal-format" content="1">`;
 - a non-empty title from `<title>` or the first `<h1>`;
 - exactly one `<main data-fractal-document>` as the only body element.
+- exactly one direct `<h1 data-fractal-title>` child owned by Fractal;
+- exactly one `<style data-fractal-style>` in the head.
 
 The native document root accepts the following standard HTML elements:
 
@@ -72,7 +74,7 @@ td tfoot th thead time tr u ul var
 
 This vocabulary covers prose, headings, line breaks, images, lists, inline formatting, quotations, code blocks, figures, and tables. Fractal uses normal HTML meaning for these elements. Attributes remain ordinary HTML attributes.
 
-The document head may contain `title`, `meta`, `link`, and `style`. Scripts and base URL overrides are outside the native profile. Raw HTML and iframe targets may use them.
+The document head may contain `title`, `meta`, `link`, and `style`. Scripts and base URL overrides are outside the native profile. Raw HTML and iframe targets may use them. Fractal owns the title, charset, viewport, format marker, marked title heading, and marked style element. The marked style contains arbitrary user CSS and can be restored to the default explicitly. Other styles, user metadata, and head links remain allowed.
 
 Native validation reports unsupported elements, missing structure, broken internal links, and broken local iframe sources. HTML parsing follows HTML5 recovery rules, but recovery does not make a document valid Fractal.
 
@@ -117,7 +119,9 @@ Fractal does not interpret an iframe target as part of its containing native doc
 
 Derived links are case-insensitive exact-title matches in unlinked visible text. Fractal reports only matches with one possible target and never stores them in page source. Applications may render these matches as links at runtime. Stored explicit links and derived links remain distinct.
 
-Opening a project may append newly discovered children to an existing explicit folder order. Other scanning, searching, validation, and link derivation do not write files. Native semantic mutations may serialize affected native documents. Raw source changes require an explicit source or filesystem operation.
+Opening a project may append newly discovered children to an existing explicit folder order. Other scanning, searching, validation, and link derivation do not write files. Native semantic mutations may serialize affected native documents. Native editing replaces only the requested content, managed style, user metadata, or head-link section. Each section has its own SHA-256 comparison hash, so concurrent changes to different sections merge under the project lock. Fractal validates and atomically writes the complete result. Whole-source replacement is available only for raw HTML.
+
+Legacy native documents without the managed title or style markers remain discoverable. An explicit structure repair marks the first direct title heading and first head style when present. It creates a missing managed heading or default style without replacing existing CSS.
 
 ## Single-file HTML export
 

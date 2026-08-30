@@ -11,7 +11,7 @@ Native documents use the `.fractal.html` suffix and a small semantic HTML profil
 - **Links are explicit.** Fractal reads, validates, inserts, and preserves links. It never rewrites unlinked prose automatically.
 - **Iframes are embeds.** Native documents may embed project files, inline `srcdoc`, or remote pages with ordinary `<iframe>` elements.
 - **Derived data stays derived.** Search, links, backlinks, and derived links are views over the current files.
-- **Hashes guard writes.** Every page exposes a SHA-256 source hash. Callers can require that hash when saving so an old editor revision cannot replace a newer file.
+- **Hashes guard writes.** Every page exposes a SHA-256 source hash. Native content, managed CSS, user metadata, and head links also have independent hashes, so disjoint edits can merge without accepting stale changes to the same section.
 - **The library is the product.** The CLI is a thin adapter over the Rust API.
 
 Fractal does not try to make small models smart. It makes document operations cheap enough for any caller to compose.

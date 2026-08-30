@@ -67,6 +67,22 @@ pub enum PageKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NativeDocumentParts {
+    pub title: String,
+    pub title_hash: String,
+    pub content_html: String,
+    pub content_hash: String,
+    pub style_css: String,
+    pub style_hash: String,
+    pub metadata_html: String,
+    pub metadata_hash: String,
+    pub head_links_html: String,
+    pub head_links_hash: String,
+    /// SHA-256 of the exact complete source bytes.
+    pub source_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Link {
     pub href: String,
     pub text: String,

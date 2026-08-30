@@ -33,6 +33,8 @@ enum Command {
     SetPageTitle {
         page: PathBuf,
         title: String,
+        #[arg(long)]
+        expected_hash: Option<String>,
     },
     ReorderFolder {
         folder: PathBuf,
@@ -42,6 +44,45 @@ enum Command {
         page: PathBuf,
         #[arg(long)]
         source: bool,
+    },
+    Parts {
+        page: PathBuf,
+    },
+    SetContent {
+        page: PathBuf,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        expected_hash: String,
+    },
+    SetStyle {
+        page: PathBuf,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        expected_hash: String,
+    },
+    RestoreStyle {
+        page: PathBuf,
+        #[arg(long)]
+        expected_hash: String,
+    },
+    SetMetadata {
+        page: PathBuf,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        expected_hash: String,
+    },
+    SetHeadLinks {
+        page: PathBuf,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        expected_hash: String,
+    },
+    RepairPage {
+        page: PathBuf,
     },
     New {
         title: String,
@@ -139,9 +180,18 @@ pub fn run() -> Result<()> {
                 Command::SetFolderTitle { folder, title } => {
                     output(&project.set_folder_title(folder, &title)?, cli.json)
                 }
-                Command::SetPageTitle { page, title } => {
-                    output(&project.set_page_title(page, &title)?, cli.json)
-                }
+                Command::SetPageTitle {
+                    page,
+                    title,
+                    expected_hash,
+                } => output(
+                    &if let Some(expected_hash) = expected_hash {
+                        project.set_page_title_if_unchanged(page, &title, &expected_hash)?
+                    } else {
+                        project.set_page_title(page, &title)?
+                    },
+                    cli.json,
+                ),
                 Command::ReorderFolder { folder, children } => {
                     output(&project.reorder_folder(folder, children)?, cli.json)
                 }
@@ -151,6 +201,65 @@ pub fn run() -> Result<()> {
                     } else {
                         output(&project.page(page)?, cli.json)
                     }
+                }
+                Command::Parts { page } => output(&project.native_document_parts(page)?, cli.json),
+                Command::SetContent {
+                    page,
+                    file,
+                    expected_hash,
+                } => output(
+                    &project.set_page_content(
+                        page,
+                        &std::fs::read_to_string(file)?,
+                        &expected_hash,
+                    )?,
+                    cli.json,
+                ),
+                Command::SetStyle {
+                    page,
+                    file,
+                    expected_hash,
+                } => output(
+                    &project.set_page_style(
+                        page,
+                        &std::fs::read_to_string(file)?,
+                        &expected_hash,
+                    )?,
+                    cli.json,
+                ),
+                Command::RestoreStyle {
+                    page,
+                    expected_hash,
+                } => output(
+                    &project.restore_default_page_style(page, &expected_hash)?,
+                    cli.json,
+                ),
+                Command::SetMetadata {
+                    page,
+                    file,
+                    expected_hash,
+                } => output(
+                    &project.set_page_metadata(
+                        page,
+                        &std::fs::read_to_string(file)?,
+                        &expected_hash,
+                    )?,
+                    cli.json,
+                ),
+                Command::SetHeadLinks {
+                    page,
+                    file,
+                    expected_hash,
+                } => output(
+                    &project.set_page_head_links(
+                        page,
+                        &std::fs::read_to_string(file)?,
+                        &expected_hash,
+                    )?,
+                    cli.json,
+                ),
+                Command::RepairPage { page } => {
+                    output(&project.repair_page_structure(page)?, cli.json)
                 }
                 Command::New { title, path } => {
                     let result = if let Some(path) = path {
@@ -167,9 +276,9 @@ pub fn run() -> Result<()> {
                 } => {
                     let source = std::fs::read_to_string(file)?;
                     let result = if let Some(expected_hash) = expected_hash {
-                        project.write_page_if_unchanged(page, &source, &expected_hash)?
+                        project.write_raw_page_if_unchanged(page, &source, &expected_hash)?
                     } else {
-                        project.write_page(page, &source)?
+                        project.write_raw_page(page, &source)?
                     };
                     output(&result, cli.json)
                 }

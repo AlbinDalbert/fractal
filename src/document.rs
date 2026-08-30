@@ -38,7 +38,10 @@ impl Document {
     }
 
     pub(crate) fn set_title(&self, title: &str) {
-        for selector in ["title", "main[data-fractal-document] h1"] {
+        for selector in [
+            "title",
+            "main[data-fractal-document] h1[data-fractal-title]",
+        ] {
             if let Ok(node) = self.root.select_first(selector) {
                 let node = node.as_node();
                 for child in node.children().collect::<Vec<_>>() {
@@ -47,6 +50,172 @@ impl Document {
                 node.append(NodeRef::new_text(title));
             }
         }
+    }
+
+    pub(crate) fn managed_title_count(&self) -> usize {
+        self.root
+            .select("main[data-fractal-document] > h1[data-fractal-title]")
+            .expect("static selector")
+            .count()
+    }
+
+    pub(crate) fn managed_style_count(&self) -> usize {
+        self.root
+            .select("head > style[data-fractal-style]")
+            .expect("static selector")
+            .count()
+    }
+
+    pub(crate) fn content_html(&self) -> Result<String> {
+        let main = self.native_main()?;
+        serialize_children_matching(main.as_node(), |child| !is_managed_title(child))
+    }
+
+    pub(crate) fn set_content_html(&self, html: &str) -> Result<()> {
+        let fragment = body_fragment(html)?;
+        if fragment
+            .select("[data-fractal-title]")
+            .expect("static selector")
+            .next()
+            .is_some()
+        {
+            return Err(FractalError::invalid_input(
+                "page content cannot contain a Fractal-owned title",
+            ));
+        }
+        let main = self.native_main()?;
+        for child in main.as_node().children().collect::<Vec<_>>() {
+            if !is_managed_title(&child) {
+                child.detach();
+            }
+        }
+        let body = fragment.select_first("body").expect("fragment has a body");
+        for child in body.as_node().children().collect::<Vec<_>>() {
+            main.as_node().append(child);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn managed_style_css(&self) -> Result<String> {
+        let mut styles = self
+            .root
+            .select("head > style[data-fractal-style]")
+            .expect("static selector");
+        let style = styles.next().ok_or_else(|| {
+            FractalError::invalid_input("native document needs a managed style; repair it first")
+        })?;
+        if styles.next().is_some() {
+            return Err(FractalError::invalid_input(
+                "native document has more than one managed style",
+            ));
+        }
+        Ok(style.text_contents())
+    }
+
+    pub(crate) fn set_managed_style_css(&self, css: &str) -> Result<()> {
+        let style = self
+            .root
+            .select_first("head > style[data-fractal-style]")
+            .map_err(|_| FractalError::invalid_input("native document needs a managed style"))?;
+        for child in style.as_node().children().collect::<Vec<_>>() {
+            child.detach();
+        }
+        style.as_node().append(NodeRef::new_text(css));
+        Ok(())
+    }
+
+    pub(crate) fn user_metadata_html(&self) -> Result<String> {
+        let head = self.head()?;
+        serialize_children_matching(head.as_node(), is_user_meta)
+    }
+
+    pub(crate) fn head_links_html(&self) -> Result<String> {
+        let head = self.head()?;
+        serialize_children_matching(head.as_node(), |child| element_name(child) == Some("link"))
+    }
+
+    pub(crate) fn set_user_metadata_html(&self, html: &str) -> Result<()> {
+        let nodes = head_fragment_nodes(html, "meta")?;
+        if nodes.iter().any(|node| !is_user_meta(node)) {
+            return Err(FractalError::invalid_input(
+                "required Fractal metadata cannot be changed through the metadata section",
+            ));
+        }
+        self.replace_head_children(is_user_meta, nodes)
+    }
+
+    pub(crate) fn set_head_links_html(&self, html: &str) -> Result<()> {
+        let nodes = head_fragment_nodes(html, "link")?;
+        self.replace_head_children(|node| element_name(node) == Some("link"), nodes)
+    }
+
+    pub(crate) fn repair_managed_structure(&self, default_style: &str) -> Result<()> {
+        let main = self.native_main()?;
+        if self.managed_title_count() == 0 {
+            let title = self.title().unwrap_or_else(|| "Untitled".into());
+            if let Ok(h1) = self.root.select_first("main[data-fractal-document] > h1") {
+                h1.attributes
+                    .borrow_mut()
+                    .insert("data-fractal-title", String::new());
+            } else {
+                let fragment = body_fragment(&format!(
+                    "<h1 data-fractal-title>{}</h1>",
+                    escape_html(&title)
+                ))?;
+                let h1 = fragment.select_first("h1").expect("created title");
+                if let Some(first) = main.as_node().first_child() {
+                    first.insert_before(h1.as_node().clone());
+                } else {
+                    main.as_node().append(h1.as_node().clone());
+                }
+            }
+        }
+        if self.managed_style_count() == 0 {
+            if let Ok(style) = self.root.select_first("head > style") {
+                style
+                    .attributes
+                    .borrow_mut()
+                    .insert("data-fractal-style", String::new());
+            } else {
+                let nodes = head_fragment_nodes(
+                    &format!("<style data-fractal-style>{default_style}</style>"),
+                    "style",
+                )?;
+                let head = self.head()?;
+                for node in nodes {
+                    head.as_node().append(node);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn native_main(&self) -> Result<brik::NodeDataRef<brik::ElementData>> {
+        self.root
+            .select_first("main[data-fractal-document]")
+            .map_err(|_| FractalError::invalid_input("native document needs a document root"))
+    }
+
+    fn head(&self) -> Result<brik::NodeDataRef<brik::ElementData>> {
+        self.root
+            .select_first("head")
+            .map_err(|_| FractalError::invalid_input("native document needs a head"))
+    }
+
+    fn replace_head_children<F>(&self, matches: F, nodes: Vec<NodeRef>) -> Result<()>
+    where
+        F: Fn(&NodeRef) -> bool,
+    {
+        let head = self.head()?;
+        for child in head.as_node().children().collect::<Vec<_>>() {
+            if matches(&child) {
+                child.detach();
+            }
+        }
+        for node in nodes {
+            head.as_node().append(node);
+        }
+        Ok(())
     }
 
     pub(crate) fn has_html_doctype(&self) -> bool {
@@ -634,6 +803,75 @@ impl Document {
         }
         Ok(())
     }
+}
+
+fn element_name(node: &NodeRef) -> Option<&str> {
+    Some(node.as_element()?.name.local.as_ref())
+}
+
+fn is_managed_title(node: &NodeRef) -> bool {
+    node.as_element().is_some_and(|element| {
+        element.name.local.as_ref() == "h1"
+            && element.attributes.borrow().contains("data-fractal-title")
+    })
+}
+
+fn is_user_meta(node: &NodeRef) -> bool {
+    let Some(element) = node.as_element() else {
+        return false;
+    };
+    if element.name.local.as_ref() != "meta" {
+        return false;
+    }
+    let attributes = element.attributes.borrow();
+    if attributes.contains("charset") {
+        return false;
+    }
+    !attributes.get("name").is_some_and(|name| {
+        name.eq_ignore_ascii_case("fractal-format") || name.eq_ignore_ascii_case("viewport")
+    })
+}
+
+fn serialize_children_matching<F>(parent: &NodeRef, matches: F) -> Result<String>
+where
+    F: Fn(&NodeRef) -> bool,
+{
+    let mut output = Vec::new();
+    for child in parent.children() {
+        if matches(&child) {
+            child.serialize(&mut output)?;
+        }
+    }
+    Ok(String::from_utf8(output)?)
+}
+
+fn body_fragment(html: &str) -> Result<NodeRef> {
+    let fragment = brik::parse_html().one(format!("<body>{html}</body>"));
+    fragment
+        .select_first("body")
+        .map_err(|_| FractalError::invalid_input("could not parse page content"))?;
+    Ok(fragment)
+}
+
+fn head_fragment_nodes(html: &str, expected: &str) -> Result<Vec<NodeRef>> {
+    let fragment = brik::parse_html().one(format!("<html><head>{html}</head><body></body></html>"));
+    let head = fragment
+        .select_first("head")
+        .map_err(|_| FractalError::invalid_input("could not parse head section"))?;
+    let nodes: Vec<_> = head
+        .as_node()
+        .children()
+        .filter(|node| node.as_element().is_some())
+        .collect();
+    if nodes
+        .iter()
+        .any(|node| element_name(node) != Some(expected))
+    {
+        return Err(FractalError::invalid_input(format!(
+            "this section accepts only <{expected}> elements"
+        )));
+    }
+    Ok(nodes)
 }
 
 pub(crate) fn export_reference_id(path: &str) -> String {

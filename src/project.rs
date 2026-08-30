@@ -18,6 +18,32 @@ const MIN_SUPPORTED_VERSION: u32 = 1;
 const VERSION: u32 = 2;
 const NATIVE_SUFFIX: &str = ".fractal.html";
 const TRANSACTION_PREFIX: &str = ".fractal-transaction-";
+const DEFAULT_STYLE: &str = r#"
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #0c0c0a;
+      color: #e8e1d5;
+      font: 1.125rem/1.65 ui-sans-serif, system-ui, sans-serif;
+    }
+    main {
+      width: min(100% - 2rem, 45rem);
+      margin: 0 auto;
+      padding: clamp(4rem, 12vh, 8rem) 0;
+    }
+    h1 {
+      margin: 0 0 2.5rem;
+      font-size: clamp(2.75rem, 8vw, 4rem);
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+    h2, h3, h4, h5, h6 { line-height: 1.2; }
+    p, ul, ol, blockquote, pre, figure, table { margin: 1.25rem 0; }
+    a { color: #e8bb4d; text-underline-offset: 0.18em; }
+    img, iframe { max-width: 100%; }
+    code, pre { font-family: ui-monospace, monospace; }
+  "#;
 
 #[derive(Debug)]
 pub struct Project {
@@ -263,6 +289,34 @@ impl Project {
         Ok(self.stored(path.as_ref())?.html.clone())
     }
 
+    pub fn native_document_parts(&self, path: impl AsRef<Path>) -> Result<NativeDocumentParts> {
+        let stored = self.stored(path.as_ref())?;
+        if stored.page.kind != PageKind::Native {
+            return Err(FractalError::invalid_input(
+                "document parts are only available for native documents",
+            ));
+        }
+        let document = Document::parse(&stored.html);
+        let title = document.title().unwrap_or_default();
+        let content_html = document.content_html()?;
+        let style_css = document.managed_style_css()?;
+        let metadata_html = document.user_metadata_html()?;
+        let head_links_html = document.head_links_html()?;
+        Ok(NativeDocumentParts {
+            title_hash: content_hash(&title),
+            title,
+            content_hash: content_hash(&content_html),
+            content_html,
+            style_hash: content_hash(&style_css),
+            style_css,
+            metadata_hash: content_hash(&metadata_html),
+            metadata_html,
+            head_links_hash: content_hash(&head_links_html),
+            head_links_html,
+            source_hash: stored.page.content_hash.clone(),
+        })
+    }
+
     pub fn export_html(
         &self,
         path: impl AsRef<Path>,
@@ -505,15 +559,42 @@ impl Project {
     /// The source update, path change, explicit-link rewrites, and folder order
     /// update commit as one recoverable transaction.
     pub fn set_page_title(&mut self, path: impl AsRef<Path>, title: &str) -> Result<Mutation> {
+        self.set_page_title_inner(path.as_ref(), title, None)
+    }
+
+    pub fn set_page_title_if_unchanged(
+        &mut self,
+        path: impl AsRef<Path>,
+        title: &str,
+        expected_hash: &str,
+    ) -> Result<Mutation> {
+        self.set_page_title_inner(path.as_ref(), title, Some(expected_hash))
+    }
+
+    fn set_page_title_inner(
+        &mut self,
+        path: &Path,
+        title: &str,
+        expected_hash: Option<&str>,
+    ) -> Result<Mutation> {
         let title = title.trim();
         let stem = slug(title)?;
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
-        let from = self.existing_path(path.as_ref())?;
+        let from = self.existing_path(path)?;
         if page_kind(&from) != PageKind::Native {
             return Err(FractalError::invalid_input(
                 "titles can only be changed on native documents",
             ));
+        }
+        if let Some(expected_hash) = expected_hash {
+            let actual_title = self.stored(&from)?.page.title.as_deref().unwrap_or("");
+            let actual_hash = content_hash(actual_title);
+            if actual_hash != expected_hash {
+                return Err(FractalError::conflict(format!(
+                    "title changed since it was read (expected {expected_hash}, found {actual_hash})"
+                )));
+            }
         }
         let to = from.with_file_name(format!("{stem}{NATIVE_SUFFIX}"));
         self.rename_native_with_title(&from, &to, Some(title))
@@ -542,7 +623,9 @@ impl Project {
             "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <meta name=\"fractal-format\" content=\"1\">\n  <title>{}</title>\n  <style>\n    :root {{ color-scheme: dark; }}\n    * {{ box-sizing: border-box; }}\n    body {{\n      margin: 0;\n      background: #0c0c0a;\n      color: #e8e1d5;\n      font: 1.125rem/1.65 ui-sans-serif, system-ui, sans-serif;\n    }}\n    main {{\n      width: min(100% - 2rem, 45rem);\n      margin: 0 auto;\n      padding: clamp(4rem, 12vh, 8rem) 0;\n    }}\n    h1 {{\n      margin: 0 0 2.5rem;\n      font-size: clamp(2.75rem, 8vw, 4rem);\n      line-height: 1;\n      letter-spacing: -0.04em;\n    }}\n    h2, h3, h4, h5, h6 {{ line-height: 1.2; }}\n    p, ul, ol, blockquote, pre, figure, table {{ margin: 1.25rem 0; }}\n    a {{ color: #e8bb4d; text-underline-offset: 0.18em; }}\n    img, iframe {{ max-width: 100%; }}\n    code, pre {{ font-family: ui-monospace, monospace; }}\n  </style>\n</head>\n<body>\n  <main data-fractal-document>\n    <h1>{}</h1>\n  </main>\n</body>\n</html>\n",
             escape_html(title),
             escape_html(title)
-        );
+        )
+        .replace("<style>", "<style data-fractal-style>")
+        .replace("<h1>", "<h1 data-fractal-title>");
         let mut writes = vec![(relative.clone(), html)];
         let mut changed = vec![relative.clone()];
         if let Some(write) = self.folder_metadata_child_change(
@@ -567,24 +650,24 @@ impl Project {
         })
     }
 
-    pub fn write_page(&mut self, path: impl AsRef<Path>, html: &str) -> Result<Mutation> {
-        self.write_page_inner(path.as_ref(), html, None)
+    pub fn write_raw_page(&mut self, path: impl AsRef<Path>, html: &str) -> Result<Mutation> {
+        self.write_raw_page_inner(path.as_ref(), html, None)
     }
 
     /// Replaces a page only when its current source hash matches `expected_hash`.
     ///
     /// Fractal holds the project lock while it refreshes the page, compares the
     /// hash, and atomically replaces the file.
-    pub fn write_page_if_unchanged(
+    pub fn write_raw_page_if_unchanged(
         &mut self,
         path: impl AsRef<Path>,
         html: &str,
         expected_hash: &str,
     ) -> Result<Mutation> {
-        self.write_page_inner(path.as_ref(), html, Some(expected_hash))
+        self.write_raw_page_inner(path.as_ref(), html, Some(expected_hash))
     }
 
-    fn write_page_inner(
+    fn write_raw_page_inner(
         &mut self,
         path: &Path,
         html: &str,
@@ -603,14 +686,134 @@ impl Project {
             }
         }
         if page_kind(&relative) == PageKind::Native {
-            let issues = native_document_issues(&Document::parse(html));
-            if let Some(issue) = issues.first() {
-                return Err(FractalError::invalid_input(format!(
-                    "invalid native document: {issue}"
-                )));
-            }
+            return Err(FractalError::invalid_input(
+                "whole-source writes are only available for raw HTML; use a native section mutation",
+            ));
         }
         atomic_write(&self.root.join(PAGES).join(&relative), html)?;
+        self.reload()?;
+        Ok(Mutation {
+            changed: vec![relative],
+            deleted: vec![],
+        })
+    }
+
+    pub fn set_page_content(
+        &mut self,
+        path: impl AsRef<Path>,
+        html: &str,
+        expected_hash: &str,
+    ) -> Result<Mutation> {
+        self.mutate_native_section(path.as_ref(), expected_hash, "content", |document| {
+            document.set_content_html(html)
+        })
+    }
+
+    pub fn set_page_style(
+        &mut self,
+        path: impl AsRef<Path>,
+        css: &str,
+        expected_hash: &str,
+    ) -> Result<Mutation> {
+        self.mutate_native_section(path.as_ref(), expected_hash, "style", |document| {
+            document.set_managed_style_css(css)
+        })
+    }
+
+    pub fn restore_default_page_style(
+        &mut self,
+        path: impl AsRef<Path>,
+        expected_hash: &str,
+    ) -> Result<Mutation> {
+        self.set_page_style(path, DEFAULT_STYLE, expected_hash)
+    }
+
+    pub fn set_page_metadata(
+        &mut self,
+        path: impl AsRef<Path>,
+        html: &str,
+        expected_hash: &str,
+    ) -> Result<Mutation> {
+        self.mutate_native_section(path.as_ref(), expected_hash, "metadata", |document| {
+            document.set_user_metadata_html(html)
+        })
+    }
+
+    pub fn set_page_head_links(
+        &mut self,
+        path: impl AsRef<Path>,
+        html: &str,
+        expected_hash: &str,
+    ) -> Result<Mutation> {
+        self.mutate_native_section(path.as_ref(), expected_hash, "head links", |document| {
+            document.set_head_links_html(html)
+        })
+    }
+
+    pub fn repair_page_structure(&mut self, path: impl AsRef<Path>) -> Result<Mutation> {
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
+        let relative = self.existing_path(path.as_ref())?;
+        if page_kind(&relative) != PageKind::Native {
+            return Err(FractalError::invalid_input(
+                "structure repair is only available for native documents",
+            ));
+        }
+        let document = Document::parse(&self.stored(&relative)?.html);
+        document.repair_managed_structure(DEFAULT_STYLE)?;
+        self.commit_native_document(relative, document)
+    }
+
+    fn mutate_native_section<F>(
+        &mut self,
+        path: &Path,
+        expected_hash: &str,
+        section: &str,
+        mutate: F,
+    ) -> Result<Mutation>
+    where
+        F: FnOnce(&Document) -> Result<()>,
+    {
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
+        let relative = self.existing_path(path)?;
+        if page_kind(&relative) != PageKind::Native {
+            return Err(FractalError::invalid_input(
+                "native section mutations require a native document",
+            ));
+        }
+        let document = Document::parse(&self.stored(&relative)?.html);
+        let actual_hash = match section {
+            "content" => content_hash(&document.content_html()?),
+            "style" => content_hash(&document.managed_style_css()?),
+            "metadata" => content_hash(&document.user_metadata_html()?),
+            "head links" => content_hash(&document.head_links_html()?),
+            _ => unreachable!(),
+        };
+        if actual_hash != expected_hash {
+            return Err(FractalError::conflict(format!(
+                "{section} changed since it was read (expected {expected_hash}, found {actual_hash})"
+            )));
+        }
+        mutate(&document)?;
+        self.commit_native_document(relative, document)
+    }
+
+    fn commit_native_document(
+        &mut self,
+        relative: PathBuf,
+        document: Document,
+    ) -> Result<Mutation> {
+        let issues = native_document_issues(&document);
+        if let Some(issue) = issues.first() {
+            return Err(FractalError::invalid_input(format!(
+                "invalid native document: {issue}"
+            )));
+        }
+        atomic_write(
+            &self.root.join(PAGES).join(&relative),
+            &document.serialize()?,
+        )?;
         self.reload()?;
         Ok(Mutation {
             changed: vec![relative],
@@ -1968,6 +2171,17 @@ fn native_document_issues(document: &Document) -> Vec<String> {
     }
     if document.native_root_count() != 1 {
         issues.push("native document needs exactly one `<main data-fractal-document>`".into());
+    }
+    if document.managed_title_count() != 1 {
+        issues.push(
+            "native document needs exactly one `<h1 data-fractal-title>` directly inside its document root"
+                .into(),
+        );
+    }
+    if document.managed_style_count() != 1 {
+        issues.push(
+            "native document needs exactly one `<style data-fractal-style>` in its head".into(),
+        );
     }
     let outside = document.body_elements_outside_native_root();
     if !outside.is_empty() {

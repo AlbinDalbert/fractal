@@ -33,7 +33,7 @@ Prefer a direct function over a framework. Add a module only when one of these f
 ## Mutation rules
 
 - Resolve and contain paths before accessing files.
-- Validate candidate page source before replacing an existing page.
+- Validate the complete candidate native document after changing one owned section.
 - Lock `fractal.json` across each mutation and refresh the catalog after taking the lock.
 - Hash exact page source bytes with SHA-256. Do not use modification times for conflict checks.
 - Compare an expected hash and replace the page inside the same locked operation.
@@ -45,6 +45,8 @@ Prefer a direct function over a framework. Add a module only when one of these f
 - Commit folder deletion with one same-filesystem rename. Stage batch deletion as a recoverable locked transaction.
 - Update links and iframe sources only inside native documents.
 - Never semantically rewrite raw HTML.
+- Permit whole-source replacement only for raw HTML. Native callers edit content, managed CSS, user metadata, and head links through separate operations.
+- Compare native section hashes under the project lock so disjoint concurrent edits merge without overwriting one another.
 - Reload the in-memory catalog after mutations.
 
 Folder HTML export is a derived read operation. It walks the in-memory folder catalog, validates selected native documents, rewrites links in temporary DOMs, and writes only the requested output file. It does not rewrite project documents or folder metadata.

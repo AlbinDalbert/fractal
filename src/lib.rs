@@ -12,9 +12,9 @@ pub use project::Project;
 pub use types::{
     Backlink, DerivedLink, Folder, FolderChild, FolderChildKind, FolderChildStatus,
     FolderHtmlExportOptions, FolderHtmlExportReport, FolderIssue, HtmlExportOptions,
-    HtmlExportReport, Iframe, IframeBacklink, IframeTarget, Link, LinkTarget, Mutation, Page,
-    PageKind, ProjectManifest, SearchResult, SkippedExportPage, TextOccurrence, TextPosition,
-    ValidationIssue, ValidationReport,
+    HtmlExportReport, Iframe, IframeBacklink, IframeTarget, Link, LinkTarget, Mutation,
+    NativeDocumentParts, Page, PageKind, ProjectManifest, SearchResult, SkippedExportPage,
+    TextOccurrence, TextPosition, ValidationIssue, ValidationReport,
 };
 
 pub type Result<T> = std::result::Result<T, FractalError>;
