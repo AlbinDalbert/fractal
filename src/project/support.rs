@@ -316,12 +316,16 @@ pub(super) fn collect_files(
 }
 
 pub(super) fn atomic_write(path: &Path, contents: &str) -> Result<()> {
+    atomic_write_bytes(path, contents.as_bytes())
+}
+
+pub(super) fn atomic_write_bytes(path: &Path, contents: &[u8]) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| FractalError::invalid_input("file path needs a parent directory"))?;
     fs::create_dir_all(parent)?;
     let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-    temp.write_all(contents.as_bytes())?;
+    temp.write_all(contents)?;
     temp.as_file().sync_all()?;
     temp.persist(path).map_err(|error| error.error)?;
     Ok(())
@@ -331,6 +335,10 @@ pub(super) fn atomic_write(path: &Path, contents: &str) -> Result<()> {
 pub(super) struct TransactionPlan {
     affected: Vec<PathBuf>,
     originals: BTreeSet<PathBuf>,
+    #[serde(default)]
+    create_directories: Vec<PathBuf>,
+    #[serde(default)]
+    remove_directories: Vec<PathBuf>,
 }
 
 pub(super) struct ProjectLock {
@@ -345,18 +353,31 @@ impl ProjectLock {
     }
 }
 
-pub(super) fn commit_file_transaction(
+pub(super) fn commit_file_transaction<T: AsRef<[u8]>>(
     root: &Path,
-    writes: Vec<(PathBuf, String)>,
+    writes: Vec<(PathBuf, T)>,
     deletes: Vec<PathBuf>,
 ) -> Result<()> {
-    let writes: BTreeMap<PathBuf, String> = writes.into_iter().collect();
+    commit_file_transaction_with_directories(root, writes, deletes, vec![], vec![])
+}
+
+pub(super) fn commit_file_transaction_with_directories<T: AsRef<[u8]>>(
+    root: &Path,
+    writes: Vec<(PathBuf, T)>,
+    deletes: Vec<PathBuf>,
+    create_directories: Vec<PathBuf>,
+    remove_directories: Vec<PathBuf>,
+) -> Result<()> {
+    let writes: BTreeMap<PathBuf, T> = writes.into_iter().collect();
     let mut affected: BTreeSet<PathBuf> = writes.keys().cloned().collect();
     affected.extend(deletes);
-    if affected.is_empty() {
+    if affected.is_empty() && create_directories.is_empty() && remove_directories.is_empty() {
         return Ok(());
     }
     reject_overlapping_transaction_paths(&affected)?;
+    for path in create_directories.iter().chain(&remove_directories) {
+        validate_transaction_path(path)?;
+    }
 
     let pages = root.join(PAGES);
     let transaction = tempfile::Builder::new()
@@ -373,6 +394,8 @@ pub(super) fn commit_file_transaction(
     let plan = TransactionPlan {
         affected: affected.iter().cloned().collect(),
         originals,
+        create_directories,
+        remove_directories,
     };
     atomic_write(
         &transaction_root.join("plan.json"),
@@ -380,26 +403,44 @@ pub(super) fn commit_file_transaction(
     )?;
 
     for (path, contents) in &writes {
-        atomic_write(&new_root.join(path), contents)?;
+        atomic_write_bytes(&new_root.join(path), contents.as_ref())?;
     }
+    sync_directory_tree(transaction_root)?;
+    sync_directory(root)?;
 
     let result = (|| -> Result<()> {
+        for path in &plan.create_directories {
+            fs::create_dir_all(pages.join(path))?;
+        }
+        sync_directory_tree(&pages)?;
         for path in &plan.affected {
             let source = pages.join(path);
             if path_exists(&source) {
                 let backup = old_root.join(path);
                 create_parent(&backup)?;
-                fs::rename(source, backup)?;
+                fs::rename(&source, &backup)?;
+                sync_rename_parents(&source, &old_root.join(path))?;
             }
         }
         for path in writes.keys() {
             let source = new_root.join(path);
             let destination = pages.join(path);
             create_parent(&destination)?;
-            fs::rename(source, destination)?;
+            fs::rename(&source, &destination)?;
+            sync_rename_parents(&new_root.join(path), &pages.join(path))?;
+        }
+        for path in &plan.remove_directories {
+            fs::remove_dir_all(pages.join(path))?;
+            sync_directory(
+                pages
+                    .join(path)
+                    .parent()
+                    .expect("project-relative directory has a parent"),
+            )?;
         }
         let committed = File::create(transaction_root.join("committed"))?;
         committed.sync_all()?;
+        sync_directory(transaction_root)?;
         Ok(())
     })();
 
@@ -417,7 +458,8 @@ pub(super) fn commit_file_transaction(
         return Err(error);
     }
 
-    drop(transaction);
+    transaction.close()?;
+    sync_directory(root)?;
     Ok(())
 }
 
@@ -449,6 +491,13 @@ pub(super) fn recover_transaction(transaction_root: &Path) -> Result<()> {
     let plan: TransactionPlan = serde_json::from_str(&fs::read_to_string(plan_path)?)?;
     let affected: BTreeSet<PathBuf> = plan.affected.iter().cloned().collect();
     reject_overlapping_transaction_paths(&affected)?;
+    for path in plan
+        .create_directories
+        .iter()
+        .chain(&plan.remove_directories)
+    {
+        validate_transaction_path(path)?;
+    }
     let root = transaction_root
         .parent()
         .ok_or_else(|| FractalError::invalid_project("transaction has no project root"))?;
@@ -465,22 +514,16 @@ pub(super) fn recover_transaction(transaction_root: &Path) -> Result<()> {
             remove_path_if_present(&current)?;
         }
     }
+    for path in plan.create_directories.iter().rev() {
+        remove_path_if_present(&pages.join(path))?;
+    }
     fs::remove_dir_all(transaction_root)?;
     Ok(())
 }
 
 pub(super) fn reject_overlapping_transaction_paths(paths: &BTreeSet<PathBuf>) -> Result<()> {
     for path in paths {
-        if path.as_os_str().is_empty()
-            || path
-                .components()
-                .any(|component| !matches!(component, Component::Normal(_)))
-        {
-            return Err(FractalError::invalid_project(format!(
-                "transaction contains an invalid path: {}",
-                path.display()
-            )));
-        }
+        validate_transaction_path(path)?;
         if paths
             .iter()
             .any(|other| other != path && path_starts_with(path, other))
@@ -493,10 +536,51 @@ pub(super) fn reject_overlapping_transaction_paths(paths: &BTreeSet<PathBuf>) ->
     Ok(())
 }
 
+fn validate_transaction_path(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(FractalError::invalid_project(format!(
+            "transaction contains an invalid path: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 pub(super) fn create_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
+    Ok(())
+}
+
+fn sync_rename_parents(from: &Path, to: &Path) -> Result<()> {
+    if let Some(parent) = from.parent() {
+        sync_directory(parent)?;
+    }
+    if to.parent() != from.parent() {
+        if let Some(parent) = to.parent() {
+            sync_directory(parent)?;
+        }
+    }
+    Ok(())
+}
+
+fn sync_directory_tree(root: &Path) -> Result<()> {
+    let mut directories = Vec::new();
+    collect_directories(root, root, &mut directories)?;
+    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    for directory in directories {
+        sync_directory(&root.join(directory))?;
+    }
+    sync_directory(root)
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)?.sync_all()?;
     Ok(())
 }
 

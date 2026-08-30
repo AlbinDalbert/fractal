@@ -4,6 +4,8 @@ use super::*;
 impl Project {
     pub fn init(path: impl AsRef<Path>, name: impl Into<String>) -> Result<Self> {
         let root = path.as_ref();
+        let name = name.into();
+        validate_project_name(&name)?;
         if root.exists() && root.read_dir()?.next().is_some() {
             return Err(FractalError::already_exists(format!(
                 "directory is not empty: {}",
@@ -12,7 +14,7 @@ impl Project {
         }
         fs::create_dir_all(root.join(PAGES))?;
         let manifest = ProjectManifest {
-            name: name.into(),
+            name,
             version: VERSION,
         };
         atomic_write(
@@ -34,6 +36,8 @@ impl Project {
         let _lock = ProjectLock::exclusive(&manifest_path)?;
         recover_transactions(&root)?;
         let manifest: ProjectManifest = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+        validate_project_name(&manifest.name)
+            .map_err(|_| FractalError::invalid_project("project name cannot be empty"))?;
         if !(MIN_SUPPORTED_VERSION..=VERSION).contains(&manifest.version) {
             return Err(FractalError::unsupported_version(format!(
                 "unsupported project version {}",
@@ -75,4 +79,11 @@ impl Project {
             .map(|stored| stored.folder.clone())
             .collect()
     }
+}
+
+fn validate_project_name(name: &str) -> Result<()> {
+    if name.trim().is_empty() {
+        return Err(FractalError::invalid_input("project name cannot be empty"));
+    }
+    Ok(())
 }

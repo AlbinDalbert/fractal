@@ -381,13 +381,22 @@ impl Project {
         }
         let mut old_files = Vec::new();
         collect_files(&pages, &pages.join(from), &mut old_files)?;
+        let mut old_directories = Vec::new();
+        collect_directories(&pages, &pages.join(from), &mut old_directories)?;
         let new_files: Vec<PathBuf> = old_files
             .iter()
             .map(|path| Ok(to.join(path.strip_prefix(from)?)))
             .collect::<Result<_>>()?;
+        let mut new_directories = vec![to.to_path_buf()];
+        new_directories.extend(old_directories.iter().map(|path| {
+            to.join(
+                path.strip_prefix(from)
+                    .expect("collected directory is below renamed folder"),
+            )
+        }));
         let old_prefix = path_string(from);
         let new_prefix = path_string(to);
-        let mut rewrites = Vec::new();
+        let mut rewrites = BTreeMap::new();
         for stored in self.pages.values() {
             if stored.page.kind != PageKind::Native {
                 continue;
@@ -410,40 +419,46 @@ impl Project {
                 &new_prefix,
             );
             if changes > 0 {
-                rewrites.push((new_source, document.serialize()?));
+                rewrites.insert(
+                    PathBuf::from(new_source),
+                    document.serialize()?.into_bytes(),
+                );
             }
         }
-        fs::rename(pages.join(from), pages.join(to))?;
-        let result = (|| -> Result<()> {
-            for (path, html) in rewrites {
-                atomic_write(&pages.join(path), &html)?;
+        for (old, new) in old_files.iter().zip(&new_files) {
+            if !rewrites.contains_key(new) {
+                rewrites.insert(new.clone(), fs::read(pages.join(old))?);
             }
-            let from_parent = from.parent().unwrap_or_else(|| Path::new(""));
-            let to_parent = to.parent().unwrap_or_else(|| Path::new(""));
-            let from_name = from
-                .file_name()
-                .expect("folder has a name")
-                .to_string_lossy();
-            let to_name = to.file_name().expect("folder has a name").to_string_lossy();
-            let metadata_writes: Vec<_> = if from_parent == to_parent {
-                self.folder_metadata_replace_child(from_parent, &from_name, &to_name)?
-                    .into_iter()
-                    .collect()
-            } else {
-                self.folder_metadata_child_change(from_parent, Some(&from_name), None)?
-                    .into_iter()
-                    .chain(self.folder_metadata_child_change(to_parent, None, Some(&to_name))?)
-                    .collect()
-            };
-            for (path, html) in metadata_writes {
-                atomic_write(&pages.join(path), &html)?;
-            }
-            Ok(())
-        })();
-        if let Err(error) = result {
-            let _ = fs::rename(pages.join(to), pages.join(from));
-            return Err(error);
         }
+        let from_parent = from.parent().unwrap_or_else(|| Path::new(""));
+        let to_parent = to.parent().unwrap_or_else(|| Path::new(""));
+        let from_name = from
+            .file_name()
+            .expect("folder has a name")
+            .to_string_lossy();
+        let to_name = to.file_name().expect("folder has a name").to_string_lossy();
+        let metadata_writes: Vec<_> = if from_parent == to_parent {
+            self.folder_metadata_replace_child(from_parent, &from_name, &to_name)?
+                .into_iter()
+                .collect()
+        } else {
+            self.folder_metadata_child_change(from_parent, Some(&from_name), None)?
+                .into_iter()
+                .chain(self.folder_metadata_child_change(to_parent, None, Some(&to_name))?)
+                .collect()
+        };
+        rewrites.extend(
+            metadata_writes
+                .into_iter()
+                .map(|(path, contents)| (path, contents.into_bytes())),
+        );
+        commit_file_transaction_with_directories(
+            &self.root,
+            rewrites.into_iter().collect(),
+            old_files.clone(),
+            new_directories,
+            vec![from.to_path_buf()],
+        )?;
         self.reload()?;
         Ok(Mutation {
             changed: new_files,

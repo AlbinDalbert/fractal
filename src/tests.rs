@@ -85,6 +85,33 @@ fn project_has_no_generated_state() {
 }
 
 #[test]
+fn project_init_rejects_an_empty_name() {
+    let temp = TempDir::new().unwrap();
+
+    let error = Project::init(temp.path().join("empty"), " \t ").unwrap_err();
+
+    assert_eq!(error.code, crate::FractalErrorCode::InvalidInput);
+    assert!(error.message.contains("project name cannot be empty"));
+    assert!(!temp.path().join("empty").exists());
+}
+
+#[test]
+fn project_open_rejects_an_empty_name() {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir(temp.path().join("pages")).unwrap();
+    fs::write(
+        temp.path().join("fractal.json"),
+        r#"{"name":"  ","version":2}"#,
+    )
+    .unwrap();
+
+    let error = Project::open(temp.path()).unwrap_err();
+
+    assert_eq!(error.code, crate::FractalErrorCode::InvalidProject);
+    assert!(error.message.contains("project name cannot be empty"));
+}
+
+#[test]
 fn legacy_manifest_opens_without_rewriting_project_files() {
     let temp = TempDir::new().unwrap();
     fs::create_dir(temp.path().join("pages")).unwrap();
@@ -622,6 +649,62 @@ fn opening_a_project_rolls_back_an_interrupted_file_transaction() {
     let recovered = Project::open(temp.path()).unwrap();
 
     assert_eq!(recovered.source("draft").unwrap(), source);
+    assert!(!transaction.exists());
+}
+
+#[test]
+fn opening_a_project_rolls_back_an_interrupted_folder_rename() {
+    let (temp, mut project) = project();
+    project.create_page_at("section/target", "Target").unwrap();
+    project.create_page("Backlink").unwrap();
+    project
+        .write_page(
+            "backlink",
+            &native(
+                "Backlink",
+                "<a href=\"section/target.fractal.html\">Target</a>",
+            ),
+        )
+        .unwrap();
+    let target = project.source("section/target").unwrap();
+    let backlink = project.source("backlink").unwrap();
+    drop(project);
+
+    let transaction = temp.path().join(".fractal-transaction-folder-test");
+    fs::create_dir_all(transaction.join("old/section")).unwrap();
+    fs::rename(
+        temp.path().join("pages/section/target.fractal.html"),
+        transaction.join("old/section/target.fractal.html"),
+    )
+    .unwrap();
+    fs::rename(
+        temp.path().join("pages/backlink.fractal.html"),
+        transaction.join("old/backlink.fractal.html"),
+    )
+    .unwrap();
+    fs::create_dir_all(temp.path().join("pages/archive/section")).unwrap();
+    fs::write(
+        temp.path()
+            .join("pages/archive/section/target.fractal.html"),
+        "partially moved",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("pages/backlink.fractal.html"),
+        "partially rewritten",
+    )
+    .unwrap();
+    fs::write(
+        transaction.join("plan.json"),
+        r#"{"affected":["archive/section/target.fractal.html","backlink.fractal.html","section/target.fractal.html"],"originals":["backlink.fractal.html","section/target.fractal.html"]}"#,
+    )
+    .unwrap();
+
+    let recovered = Project::open(temp.path()).unwrap();
+
+    assert_eq!(recovered.source("section/target").unwrap(), target);
+    assert_eq!(recovered.source("backlink").unwrap(), backlink);
+    assert!(recovered.page("archive/section/target").is_err());
     assert!(!transaction.exists());
 }
 
