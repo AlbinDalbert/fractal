@@ -37,6 +37,18 @@ impl Document {
             .filter(|title| !title.is_empty())
     }
 
+    pub(crate) fn set_title(&self, title: &str) {
+        for selector in ["title", "main[data-fractal-document] h1"] {
+            if let Ok(node) = self.root.select_first(selector) {
+                let node = node.as_node();
+                for child in node.children().collect::<Vec<_>>() {
+                    child.detach();
+                }
+                node.append(NodeRef::new_text(title));
+            }
+        }
+    }
+
     pub(crate) fn has_html_doctype(&self) -> bool {
         self.root
             .children()
@@ -328,6 +340,56 @@ impl Document {
                 format!("{}{}", relative_href(new_source, &target), suffix),
             );
             count += 1;
+        }
+        count
+    }
+
+    pub(crate) fn rewrite_internal_prefix(
+        &self,
+        source: &str,
+        new_source: &str,
+        old_prefix: &str,
+        new_prefix: &str,
+    ) -> usize {
+        let mut count = 0;
+        for selector in ["a[href]", "iframe[src]"] {
+            for node in self.root.select(selector).expect("static selector") {
+                let attribute = if selector.starts_with('a') {
+                    "href"
+                } else {
+                    "src"
+                };
+                let mut attributes = node.attributes.borrow_mut();
+                if attribute == "src" && attributes.contains("srcdoc") {
+                    continue;
+                }
+                let Some(value) = attributes.get(attribute).map(str::to_string) else {
+                    continue;
+                };
+                let Some(target) = resolve_internal_href(source, &value) else {
+                    continue;
+                };
+                let old = Path::new(old_prefix);
+                if !Path::new(&target).starts_with(old) {
+                    continue;
+                }
+                let suffix = value
+                    .find(['?', '#'])
+                    .map(|index| &value[index..])
+                    .unwrap_or("");
+                let remainder = Path::new(&target)
+                    .strip_prefix(old)
+                    .expect("prefix checked");
+                let target = Path::new(new_prefix)
+                    .join(remainder)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                attributes.insert(
+                    attribute,
+                    format!("{}{suffix}", relative_href(new_source, &target)),
+                );
+                count += 1;
+            }
         }
         count
     }

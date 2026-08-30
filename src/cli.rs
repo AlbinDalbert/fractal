@@ -30,6 +30,10 @@ enum Command {
         folder: PathBuf,
         title: String,
     },
+    SetPageTitle {
+        page: PathBuf,
+        title: String,
+    },
     ReorderFolder {
         folder: PathBuf,
         children: Vec<String>,
@@ -53,6 +57,10 @@ enum Command {
     },
     Move {
         page: PathBuf,
+        destination: PathBuf,
+    },
+    MoveFolder {
+        folder: PathBuf,
         destination: PathBuf,
     },
     Delete {
@@ -131,6 +139,9 @@ pub fn run() -> Result<()> {
                 Command::SetFolderTitle { folder, title } => {
                     output(&project.set_folder_title(folder, &title)?, cli.json)
                 }
+                Command::SetPageTitle { page, title } => {
+                    output(&project.set_page_title(page, &title)?, cli.json)
+                }
                 Command::ReorderFolder { folder, children } => {
                     output(&project.reorder_folder(folder, children)?, cli.json)
                 }
@@ -165,6 +176,10 @@ pub fn run() -> Result<()> {
                 Command::Move { page, destination } => {
                     output(&project.move_page(page, destination)?, cli.json)
                 }
+                Command::MoveFolder {
+                    folder,
+                    destination,
+                } => output(&project.move_folder(folder, destination)?, cli.json),
                 Command::Delete { page } => output(&project.delete_page(page)?, cli.json),
                 Command::DeletePages { pages } => output(&project.delete_pages(pages)?, cli.json),
                 Command::DeleteFolder { folder } => {

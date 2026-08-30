@@ -1053,7 +1053,7 @@ fn moving_a_native_page_preserves_its_order_position() {
 }
 
 #[test]
-fn folder_titles_are_independent_of_directory_names() {
+fn setting_a_folder_title_renames_the_directory() {
     let (temp, _) = project();
     fs::create_dir(temp.path().join("pages/draft-name")).unwrap();
     let mut project = Project::open(temp.path()).unwrap();
@@ -1063,7 +1063,111 @@ fn folder_titles_are_independent_of_directory_names() {
 
     let reopened = Project::open(temp.path()).unwrap();
     assert_eq!(
-        reopened.folder("draft-name").unwrap().title,
+        reopened.folder("the-glass-garden").unwrap().title,
         "The Glass Garden"
     );
+    assert!(!temp.path().join("pages/draft-name").exists());
+}
+
+#[test]
+fn moving_a_folder_preserves_its_title_and_rewrites_references() {
+    let (temp, _) = project();
+    fs::create_dir_all(temp.path().join("pages/archive")).unwrap();
+    fs::create_dir_all(temp.path().join("pages/section")).unwrap();
+    fs::write(
+        temp.path().join("pages/section/topic.fractal.html"),
+        native("Topic", "<p>Body</p>"),
+    )
+    .unwrap();
+    fs::write(temp.path().join("pages/section/image.png"), "asset").unwrap();
+    let mut project = Project::open(temp.path()).unwrap();
+    project.create_page("Index").unwrap();
+    project
+        .write_page(
+            "index",
+            &native("Index", "<a href=\"section/topic.fractal.html\">topic</a>"),
+        )
+        .unwrap();
+
+    let mutation = project.move_folder("section", "archive/section").unwrap();
+
+    assert_eq!(project.folder("archive/section").unwrap().title, "section");
+    assert!(project
+        .source("index")
+        .unwrap()
+        .contains("archive/section/topic.fractal.html"));
+    assert!(temp
+        .path()
+        .join("pages/archive/section/image.png")
+        .is_file());
+    assert!(mutation
+        .changed
+        .contains(&std::path::PathBuf::from("archive/section/image.png")));
+    assert!(mutation
+        .deleted
+        .contains(&std::path::PathBuf::from("section/image.png")));
+}
+
+#[test]
+fn moving_a_folder_cannot_change_its_title_driven_basename() {
+    let (temp, _) = project();
+    fs::create_dir_all(temp.path().join("pages/archive")).unwrap();
+    fs::create_dir(temp.path().join("pages/section")).unwrap();
+    let mut project = Project::open(temp.path()).unwrap();
+
+    let error = project
+        .move_folder("section", "archive/renamed")
+        .unwrap_err();
+
+    assert_eq!(error.code, FractalErrorCode::InvalidInput);
+    assert!(temp.path().join("pages/section").is_dir());
+}
+
+#[test]
+fn setting_a_page_title_renames_it_and_rewrites_explicit_links() {
+    let (_temp, mut project) = project();
+    project.create_page("Old name").unwrap();
+    project.create_page("Index").unwrap();
+    project
+        .write_page(
+            "index",
+            &native("Index", "<a href=\"old-name.fractal.html\">old</a>"),
+        )
+        .unwrap();
+
+    project
+        .set_page_title("old-name", "Guns Akimbo and other Stuff")
+        .unwrap();
+
+    assert_eq!(
+        project
+            .page("guns-akimbo-and-other-stuff")
+            .unwrap()
+            .title
+            .as_deref(),
+        Some("Guns Akimbo and other Stuff")
+    );
+    assert!(project
+        .source("index")
+        .unwrap()
+        .contains("guns-akimbo-and-other-stuff.fractal.html"));
+}
+
+#[test]
+fn opening_repairs_title_path_mismatches() {
+    let (temp, mut project) = project();
+    project.create_page("Correct title").unwrap();
+    fs::rename(
+        temp.path().join("pages/correct-title.fractal.html"),
+        temp.path().join("pages/wrong.fractal.html"),
+    )
+    .unwrap();
+    drop(project);
+
+    let project = Project::open(temp.path()).unwrap();
+    assert_eq!(
+        project.page("correct-title").unwrap().title.as_deref(),
+        Some("Correct title")
+    );
+    assert!(!temp.path().join("pages/wrong.fractal.html").exists());
 }

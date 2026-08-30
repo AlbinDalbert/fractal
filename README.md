@@ -40,7 +40,7 @@ The manifest version identifies the Fractal project format, independently of the
 
 A native document needs a safe relative `.fractal.html` path, a format marker, an identifiable title, and one document root. Its content uses standard semantic HTML. A raw `.html` file has no Fractal structure requirements.
 
-Any folder below `pages/`, including `pages/` itself, may contain its own `fractal.json` with a display title and an explicit order for direct child folders and native documents. Without that file, the title comes from the folder name and children use folder-first alphabetical order. The pages root uses the project name as its default title.
+Any folder below `pages/`, including `pages/` itself, may contain its own `fractal.json` with a title and an explicit order for direct child folders and native documents. Native filenames and nested directory names are kebab-case forms of their titles. Title changes rename them and update stored internal references. Project opening repairs mismatches or fails if the rename cannot complete. Raw HTML paths remain independent. Without folder metadata, the title comes from the folder name and children use folder-first alphabetical order. The pages root uses the project name as its default title.
 
 See [`docs/format-contract.md`](docs/format-contract.md) for the complete contract.
 
@@ -73,6 +73,8 @@ fractal --project <root> list
 fractal --project <root> folders
 fractal --project <root> folder <folder>
 fractal --project <root> set-folder-title <folder> <title>
+fractal --project <root> set-page-title <page> <title>
+fractal --project <root> move-folder <folder> <destination>
 fractal --project <root> reorder-folder <folder> <child>...
 fractal --project <root> read <page> [--source]
 fractal --project <root> new <title> [--path <path>]

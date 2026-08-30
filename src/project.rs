@@ -96,6 +96,7 @@ impl Project {
             folders: BTreeMap::new(),
         };
         project.reload()?;
+        project.repair_title_paths()?;
         Ok(project)
     }
 
@@ -147,12 +148,34 @@ impl Project {
                 display_folder_path(&path)
             ))
         })?;
+        if !path.as_os_str().is_empty() {
+            let destination = path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(slug(title)?);
+            if destination != path && path_exists(&self.root.join(PAGES).join(&destination)) {
+                return Err(FractalError::already_exists(format!(
+                    "folder already exists: {}",
+                    destination.display()
+                )));
+            }
+        }
         let metadata = FolderMetadata {
             title: title.trim().to_owned(),
             order: stored
                 .metadata
                 .as_ref()
                 .and_then(|value| value.order.clone()),
+        };
+        let resulting_metadata_path = if path.as_os_str().is_empty() {
+            folder_metadata_relative_path(&path)
+        } else {
+            folder_metadata_relative_path(
+                &path
+                    .parent()
+                    .unwrap_or_else(|| Path::new(""))
+                    .join(slug(title)?),
+            )
         };
         self.upgrade_contract_for_folder_metadata()?;
         let metadata_path = folder_metadata_relative_path(&path);
@@ -165,8 +188,9 @@ impl Project {
             vec![],
         )?;
         self.reload()?;
+        self.repair_title_paths()?;
         Ok(Mutation {
-            changed: vec![metadata_path],
+            changed: vec![resulting_metadata_path],
             deleted: vec![],
         })
     }
@@ -476,6 +500,25 @@ impl Project {
         Ok(self.stored(path.as_ref())?.page.content_hash.clone())
     }
 
+    /// Changes a native document title and derives its filename from that title.
+    ///
+    /// The source update, path change, explicit-link rewrites, and folder order
+    /// update commit as one recoverable transaction.
+    pub fn set_page_title(&mut self, path: impl AsRef<Path>, title: &str) -> Result<Mutation> {
+        let title = title.trim();
+        let stem = slug(title)?;
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
+        let from = self.existing_path(path.as_ref())?;
+        if page_kind(&from) != PageKind::Native {
+            return Err(FractalError::invalid_input(
+                "titles can only be changed on native documents",
+            ));
+        }
+        let to = from.with_file_name(format!("{stem}{NATIVE_SUFFIX}"));
+        self.rename_native_with_title(&from, &to, Some(title))
+    }
+
     pub fn create_page(&mut self, title: &str) -> Result<Mutation> {
         let stem = slug(title)?;
         self.create_page_at(format!("{stem}{NATIVE_SUFFIX}"), title)
@@ -657,6 +700,106 @@ impl Project {
         Ok(Mutation {
             changed,
             deleted: vec![from],
+        })
+    }
+
+    /// Moves a folder to another parent without changing its title.
+    ///
+    /// The destination is the complete path below `pages/`. Its basename must
+    /// remain the kebab-case form of the folder title.
+    pub fn move_folder(
+        &mut self,
+        from: impl AsRef<Path>,
+        to: impl AsRef<Path>,
+    ) -> Result<Mutation> {
+        let from = normalize_relative_path(from.as_ref())?;
+        let to = normalize_relative_path(to.as_ref())?;
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
+        let stored = self.folders.get(&path_string(&from)).ok_or_else(|| {
+            FractalError::not_found(format!("folder does not exist: {}", from.display()))
+        })?;
+        let expected_name = slug(&stored.folder.title)?;
+        if to.file_name().and_then(|name| name.to_str()) != Some(expected_name.as_str()) {
+            return Err(FractalError::invalid_input(format!(
+                "folder destination must end in `{expected_name}` to match its title"
+            )));
+        }
+        if from == to {
+            return Ok(Mutation {
+                changed: vec![],
+                deleted: vec![],
+            });
+        }
+        if to.starts_with(&from) {
+            return Err(FractalError::invalid_input(
+                "a folder cannot be moved inside itself",
+            ));
+        }
+        let destination_parent = to.parent().unwrap_or_else(|| Path::new(""));
+        if !self.folders.contains_key(&path_string(destination_parent)) {
+            return Err(FractalError::not_found(format!(
+                "destination folder does not exist: {}",
+                display_folder_path(destination_parent)
+            )));
+        }
+        self.rename_folder(&from, &to)
+    }
+
+    fn rename_native_with_title(
+        &mut self,
+        from: &Path,
+        to: &Path,
+        title: Option<&str>,
+    ) -> Result<Mutation> {
+        if from != to && path_exists(&self.root.join(PAGES).join(to)) {
+            return Err(FractalError::already_exists(format!(
+                "page already exists: {}",
+                to.display()
+            )));
+        }
+        let from_string = path_string(from);
+        let to_string = path_string(to);
+        let moved_document = Document::parse(&self.stored(from)?.html);
+        if let Some(title) = title {
+            moved_document.set_title(title);
+        }
+        if from != to {
+            moved_document.rewrite_source_location(&from_string, &to_string);
+        }
+        let mut writes = vec![(to.to_path_buf(), moved_document.serialize()?)];
+        let mut changed = vec![to.to_path_buf()];
+        if from != to {
+            for (path, stored) in &self.pages {
+                if path == &from_string || stored.page.kind != PageKind::Native {
+                    continue;
+                }
+                let document = Document::parse(&stored.html);
+                if document.rewrite_internal_target(path, &from_string, &to_string) > 0 {
+                    writes.push((PathBuf::from(path), document.serialize()?));
+                    changed.push(PathBuf::from(path));
+                }
+            }
+            let parent = from.parent().unwrap_or_else(|| Path::new(""));
+            let old = from.file_name().expect("page has a name").to_string_lossy();
+            let new = to.file_name().expect("page has a name").to_string_lossy();
+            if let Some(write) = self.folder_metadata_replace_child(parent, &old, &new)? {
+                changed.push(write.0.clone());
+                writes.push(write);
+            }
+        }
+        let deletes = (from != to)
+            .then(|| from.to_path_buf())
+            .into_iter()
+            .collect();
+        commit_file_transaction(&self.root, writes, deletes)?;
+        self.reload()?;
+        Ok(Mutation {
+            changed,
+            deleted: (from != to)
+                .then(|| from.to_path_buf())
+                .into_iter()
+                .collect(),
         })
     }
 
@@ -1369,6 +1512,114 @@ impl Project {
         }
         self.pages = pages;
         Ok(())
+    }
+
+    fn repair_title_paths(&mut self) -> Result<()> {
+        loop {
+            let mismatch = self.folders.values().find_map(|stored| {
+                let path = Path::new(&stored.folder.path);
+                let parent = path.parent()?;
+                let desired = parent.join(slug(&stored.folder.title).ok()?);
+                (desired != path).then(|| (path.to_path_buf(), desired))
+            });
+            let Some((from, to)) = mismatch else { break };
+            self.rename_folder(&from, &to)?;
+        }
+        loop {
+            let mismatch = self.pages.values().find_map(|stored| {
+                if stored.page.kind != PageKind::Native {
+                    return None;
+                }
+                let title = stored.page.title.as_deref()?;
+                let path = PathBuf::from(&stored.page.path);
+                let desired =
+                    path.with_file_name(format!("{}{}", slug(title).ok()?, NATIVE_SUFFIX));
+                (desired != path).then_some((path, desired))
+            });
+            let Some((from, to)) = mismatch else { break };
+            self.rename_native_with_title(&from, &to, None)?;
+        }
+        Ok(())
+    }
+
+    fn rename_folder(&mut self, from: &Path, to: &Path) -> Result<Mutation> {
+        let pages = self.root.join(PAGES);
+        if path_exists(&pages.join(to)) {
+            return Err(FractalError::already_exists(format!(
+                "folder already exists: {}",
+                to.display()
+            )));
+        }
+        let mut old_files = Vec::new();
+        collect_files(&pages, &pages.join(from), &mut old_files)?;
+        let new_files: Vec<PathBuf> = old_files
+            .iter()
+            .map(|path| Ok(to.join(path.strip_prefix(from)?)))
+            .collect::<Result<_>>()?;
+        let old_prefix = path_string(from);
+        let new_prefix = path_string(to);
+        let mut rewrites = Vec::new();
+        for stored in self.pages.values() {
+            if stored.page.kind != PageKind::Native {
+                continue;
+            }
+            let old_source = &stored.page.path;
+            let new_source = if Path::new(old_source).starts_with(from) {
+                path_string(&to.join(Path::new(old_source).strip_prefix(from)?))
+            } else {
+                old_source.clone()
+            };
+            let document = Document::parse(&stored.html);
+            let mut changes = 0;
+            if old_source != &new_source {
+                changes += document.rewrite_source_location(old_source, &new_source);
+            }
+            changes += document.rewrite_internal_prefix(
+                &new_source,
+                &new_source,
+                &old_prefix,
+                &new_prefix,
+            );
+            if changes > 0 {
+                rewrites.push((new_source, document.serialize()?));
+            }
+        }
+        fs::rename(pages.join(from), pages.join(to))?;
+        let result = (|| -> Result<()> {
+            for (path, html) in rewrites {
+                atomic_write(&pages.join(path), &html)?;
+            }
+            let from_parent = from.parent().unwrap_or_else(|| Path::new(""));
+            let to_parent = to.parent().unwrap_or_else(|| Path::new(""));
+            let from_name = from
+                .file_name()
+                .expect("folder has a name")
+                .to_string_lossy();
+            let to_name = to.file_name().expect("folder has a name").to_string_lossy();
+            let metadata_writes: Vec<_> = if from_parent == to_parent {
+                self.folder_metadata_replace_child(from_parent, &from_name, &to_name)?
+                    .into_iter()
+                    .collect()
+            } else {
+                self.folder_metadata_child_change(from_parent, Some(&from_name), None)?
+                    .into_iter()
+                    .chain(self.folder_metadata_child_change(to_parent, None, Some(&to_name))?)
+                    .collect()
+            };
+            for (path, html) in metadata_writes {
+                atomic_write(&pages.join(path), &html)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = fs::rename(pages.join(to), pages.join(from));
+            return Err(error);
+        }
+        self.reload()?;
+        Ok(Mutation {
+            changed: new_files,
+            deleted: old_files,
+        })
     }
 
     fn reload_folders(&mut self) -> Result<()> {

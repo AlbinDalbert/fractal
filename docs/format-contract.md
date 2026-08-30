@@ -19,7 +19,7 @@ The manifest version identifies the project format, not the engine package versi
 
 For read compatibility, Fractal also accepts the former `project_name` field as the project name. Retired manifest fields are ignored. Fractal does not rewrite a legacy manifest when opening it, and legacy `.html` pages remain raw HTML unless an explicit migration converts them to the native document contract.
 
-All page paths are UTF-8 HTML files below `pages/`. Absolute paths, parent traversal, and non-HTML page paths are rejected. Paths identify pages, so duplicate titles are allowed.
+All page paths are UTF-8 HTML files below `pages/`. Absolute paths, parent traversal, and non-HTML page paths are rejected. A native document's filename is its kebab-case title plus `.fractal.html`. Changing the title renames the file and rewrites stored internal references. Duplicate titles within one folder are therefore rejected by the resulting path collision.
 
 ## Folders
 
@@ -36,7 +36,9 @@ Every directory below `pages/`, and `pages/` itself, is a Fractal folder. A fold
 }
 ```
 
-Folder metadata accepts only `title` and `order`. The title must be a non-empty string. Without metadata, a nested folder's title is its directory name and the pages root's title is the project name. Fractal creates folder metadata when a caller sets a title or submits an explicit order.
+Folder metadata accepts only `title` and `order`. The title must be a non-empty string. A nested folder's directory name is the kebab-case form of its title. Changing the title renames the directory and rewrites stored internal references. Without metadata, a nested folder's title is its directory name and the pages root's title is the project name. Fractal creates folder metadata when a caller sets a title or submits an explicit order. The pages root is not renamed.
+
+When a project opens, Fractal repairs native filenames and nested directory names that do not match their titles. Opening fails if a repair cannot complete, including when the derived destination already exists. Raw HTML filenames are not title-driven.
 
 Only direct child directories and native `.fractal.html` documents participate in folder order. Raw HTML and other files do not. The default order sorts direct child folders alphabetically first, followed by native documents alphabetically. Sorting is case-sensitive Unicode code-point order and does not use a locale.
 
