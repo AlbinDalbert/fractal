@@ -11,13 +11,19 @@ pub use error::{FractalError, FractalErrorCode};
 pub use project::Project;
 pub use types::{
     Backlink, DerivedLink, Folder, FolderChild, FolderChildKind, FolderChildStatus,
-    FolderHtmlExportOptions, FolderHtmlExportReport, FolderIssue, HtmlExportOptions,
-    HtmlExportReport, Iframe, IframeBacklink, IframeTarget, Link, LinkTarget, Mutation,
-    NativeDocumentParts, Page, PageKind, ProjectManifest, SearchResult, SkippedExportPage,
+    FolderHtmlExportOptions, FolderHtmlExportReport, FolderIssue, HealthIssue, HealthIssueCode,
+    HtmlExportOptions, HtmlExportReport, Iframe, IframeBacklink, IframeTarget, Link, LinkTarget,
+    MutationKind, MutationReceipt, NativeDocumentParts, NativePageDraft, OperationFailure,
+    OperationWarning, OperationWarningCode, Page, PageKind, ProjectChange, ProjectEntryKind,
+    ProjectInspection, ProjectManifest, ProjectPath, ProposedRepair, RecoveryReport,
+    RecoveryTransaction, RecoveryTransactionStatus, RepairReport, SearchResult, SkippedExportPage,
     TextOccurrence, TextPosition, ValidationIssue, ValidationReport,
 };
 
 pub type Result<T> = std::result::Result<T, FractalError>;
+
+#[cfg(test)]
+pub(crate) use project::{inject_transaction_fault, TransactionFaultPoint};
 
 #[cfg(test)]
 mod tests;

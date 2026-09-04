@@ -21,20 +21,32 @@ impl Project {
             &root.join(MANIFEST),
             &serde_json::to_string_pretty(&manifest)?,
         )?;
+        ProjectLock::initialize(root)?;
         Self::open(root)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let root = path.as_ref().to_path_buf();
         let manifest_path = root.join(MANIFEST);
+        if !manifest_path.is_file() && !root.join(LOCK).is_file() {
+            return Err(FractalError::invalid_project(format!(
+                "missing {}",
+                manifest_path.display()
+            )));
+        }
+        let _lock = ProjectLock::shared(&root)?;
+        ensure_no_pending_transactions(&root)?;
         if !manifest_path.is_file() {
             return Err(FractalError::invalid_project(format!(
                 "missing {}",
                 manifest_path.display()
             )));
         }
-        let _lock = ProjectLock::exclusive(&manifest_path)?;
-        recover_transactions(&root)?;
+        Self::load(root)
+    }
+
+    pub(super) fn load(root: PathBuf) -> Result<Self> {
+        let manifest_path = root.join(MANIFEST);
         let manifest: ProjectManifest = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
         validate_project_name(&manifest.name)
             .map_err(|_| FractalError::invalid_project("project name cannot be empty"))?;
@@ -54,8 +66,22 @@ impl Project {
             folders: BTreeMap::new(),
         };
         project.reload()?;
-        project.repair_title_paths()?;
         Ok(project)
+    }
+
+    /// Rolls back interrupted mutations and removes committed transaction
+    /// directories left behind by failed cleanup.
+    pub fn recover(path: impl AsRef<Path>) -> Result<RecoveryReport> {
+        let root = path.as_ref();
+        let manifest_path = root.join(MANIFEST);
+        if !manifest_path.is_file() && !root.join(LOCK).is_file() {
+            return Err(FractalError::invalid_project(format!(
+                "missing {}",
+                manifest_path.display()
+            )));
+        }
+        let _lock = ProjectLock::exclusive(root)?;
+        recover_all_transactions(root)
     }
 
     pub fn root(&self) -> &Path {

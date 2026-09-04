@@ -150,7 +150,7 @@ impl Project {
         page: impl AsRef<Path>,
         text: &str,
         target: impl AsRef<Path>,
-    ) -> Result<Mutation> {
+    ) -> Result<MutationReceipt> {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
         let page = self.existing_path(page.as_ref())?;
@@ -171,11 +171,10 @@ impl Project {
                 "unlinked text not found: {text}"
             )));
         }
-        atomic_write(&self.root.join(PAGES).join(&page), &document.serialize()?)?;
+        let mut plan = MutationPlan::new(MutationKind::InsertLink);
+        plan.write_page(page, document.serialize()?);
+        let receipt = plan.commit(&self.root)?;
         self.reload()?;
-        Ok(Mutation {
-            changed: vec![page],
-            deleted: vec![],
-        })
+        Ok(receipt)
     }
 }

@@ -20,6 +20,7 @@ Fractal does not try to make small models smart. It makes document operations ch
 
 ```text
 my-project/
+├── .fractal.lock
 ├── fractal.json
 └── pages/
     ├── stockholm.fractal.html
@@ -27,7 +28,7 @@ my-project/
         └── map.html
 ```
 
-The root `fractal.json` contains only a project name and format version:
+The empty `.fractal.lock` file coordinates Fractal processes; it is not document content. Older projects remain readable without it and acquire it on their first explicit mutation. The root `fractal.json` contains only a project name and format version:
 
 ```json
 {
@@ -40,7 +41,7 @@ The manifest version identifies the Fractal project format, independently of the
 
 A native document needs a safe relative `.fractal.html` path, a format marker, an identifiable title, and one document root. Its content uses standard semantic HTML. A raw `.html` file has no Fractal structure requirements.
 
-Any folder below `pages/`, including `pages/` itself, may contain its own `fractal.json` with a title and an explicit order for direct child folders and native documents. Native filenames and nested directory names are kebab-case forms of their titles. Title changes rename them and update stored internal references. Project opening repairs mismatches or fails if the rename cannot complete. Raw HTML paths remain independent. Without folder metadata, the title comes from the folder name and children use folder-first alphabetical order. The pages root uses the project name as its default title.
+Any folder below `pages/`, including `pages/` itself, may contain its own `fractal.json` with a title and an explicit order for direct child folders and native documents. Native filenames and nested directory names are kebab-case forms of their titles. Title changes rename them and update stored internal references. Read-only inspection reports path mismatches, and explicit project repair fixes them. Raw HTML paths remain independent. Without folder metadata, the title comes from the folder name and children use folder-first alphabetical order. The pages root uses the project name as its default title.
 
 See [`docs/format-contract.md`](docs/format-contract.md) for the complete contract.
 
@@ -49,9 +50,12 @@ See [`docs/format-contract.md`](docs/format-contract.md) for the complete contra
 The `Project` API provides:
 
 - initialize and open projects;
+- inspect project health without writing files;
+- explicitly recover interrupted transactions and apply format repairs;
 - inspect folders, set folder titles, and explicitly order folder children;
 - export an ordered folder tree as one HTML document;
 - list, read, create, write, move, and delete pages;
+- atomically recreate a missing native page from editor-owned recovery data;
 - compare and write a page using its content hash;
 - delete page batches or complete folders;
 - inspect explicit links and derived backlinks;
@@ -61,14 +65,20 @@ The `Project` API provides:
 - explicitly insert a selected link;
 - validate titles and internal link targets.
 
-Every mutation takes an exclusive lock on `fractal.json` and refreshes the in-memory catalog before checking paths or hashes. `Project::write_page_if_unchanged` compares the caller's hash and replaces the file while holding that lock. A mismatch returns `FractalErrorCode::Conflict`.
+Every mutation takes an exclusive lock on `.fractal.lock` and refreshes the in-memory catalog before checking paths or hashes. Raw source writes and native section writes compare the caller's hash while holding that lock. A mismatch returns `FractalErrorCode::Conflict`.
 
-Moving a page and rewriting its backlinks is one recoverable project transaction. Folder deletion commits with one same-filesystem rename. Batch deletion stages every selected page under the same lock and rolls back if staging fails. If a process stops partway through a multi-file transaction, the next `Project::open` restores the pre-operation files before loading the project.
+All project mutations use one recoverable transaction implementation. `MutationReceipt` reports created, updated, moved, and deleted project entries with direct path mappings and file hashes. Receipt paths are UTF-8, slash-separated, and relative to the project root.
+
+`Project::open` and `Project::inspect` never repair or recover files. An interrupted transaction makes ordinary opening return `FractalErrorCode::RecoveryRequired`. `Project::recover` explicitly restores the pre-operation files and returns a `RecoveryReport`. `Project::repair` applies title-driven path and folder-order repairs and returns a `RepairReport`. Recovery and repair can contain several durable steps, so their reports retain completed changes and expose a typed `failures` list if a later step cannot finish.
+
+A successful mutation has reached its durable commit point. If cleanup fails after commit, the mutation still returns its receipt with a `CleanupPending` warning. Inspection reports the leftover committed transaction until explicit recovery cleanup removes it.
 
 ## CLI
 
 ```text
 fractal init <path> [--name <name>]
+fractal --project <root> inspect
+fractal --project <root> recover
 fractal --project <root> list
 fractal --project <root> folders
 fractal --project <root> folder <folder>
@@ -77,7 +87,15 @@ fractal --project <root> set-page-title <page> <title>
 fractal --project <root> move-folder <folder> <destination>
 fractal --project <root> reorder-folder <folder> <child>...
 fractal --project <root> read <page> [--source]
+fractal --project <root> parts <page>
+fractal --project <root> set-content <page> --file <html-file> --expected-hash <hash>
+fractal --project <root> set-style <page> --file <css-file> --expected-hash <hash>
+fractal --project <root> set-metadata <page> --file <html-file> --expected-hash <hash>
+fractal --project <root> set-head-links <page> --file <html-file> --expected-hash <hash>
+fractal --project <root> repair-page <page>
+fractal --project <root> repair-project
 fractal --project <root> new <title> [--path <path>]
+fractal --project <root> recreate <page> --draft <draft-json>
 fractal --project <root> write <page> --file <html-file> [--expected-hash <hash>]
 fractal --project <root> move <page> <destination>
 fractal --project <root> delete <page>
@@ -111,7 +129,8 @@ The engine does not yet have:
 - embeddings, semantic search, entity extraction, or ontology;
 - context-packet or token-budget machinery;
 - import/export compiler framework;
-- generalized transaction, command bus, or extension framework.
+- generalized transaction, command bus, or extension framework;
+- persistent mutation history.
 
 Import/export, richer queries, metadata, repair, and semantic tooling can be added as direct engine operations. UI policy and rich editing belong in applications that use the library.
 

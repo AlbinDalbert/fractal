@@ -68,8 +68,8 @@ impl Project {
     }
 
     pub(super) fn lock_for_mutation(&self) -> Result<ProjectLock> {
-        let lock = ProjectLock::exclusive(&self.root.join(MANIFEST))?;
-        recover_transactions(&self.root)?;
+        let lock = ProjectLock::exclusive(&self.root)?;
+        ensure_no_pending_transactions(&self.root)?;
         Ok(lock)
     }
     pub(super) fn reload(&mut self) -> Result<()> {

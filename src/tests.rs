@@ -1,27 +1,31 @@
 use crate::{
     FolderChildKind, FolderChildStatus, FolderHtmlExportOptions, FractalErrorCode,
-    HtmlExportOptions, IframeTarget, LinkTarget, PageKind, Project,
+    HtmlExportOptions, IframeTarget, LinkTarget, MutationKind, MutationReceipt, PageKind, Project,
+    ProjectChange, ProjectPath,
 };
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 // Existing behavioral tests use complete native documents as fixtures. This
 // helper bypasses the public editing API so those fixtures do not weaken the
 // section-only production boundary.
 trait NativeFixtureWrite {
-    fn write_page(&mut self, path: impl AsRef<Path>, html: &str) -> crate::Result<crate::Mutation>;
+    fn write_page(&mut self, path: impl AsRef<Path>, html: &str) -> crate::Result<MutationReceipt>;
     fn write_page_if_unchanged(
         &mut self,
         path: impl AsRef<Path>,
         html: &str,
         expected_hash: &str,
-    ) -> crate::Result<crate::Mutation>;
+    ) -> crate::Result<MutationReceipt>;
 }
 
 impl NativeFixtureWrite for Project {
-    fn write_page(&mut self, path: impl AsRef<Path>, html: &str) -> crate::Result<crate::Mutation> {
+    fn write_page(&mut self, path: impl AsRef<Path>, html: &str) -> crate::Result<MutationReceipt> {
         let page = self.page(path)?;
+        let before_hash = page.content_hash.clone();
         let relative = std::path::PathBuf::from(&page.path);
         let original = self.source(&relative)?;
         fs::write(self.root().join("pages").join(&relative), html)?;
@@ -38,9 +42,15 @@ impl NativeFixtureWrite for Project {
                 issue.message
             )));
         }
-        Ok(crate::Mutation {
-            changed: vec![relative],
-            deleted: vec![],
+        let after_hash = self.page(&relative)?.content_hash;
+        Ok(MutationReceipt {
+            operation: MutationKind::SetPageContent,
+            changes: vec![ProjectChange::Updated {
+                path: ProjectPath::new(format!("pages/{}", page.path)),
+                before_hash,
+                after_hash,
+            }],
+            warnings: vec![],
         })
     }
 
@@ -49,7 +59,7 @@ impl NativeFixtureWrite for Project {
         path: impl AsRef<Path>,
         html: &str,
         expected_hash: &str,
-    ) -> crate::Result<crate::Mutation> {
+    ) -> crate::Result<MutationReceipt> {
         let current = Project::open(self.root())?;
         let page = current.page(path.as_ref())?;
         *self = current;
@@ -74,10 +84,146 @@ fn native(title: &str, body: &str) -> String {
     )
 }
 
+fn deleted_file_paths(receipt: &MutationReceipt) -> Vec<&str> {
+    receipt
+        .changes
+        .iter()
+        .filter_map(|change| match change {
+            ProjectChange::Deleted { path, entry, .. }
+                if *entry == crate::ProjectEntryKind::File =>
+            {
+                Some(path.as_str())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn project_file_snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
+    fn collect(root: &Path, directory: &Path, output: &mut BTreeMap<String, Vec<u8>>) {
+        let mut entries: Vec<_> = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .collect();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            if entry.file_type().unwrap().is_dir() {
+                collect(root, &path, output);
+            } else {
+                output.insert(
+                    path.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    fs::read(path).unwrap(),
+                );
+            }
+        }
+    }
+
+    let mut output = BTreeMap::new();
+    collect(root, root, &mut output);
+    output
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn assert_receipt_matches_files(
+    before: &BTreeMap<String, Vec<u8>>,
+    after: &BTreeMap<String, Vec<u8>>,
+    receipt: &MutationReceipt,
+) {
+    let actual: BTreeSet<&str> = before
+        .keys()
+        .chain(after.keys())
+        .filter(|path| before.get(*path) != after.get(*path))
+        .map(String::as_str)
+        .collect();
+    let mut reported = BTreeSet::new();
+    for change in &receipt.changes {
+        match change {
+            ProjectChange::Created {
+                path,
+                entry: crate::ProjectEntryKind::File,
+                after_hash,
+            } => {
+                reported.insert(path.as_str());
+                assert_eq!(
+                    after_hash.as_deref(),
+                    Some(hash_bytes(after.get(path.as_str()).unwrap()).as_str())
+                );
+            }
+            ProjectChange::Updated {
+                path,
+                before_hash,
+                after_hash,
+            } => {
+                reported.insert(path.as_str());
+                assert_eq!(before_hash, &hash_bytes(before.get(path.as_str()).unwrap()));
+                assert_eq!(after_hash, &hash_bytes(after.get(path.as_str()).unwrap()));
+            }
+            ProjectChange::Moved {
+                from,
+                to,
+                entry: crate::ProjectEntryKind::File,
+                before_hash,
+                after_hash,
+            } => {
+                reported.insert(from.as_str());
+                reported.insert(to.as_str());
+                assert_eq!(
+                    before_hash.as_deref(),
+                    Some(hash_bytes(before.get(from.as_str()).unwrap()).as_str())
+                );
+                assert_eq!(
+                    after_hash.as_deref(),
+                    Some(hash_bytes(after.get(to.as_str()).unwrap()).as_str())
+                );
+            }
+            ProjectChange::Deleted {
+                path,
+                entry: crate::ProjectEntryKind::File,
+                before_hash,
+            } => {
+                reported.insert(path.as_str());
+                assert_eq!(
+                    before_hash.as_deref(),
+                    Some(hash_bytes(before.get(path.as_str()).unwrap()).as_str())
+                );
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(reported, actual);
+}
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+fn copy_directory(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let destination = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_directory(&entry.path(), &destination);
+        } else {
+            fs::copy(entry.path(), destination).unwrap();
+        }
+    }
+}
+
 #[test]
-fn project_has_no_generated_state() {
+fn project_has_no_generated_indexes_or_graph_state() {
     let (temp, project) = project();
     assert!(project.pages().is_empty());
+    assert!(temp.path().join(".fractal.lock").is_file());
     assert!(temp.path().join("fractal.json").is_file());
     assert!(temp.path().join("pages").is_dir());
     assert!(!temp.path().join(".fractal").exists());
@@ -112,6 +258,25 @@ fn project_open_rejects_an_empty_name() {
 }
 
 #[test]
+fn inspection_types_an_unsupported_project_version() {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir(temp.path().join("pages")).unwrap();
+    fs::write(
+        temp.path().join("fractal.json"),
+        r#"{"name":"Future","version":999}"#,
+    )
+    .unwrap();
+
+    let inspection = Project::inspect(temp.path()).unwrap();
+
+    assert!(!inspection.openable);
+    assert_eq!(
+        inspection.issues[0].code,
+        crate::HealthIssueCode::UnsupportedVersion
+    );
+}
+
+#[test]
 fn legacy_manifest_opens_without_rewriting_project_files() {
     let temp = TempDir::new().unwrap();
     fs::create_dir(temp.path().join("pages")).unwrap();
@@ -134,6 +299,7 @@ fn legacy_manifest_opens_without_rewriting_project_files() {
         fs::read_to_string(temp.path().join("fractal.json")).unwrap(),
         manifest
     );
+    assert!(!temp.path().join(".fractal.lock").exists());
 }
 
 #[test]
@@ -154,6 +320,7 @@ fn first_folder_metadata_mutation_upgrades_v1_to_v2() {
         serde_json::from_str(&fs::read_to_string(temp.path().join("fractal.json")).unwrap())
             .unwrap();
     assert_eq!(manifest["version"], 2);
+    assert!(temp.path().join(".fractal.lock").is_file());
     assert!(temp.path().join("pages/fractal.json").is_file());
 }
 
@@ -546,7 +713,7 @@ fn batch_delete_allows_references_within_the_selection() {
 
     let mutation = project.delete_pages(["one", "two"]).unwrap();
 
-    assert_eq!(mutation.deleted.len(), 2);
+    assert_eq!(deleted_file_paths(&mutation).len(), 2);
     assert!(project.pages().is_empty());
 }
 
@@ -573,11 +740,11 @@ fn folder_delete_removes_nested_pages_and_assets() {
     let mutation = project.delete_folder("section").unwrap();
 
     assert_eq!(
-        mutation.deleted,
+        deleted_file_paths(&mutation),
         vec![
-            std::path::PathBuf::from("section/image.png"),
-            std::path::PathBuf::from("section/nested/two.fractal.html"),
-            std::path::PathBuf::from("section/one.fractal.html"),
+            "pages/section/image.png",
+            "pages/section/nested/two.fractal.html",
+            "pages/section/one.fractal.html",
         ]
     );
     assert!(!temp.path().join("pages/section").exists());
@@ -627,7 +794,7 @@ fn move_refreshes_the_catalog_before_rewriting_backlinks() {
 }
 
 #[test]
-fn opening_a_project_rolls_back_an_interrupted_file_transaction() {
+fn recovery_rolls_back_an_interrupted_file_transaction() {
     let (temp, mut project) = project();
     project.create_page("Draft").unwrap();
     let source = project.source("draft").unwrap();
@@ -646,6 +813,14 @@ fn opening_a_project_rolls_back_an_interrupted_file_transaction() {
     )
     .unwrap();
 
+    let inspection = Project::inspect(temp.path()).unwrap();
+    assert!(!inspection.openable);
+    assert_eq!(
+        Project::open(temp.path()).unwrap_err().code,
+        FractalErrorCode::RecoveryRequired
+    );
+    let report = Project::recover(temp.path()).unwrap();
+    assert_eq!(report.recovered_transactions.len(), 1);
     let recovered = Project::open(temp.path()).unwrap();
 
     assert_eq!(recovered.source("draft").unwrap(), source);
@@ -653,7 +828,7 @@ fn opening_a_project_rolls_back_an_interrupted_file_transaction() {
 }
 
 #[test]
-fn opening_a_project_rolls_back_an_interrupted_folder_rename() {
+fn recovery_rolls_back_an_interrupted_folder_rename() {
     let (temp, mut project) = project();
     project.create_page_at("section/target", "Target").unwrap();
     project.create_page("Backlink").unwrap();
@@ -700,6 +875,8 @@ fn opening_a_project_rolls_back_an_interrupted_folder_rename() {
     )
     .unwrap();
 
+    assert!(!Project::inspect(temp.path()).unwrap().openable);
+    Project::recover(temp.path()).unwrap();
     let recovered = Project::open(temp.path()).unwrap();
 
     assert_eq!(recovered.source("section/target").unwrap(), target);
@@ -756,10 +933,10 @@ fn derived_links_report_exact_title_occurrences_without_writing() {
 fn derived_links_skip_ambiguous_titles() {
     let (_temp, mut project) = project();
     project
-        .create_page_at("people/ada", "Ada Lovelace")
+        .create_page_at("people/ada-lovelace", "Ada Lovelace")
         .unwrap();
     project
-        .create_page_at("scientists/ada", "Ada Lovelace")
+        .create_page_at("scientists/ada-lovelace", "Ada Lovelace")
         .unwrap();
     project.create_page("Notes").unwrap();
     project
@@ -1131,6 +1308,14 @@ fn external_and_engine_created_children_append_to_explicit_order() {
     let mut project = Project::open(temp.path()).unwrap();
     assert_eq!(
         project.folder(".").unwrap().order.unwrap(),
+        vec!["one.fractal.html"]
+    );
+    assert_eq!(project.folder(".").unwrap().children.len(), 2);
+    let inspection = Project::inspect(temp.path()).unwrap();
+    assert_eq!(inspection.proposed_repairs.len(), 1);
+    project.repair().unwrap();
+    assert_eq!(
+        project.folder(".").unwrap().order.unwrap(),
         vec!["one.fractal.html", "two.fractal.html"]
     );
     project.create_page("Three").unwrap();
@@ -1149,10 +1334,7 @@ fn deleting_a_ghost_removes_only_its_order_entry() {
 
     let mut project = Project::open(temp.path()).unwrap();
     let mutation = project.delete_page("gone").unwrap();
-    assert_eq!(
-        mutation.deleted,
-        vec![std::path::PathBuf::from("gone.fractal.html")]
-    );
+    assert!(deleted_file_paths(&mutation).is_empty());
     assert!(project.folder(".").unwrap().children.is_empty());
     assert!(temp.path().join("pages/fractal.json").is_file());
 }
@@ -1167,11 +1349,11 @@ fn deleting_a_missing_ordered_folder_removes_its_ghost() {
 
     let mut project = Project::open(temp.path()).unwrap();
     let mutation = project.delete_folder("appendix").unwrap();
-    assert_eq!(
-        mutation.changed,
-        vec![std::path::PathBuf::from("fractal.json")]
-    );
-    assert!(mutation.deleted.is_empty());
+    assert!(mutation.changes.iter().any(|change| matches!(
+        change,
+        ProjectChange::Updated { path, .. } if path.as_str() == "pages/fractal.json"
+    )));
+    assert!(deleted_file_paths(&mutation).is_empty());
     assert!(project.folder(".").unwrap().children.is_empty());
 }
 
@@ -1240,12 +1422,12 @@ fn moving_a_folder_preserves_its_title_and_rewrites_references() {
         .path()
         .join("pages/archive/section/image.png")
         .is_file());
-    assert!(mutation
-        .changed
-        .contains(&std::path::PathBuf::from("archive/section/image.png")));
-    assert!(mutation
-        .deleted
-        .contains(&std::path::PathBuf::from("section/image.png")));
+    assert!(mutation.changes.iter().any(|change| matches!(
+        change,
+        ProjectChange::Moved { from, to, .. }
+            if from.as_str() == "pages/section/image.png"
+                && to.as_str() == "pages/archive/section/image.png"
+    )));
 }
 
 #[test]
@@ -1394,7 +1576,7 @@ fn metadata_and_head_links_are_contained_sections() {
 }
 
 #[test]
-fn opening_repairs_title_path_mismatches() {
+fn inspection_reports_and_repair_fixes_title_path_mismatches() {
     let (temp, mut project) = project();
     project.create_page("Correct title").unwrap();
     fs::rename(
@@ -1404,10 +1586,350 @@ fn opening_repairs_title_path_mismatches() {
     .unwrap();
     drop(project);
 
-    let project = Project::open(temp.path()).unwrap();
+    let inspection = Project::inspect(temp.path()).unwrap();
+    assert!(inspection.openable);
+    assert_eq!(inspection.proposed_repairs.len(), 1);
+    assert!(temp.path().join("pages/wrong.fractal.html").exists());
+    let mut project = Project::open(temp.path()).unwrap();
+    assert!(project.page("wrong").is_ok());
+    let report = project.repair().unwrap();
+    assert!(!report.changes.is_empty());
     assert_eq!(
         project.page("correct-title").unwrap().title.as_deref(),
         Some("Correct title")
     );
     assert!(!temp.path().join("pages/wrong.fractal.html").exists());
+}
+
+#[test]
+fn opening_and_inspection_never_rewrite_project_files() {
+    let (temp, mut project) = project();
+    project.create_page("One").unwrap();
+    project.reorder_folder(".", ["one.fractal.html"]).unwrap();
+    fs::rename(
+        temp.path().join("pages/one.fractal.html"),
+        temp.path().join("pages/wrong.fractal.html"),
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("pages/two.fractal.html"),
+        native("Two", ""),
+    )
+    .unwrap();
+    drop(project);
+    let before = project_file_snapshot(temp.path());
+
+    let inspection = Project::inspect(temp.path()).unwrap();
+    assert!(inspection.openable);
+    assert!(!inspection.proposed_repairs.is_empty());
+    let opened = Project::open(temp.path()).unwrap();
+    assert!(opened.page("wrong").is_ok());
+
+    assert_eq!(project_file_snapshot(temp.path()), before);
+}
+
+#[test]
+fn folder_title_receipt_matches_every_changed_file() {
+    let (temp, mut project) = project();
+    project.create_page_at("section/topic", "Topic").unwrap();
+    project.create_page("Index").unwrap();
+    project
+        .write_page(
+            "index",
+            &native("Index", "<a href=\"section/topic.fractal.html\">Topic</a>"),
+        )
+        .unwrap();
+    fs::write(
+        temp.path().join("fractal.json"),
+        r#"{"name":"Test","version":1}"#,
+    )
+    .unwrap();
+    project = Project::open(temp.path()).unwrap();
+    let before = project_file_snapshot(temp.path());
+
+    let receipt = project
+        .set_folder_title("section", "Renamed section")
+        .unwrap();
+    let after = project_file_snapshot(temp.path());
+
+    assert_receipt_matches_files(&before, &after, &receipt);
+    assert!(receipt.changes.iter().any(|change| matches!(
+        change,
+        ProjectChange::Updated { path, .. } if path.as_str() == "fractal.json"
+    )));
+    assert!(receipt.changes.iter().any(|change| matches!(
+        change,
+        ProjectChange::Moved { from, to, entry, .. }
+            if *entry == crate::ProjectEntryKind::Directory
+                && from.as_str() == "pages/section"
+                && to.as_str() == "pages/renamed-section"
+    )));
+}
+
+#[test]
+fn no_op_mutations_return_an_empty_receipt() {
+    let (_temp, mut project) = project();
+    project.create_page("Still").unwrap();
+
+    let receipt = project.move_page("still", "still").unwrap();
+
+    assert_eq!(receipt.operation, MutationKind::MovePage);
+    assert!(receipt.is_noop());
+    assert!(receipt.warnings.is_empty());
+}
+
+#[test]
+fn guarded_recreation_restores_all_native_sections_and_never_overwrites() {
+    let (temp, mut project) = project();
+    project.create_page("Recovered").unwrap();
+    let parts = project.native_document_parts("recovered").unwrap();
+    let draft = crate::NativePageDraft {
+        title: "Recovered".into(),
+        content_html: "<p>Unsaved words.</p>".into(),
+        style_css: "body { color: rebeccapurple; }".into(),
+        metadata_html: "<meta name=\"description\" content=\"Recovered draft\">".into(),
+        head_links_html: "<link rel=\"stylesheet\" href=\"theme.css\">".into(),
+    };
+    project.delete_page("recovered").unwrap();
+    let before = project_file_snapshot(temp.path());
+
+    let receipt = project
+        .recreate_page_from_draft("recovered", &draft)
+        .unwrap();
+    let after = project_file_snapshot(temp.path());
+    assert_receipt_matches_files(&before, &after, &receipt);
+    let restored = project.native_document_parts("recovered").unwrap();
+    assert!(restored.content_html.contains("Unsaved words."));
+    assert_eq!(restored.style_css, draft.style_css);
+    assert!(restored.metadata_html.contains("Recovered draft"));
+    assert!(restored.head_links_html.contains("theme.css"));
+    assert_ne!(restored.source_hash, parts.source_hash);
+
+    let error = project
+        .recreate_page_from_draft("recovered", &draft)
+        .unwrap_err();
+    assert_eq!(error.code, FractalErrorCode::Conflict);
+
+    let recovery_source = project.source("recovered").unwrap();
+    project.delete_page("recovered").unwrap();
+    project
+        .recreate_page_from_source("recovered", &recovery_source)
+        .unwrap();
+    assert!(project
+        .source("recovered")
+        .unwrap()
+        .contains("Unsaved words."));
+}
+
+#[cfg(unix)]
+#[test]
+fn mutations_never_follow_a_symlinked_project_directory() {
+    use std::os::unix::fs::symlink;
+
+    let (temp, mut project) = project();
+    let outside = TempDir::new().unwrap();
+    symlink(outside.path(), temp.path().join("pages/escape")).unwrap();
+
+    let error = project
+        .create_page_at("escape/outside", "Outside")
+        .unwrap_err();
+
+    assert_eq!(error.code, FractalErrorCode::InvalidProject);
+    assert!(!outside.path().join("outside.fractal.html").exists());
+}
+
+#[test]
+fn committed_cleanup_state_is_successful_and_visible_to_health_checks() {
+    let (temp, mut project) = project();
+    project.create_page("Draft").unwrap();
+    let parts = project.native_document_parts("draft").unwrap();
+    crate::inject_transaction_fault(crate::TransactionFaultPoint::CommittedBeforeCleanup);
+
+    let receipt = project
+        .set_page_content("draft", "<p>Committed.</p>", &parts.content_hash)
+        .unwrap();
+
+    assert_eq!(receipt.warnings.len(), 1);
+    let inspection = Project::inspect(temp.path()).unwrap();
+    assert!(inspection.openable);
+    assert!(!inspection.healthy);
+    assert_eq!(inspection.recovery.len(), 1);
+    let report = Project::recover(temp.path()).unwrap();
+    assert_eq!(report.cleaned_transactions.len(), 1);
+    assert!(report.changes.is_empty());
+    assert!(Project::inspect(temp.path()).unwrap().healthy);
+}
+
+#[test]
+fn actual_transaction_interruptions_recover_the_complete_old_state() {
+    use crate::TransactionFaultPoint;
+
+    for point in [
+        TransactionFaultPoint::Prepared,
+        TransactionFaultPoint::OriginalBackedUp,
+        TransactionFaultPoint::NewFileInstalled,
+    ] {
+        let (temp, mut project) = self::project();
+        project.create_page("Draft").unwrap();
+        let source = project.source("draft").unwrap();
+        let parts = project.native_document_parts("draft").unwrap();
+        crate::inject_transaction_fault(point);
+        assert_eq!(
+            project
+                .set_page_content("draft", "<p>Interrupted.</p>", &parts.content_hash)
+                .unwrap_err()
+                .code,
+            FractalErrorCode::Indeterminate
+        );
+        assert!(!Project::inspect(temp.path()).unwrap().openable);
+        Project::recover(temp.path()).unwrap();
+        assert_eq!(
+            Project::open(temp.path()).unwrap().source("draft").unwrap(),
+            source
+        );
+    }
+
+    let temp = TempDir::new().unwrap();
+    copy_directory(&fixture("v1-basic"), temp.path());
+    let mut project = Project::open(temp.path()).unwrap();
+    crate::inject_transaction_fault(TransactionFaultPoint::OriginalBackedUp);
+    assert_eq!(
+        project
+            .set_folder_title("", "Upgraded fixture")
+            .unwrap_err()
+            .code,
+        FractalErrorCode::Indeterminate
+    );
+    assert!(!temp.path().join("fractal.json").exists());
+    assert!(!Project::inspect(temp.path()).unwrap().openable);
+    let recovery = Project::recover(temp.path()).unwrap();
+    assert!(recovery.failures.is_empty());
+    assert_eq!(Project::open(temp.path()).unwrap().manifest().version, 1);
+
+    let (temp, mut project) = self::project();
+    crate::inject_transaction_fault(TransactionFaultPoint::DirectoryCreated);
+    assert_eq!(
+        project
+            .create_page_at("new-folder/draft", "Draft")
+            .unwrap_err()
+            .code,
+        FractalErrorCode::Indeterminate
+    );
+    Project::recover(temp.path()).unwrap();
+    assert!(!temp.path().join("pages/new-folder").exists());
+
+    let (temp, mut project) = self::project();
+    project.create_page_at("section/draft", "Draft").unwrap();
+    fs::create_dir_all(temp.path().join("pages/section/empty/nested")).unwrap();
+    project = Project::open(temp.path()).unwrap();
+    crate::inject_transaction_fault(TransactionFaultPoint::DirectoryRemoved);
+    assert_eq!(
+        project.delete_folder("section").unwrap_err().code,
+        FractalErrorCode::Indeterminate
+    );
+    Project::recover(temp.path()).unwrap();
+    assert!(Project::open(temp.path())
+        .unwrap()
+        .page("section/draft")
+        .is_ok());
+    assert!(temp.path().join("pages/section/empty/nested").is_dir());
+
+    let (temp, mut project) = self::project();
+    project.create_page("Draft").unwrap();
+    let parts = project.native_document_parts("draft").unwrap();
+    crate::inject_transaction_fault(TransactionFaultPoint::CommitMarkerCreated);
+    assert_eq!(
+        project
+            .set_page_content("draft", "<p>Installed.</p>", &parts.content_hash)
+            .unwrap_err()
+            .code,
+        FractalErrorCode::Indeterminate
+    );
+    let inspection = Project::inspect(temp.path()).unwrap();
+    assert!(inspection.openable);
+    assert_eq!(
+        inspection.recovery[0].status,
+        crate::RecoveryTransactionStatus::CommittedCleanupPending
+    );
+    assert!(Project::open(temp.path())
+        .unwrap()
+        .source("draft")
+        .unwrap()
+        .contains("Installed."));
+    Project::recover(temp.path()).unwrap();
+}
+
+#[test]
+fn malformed_recovery_state_is_reported_without_being_deleted() {
+    let (temp, project) = project();
+    drop(project);
+    let transaction = temp.path().join(".fractal-transaction-malformed");
+    fs::create_dir(&transaction).unwrap();
+
+    let inspection = Project::inspect(temp.path()).unwrap();
+
+    assert!(!inspection.openable);
+    assert_eq!(
+        inspection.recovery[0].status,
+        crate::RecoveryTransactionStatus::Malformed
+    );
+    let recovery = Project::recover(temp.path()).unwrap();
+    assert_eq!(recovery.failures.len(), 1);
+    assert_eq!(recovery.failures[0].code, FractalErrorCode::InvalidProject);
+    assert!(transaction.exists());
+}
+
+#[test]
+fn repair_reports_partial_progress_before_a_later_collision() {
+    let (temp, mut project) = project();
+    project.create_page("Taken").unwrap();
+    fs::write(
+        temp.path().join("pages/a-wrong.fractal.html"),
+        native("Fixed", "<p>Repair me.</p>"),
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("pages/z-wrong.fractal.html"),
+        native("Taken", "<p>This destination is occupied.</p>"),
+    )
+    .unwrap();
+    project = Project::open(temp.path()).unwrap();
+
+    let report = project.repair().unwrap();
+
+    assert!(!report.changes.is_empty());
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].code, FractalErrorCode::AlreadyExists);
+    assert!(temp.path().join("pages/fixed.fractal.html").is_file());
+    assert!(temp.path().join("pages/z-wrong.fractal.html").is_file());
+    assert!(temp.path().join("pages/taken.fractal.html").is_file());
+}
+
+#[test]
+fn permanent_format_fixtures_define_open_validation_and_repair_behavior() {
+    for name in ["v1-basic", "v2-basic"] {
+        let inspection = Project::inspect(fixture(name)).unwrap();
+        assert!(inspection.openable, "{name} should open");
+        assert!(inspection.healthy, "{name} should be healthy");
+        assert!(Project::open(fixture(name)).unwrap().validate().valid);
+    }
+
+    let invalid = Project::inspect(fixture("invalid")).unwrap();
+    assert!(invalid.openable);
+    assert!(!invalid.healthy);
+    assert!(!invalid.validation.unwrap().valid);
+
+    let temp = TempDir::new().unwrap();
+    copy_directory(&fixture("repairable"), temp.path());
+    let before = project_file_snapshot(temp.path());
+    let inspection = Project::inspect(temp.path()).unwrap();
+    assert!(inspection.openable);
+    assert!(!inspection.proposed_repairs.is_empty());
+    assert_eq!(project_file_snapshot(temp.path()), before);
+    let mut project = Project::open(temp.path()).unwrap();
+    let report = project.repair().unwrap();
+    assert!(!report.changes.is_empty());
+    assert!(report.failures.is_empty());
+    assert!(project.page("right-name").is_ok());
+    assert!(Project::inspect(temp.path()).unwrap().healthy);
 }

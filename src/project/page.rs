@@ -1,6 +1,28 @@
 use super::support::*;
 use super::*;
 
+impl NativePageDraft {
+    /// Parses complete native source into the sections needed for guarded
+    /// recreation. This does not permit whole-source replacement of a live
+    /// native document.
+    pub fn from_source(source: &str) -> Result<Self> {
+        let document = Document::parse(source);
+        let issues = native_document_issues(&document);
+        if let Some(issue) = issues.first() {
+            return Err(FractalError::invalid_input(format!(
+                "invalid recovered native document: {issue}"
+            )));
+        }
+        Ok(Self {
+            title: document.title().unwrap_or_default(),
+            content_html: document.content_html()?,
+            style_css: document.managed_style_css()?,
+            metadata_html: document.user_metadata_html()?,
+            head_links_html: document.head_links_html()?,
+        })
+    }
+}
+
 impl Project {
     pub fn page(&self, path: impl AsRef<Path>) -> Result<Page> {
         Ok(self.stored(path.as_ref())?.page.clone())
@@ -46,7 +68,11 @@ impl Project {
     ///
     /// The source update, path change, explicit-link rewrites, and folder order
     /// update commit as one recoverable transaction.
-    pub fn set_page_title(&mut self, path: impl AsRef<Path>, title: &str) -> Result<Mutation> {
+    pub fn set_page_title(
+        &mut self,
+        path: impl AsRef<Path>,
+        title: &str,
+    ) -> Result<MutationReceipt> {
         self.set_page_title_inner(path.as_ref(), title, None)
     }
 
@@ -55,7 +81,7 @@ impl Project {
         path: impl AsRef<Path>,
         title: &str,
         expected_hash: &str,
-    ) -> Result<Mutation> {
+    ) -> Result<MutationReceipt> {
         self.set_page_title_inner(path.as_ref(), title, Some(expected_hash))
     }
 
@@ -64,7 +90,7 @@ impl Project {
         path: &Path,
         title: &str,
         expected_hash: Option<&str>,
-    ) -> Result<Mutation> {
+    ) -> Result<MutationReceipt> {
         let title = title.trim();
         let stem = slug(title)?;
         let _lock = self.lock_for_mutation()?;
@@ -85,21 +111,26 @@ impl Project {
             }
         }
         let to = from.with_file_name(format!("{stem}{NATIVE_SUFFIX}"));
-        self.rename_native_with_title(&from, &to, Some(title))
+        self.rename_native_with_title(&from, &to, Some(title), MutationKind::SetPageTitle)
     }
 
-    pub fn create_page(&mut self, title: &str) -> Result<Mutation> {
+    pub fn create_page(&mut self, title: &str) -> Result<MutationReceipt> {
         let stem = slug(title)?;
         self.create_page_at(format!("{stem}{NATIVE_SUFFIX}"), title)
     }
 
-    pub fn create_page_at(&mut self, path: impl AsRef<Path>, title: &str) -> Result<Mutation> {
+    pub fn create_page_at(
+        &mut self,
+        path: impl AsRef<Path>,
+        title: &str,
+    ) -> Result<MutationReceipt> {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
         if title.trim().is_empty() {
             return Err(FractalError::invalid_input("title cannot be empty"));
         }
         let relative = normalize_native_page_path(path.as_ref())?;
+        validate_title_driven_page_path(&relative, title)?;
         if path_exists(&self.root.join(PAGES).join(&relative)) {
             return Err(FractalError::already_exists(format!(
                 "page already exists: {}",
@@ -114,8 +145,9 @@ impl Project {
         )
         .replace("<style>", "<style data-fractal-style>")
         .replace("<h1>", "<h1 data-fractal-title>");
-        let mut writes = vec![(relative.clone(), html)];
-        let mut changed = vec![relative.clone()];
+        let mut plan = MutationPlan::new(MutationKind::CreatePage);
+        plan.ensure_page_parent_directories(&self.root, &relative);
+        plan.write_page(relative.clone(), html);
         if let Some(write) = self.folder_metadata_child_change(
             relative.parent().unwrap_or_else(|| Path::new("")),
             None,
@@ -127,18 +159,79 @@ impl Project {
                     .as_ref(),
             ),
         )? {
-            changed.push(write.0.clone());
-            writes.push(write);
+            plan.write_page(write.0, write.1);
         }
-        commit_file_transaction(&self.root, writes, vec![])?;
+        let receipt = plan.commit(&self.root)?;
         self.reload()?;
-        Ok(Mutation {
-            changed,
-            deleted: vec![],
-        })
+        Ok(receipt)
     }
 
-    pub fn write_raw_page(&mut self, path: impl AsRef<Path>, html: &str) -> Result<Mutation> {
+    /// Recreates a missing native page from editor-owned recovery data.
+    ///
+    /// The operation checks absence while holding the project lock and never
+    /// overwrites a path that has reappeared.
+    pub fn recreate_page_from_draft(
+        &mut self,
+        path: impl AsRef<Path>,
+        draft: &NativePageDraft,
+    ) -> Result<MutationReceipt> {
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
+        let relative = normalize_native_page_path(path.as_ref())?;
+        validate_title_driven_page_path(&relative, &draft.title)?;
+        if path_exists(&self.root.join(PAGES).join(&relative)) {
+            return Err(FractalError::conflict(format!(
+                "cannot recreate a page that now exists: {}",
+                relative.display()
+            )));
+        }
+
+        let document = Document::parse(&format!(
+            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><meta name=\"fractal-format\" content=\"1\"><title>{}</title><style data-fractal-style></style></head><body><main data-fractal-document><h1 data-fractal-title>{}</h1></main></body></html>",
+            escape_html(draft.title.trim()),
+            escape_html(draft.title.trim())
+        ));
+        document.set_content_html(&draft.content_html)?;
+        document.set_managed_style_css(&draft.style_css)?;
+        document.set_user_metadata_html(&draft.metadata_html)?;
+        document.set_head_links_html(&draft.head_links_html)?;
+        let issues = native_document_issues(&document);
+        if let Some(issue) = issues.first() {
+            return Err(FractalError::invalid_input(format!(
+                "invalid recovered native document: {issue}"
+            )));
+        }
+
+        let mut plan = MutationPlan::new(MutationKind::RecreatePage);
+        plan.ensure_page_parent_directories(&self.root, &relative);
+        plan.write_page(relative.clone(), document.serialize()?);
+        if let Some(write) = self.folder_metadata_child_change(
+            relative.parent().unwrap_or_else(|| Path::new("")),
+            None,
+            relative.file_name().and_then(|name| name.to_str()),
+        )? {
+            plan.write_page(write.0, write.1);
+        }
+        let receipt = plan.commit(&self.root)?;
+        self.reload()?;
+        Ok(receipt)
+    }
+
+    /// Recreates an absent native page from a complete recovery source.
+    pub fn recreate_page_from_source(
+        &mut self,
+        path: impl AsRef<Path>,
+        source: &str,
+    ) -> Result<MutationReceipt> {
+        let draft = NativePageDraft::from_source(source)?;
+        self.recreate_page_from_draft(path, &draft)
+    }
+
+    pub fn write_raw_page(
+        &mut self,
+        path: impl AsRef<Path>,
+        html: &str,
+    ) -> Result<MutationReceipt> {
         self.write_raw_page_inner(path.as_ref(), html, None)
     }
 
@@ -151,7 +244,7 @@ impl Project {
         path: impl AsRef<Path>,
         html: &str,
         expected_hash: &str,
-    ) -> Result<Mutation> {
+    ) -> Result<MutationReceipt> {
         self.write_raw_page_inner(path.as_ref(), html, Some(expected_hash))
     }
 
@@ -160,7 +253,7 @@ impl Project {
         path: &Path,
         html: &str,
         expected_hash: Option<&str>,
-    ) -> Result<Mutation> {
+    ) -> Result<MutationReceipt> {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
         let relative = self.existing_path(path.as_ref())?;
@@ -178,12 +271,11 @@ impl Project {
                 "whole-source writes are only available for raw HTML; use a native section mutation",
             ));
         }
-        atomic_write(&self.root.join(PAGES).join(&relative), html)?;
+        let mut plan = MutationPlan::new(MutationKind::WriteRawPage);
+        plan.write_page(relative, html);
+        let receipt = plan.commit(&self.root)?;
         self.reload()?;
-        Ok(Mutation {
-            changed: vec![relative],
-            deleted: vec![],
-        })
+        Ok(receipt)
     }
 
     pub fn set_page_content(
@@ -191,10 +283,14 @@ impl Project {
         path: impl AsRef<Path>,
         html: &str,
         expected_hash: &str,
-    ) -> Result<Mutation> {
-        self.mutate_native_section(path.as_ref(), expected_hash, "content", |document| {
-            document.set_content_html(html)
-        })
+    ) -> Result<MutationReceipt> {
+        self.mutate_native_section(
+            path.as_ref(),
+            expected_hash,
+            "content",
+            MutationKind::SetPageContent,
+            |document| document.set_content_html(html),
+        )
     }
 
     pub fn set_page_style(
@@ -202,17 +298,21 @@ impl Project {
         path: impl AsRef<Path>,
         css: &str,
         expected_hash: &str,
-    ) -> Result<Mutation> {
-        self.mutate_native_section(path.as_ref(), expected_hash, "style", |document| {
-            document.set_managed_style_css(css)
-        })
+    ) -> Result<MutationReceipt> {
+        self.mutate_native_section(
+            path.as_ref(),
+            expected_hash,
+            "style",
+            MutationKind::SetPageStyle,
+            |document| document.set_managed_style_css(css),
+        )
     }
 
     pub fn restore_default_page_style(
         &mut self,
         path: impl AsRef<Path>,
         expected_hash: &str,
-    ) -> Result<Mutation> {
+    ) -> Result<MutationReceipt> {
         self.set_page_style(path, DEFAULT_STYLE, expected_hash)
     }
 
@@ -221,10 +321,14 @@ impl Project {
         path: impl AsRef<Path>,
         html: &str,
         expected_hash: &str,
-    ) -> Result<Mutation> {
-        self.mutate_native_section(path.as_ref(), expected_hash, "metadata", |document| {
-            document.set_user_metadata_html(html)
-        })
+    ) -> Result<MutationReceipt> {
+        self.mutate_native_section(
+            path.as_ref(),
+            expected_hash,
+            "metadata",
+            MutationKind::SetPageMetadata,
+            |document| document.set_user_metadata_html(html),
+        )
     }
 
     pub fn set_page_head_links(
@@ -232,13 +336,17 @@ impl Project {
         path: impl AsRef<Path>,
         html: &str,
         expected_hash: &str,
-    ) -> Result<Mutation> {
-        self.mutate_native_section(path.as_ref(), expected_hash, "head links", |document| {
-            document.set_head_links_html(html)
-        })
+    ) -> Result<MutationReceipt> {
+        self.mutate_native_section(
+            path.as_ref(),
+            expected_hash,
+            "head links",
+            MutationKind::SetPageHeadLinks,
+            |document| document.set_head_links_html(html),
+        )
     }
 
-    pub fn repair_page_structure(&mut self, path: impl AsRef<Path>) -> Result<Mutation> {
+    pub fn repair_page_structure(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
         let relative = self.existing_path(path.as_ref())?;
@@ -249,7 +357,7 @@ impl Project {
         }
         let document = Document::parse(&self.stored(&relative)?.html);
         document.repair_managed_structure(DEFAULT_STYLE)?;
-        self.commit_native_document(relative, document)
+        self.commit_native_document(relative, document, MutationKind::RepairPageStructure)
     }
 
     fn mutate_native_section<F>(
@@ -257,8 +365,9 @@ impl Project {
         path: &Path,
         expected_hash: &str,
         section: &str,
+        operation: MutationKind,
         mutate: F,
-    ) -> Result<Mutation>
+    ) -> Result<MutationReceipt>
     where
         F: FnOnce(&Document) -> Result<()>,
     {
@@ -284,41 +393,39 @@ impl Project {
             )));
         }
         mutate(&document)?;
-        self.commit_native_document(relative, document)
+        self.commit_native_document(relative, document, operation)
     }
 
     fn commit_native_document(
         &mut self,
         relative: PathBuf,
         document: Document,
-    ) -> Result<Mutation> {
+        operation: MutationKind,
+    ) -> Result<MutationReceipt> {
         let issues = native_document_issues(&document);
         if let Some(issue) = issues.first() {
             return Err(FractalError::invalid_input(format!(
                 "invalid native document: {issue}"
             )));
         }
-        atomic_write(
-            &self.root.join(PAGES).join(&relative),
-            &document.serialize()?,
-        )?;
+        let mut plan = MutationPlan::new(operation);
+        plan.write_page(relative, document.serialize()?);
+        let receipt = plan.commit(&self.root)?;
         self.reload()?;
-        Ok(Mutation {
-            changed: vec![relative],
-            deleted: vec![],
-        })
+        Ok(receipt)
     }
-    pub fn move_page(&mut self, from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<Mutation> {
+    pub fn move_page(
+        &mut self,
+        from: impl AsRef<Path>,
+        to: impl AsRef<Path>,
+    ) -> Result<MutationReceipt> {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
         let from = self.existing_path(from.as_ref())?;
         let kind = page_kind(&from);
         let to = normalize_destination_page_path(to.as_ref(), kind)?;
         if from == to {
-            return Ok(Mutation {
-                changed: vec![],
-                deleted: vec![],
-            });
+            return Ok(noop_receipt(MutationKind::MovePage));
         }
         let destination = self.root.join(PAGES).join(&to);
         if path_exists(&destination) {
@@ -350,11 +457,13 @@ impl Project {
             }
         }
 
-        let mut writes = vec![(to.clone(), moved_html)];
-        let mut changed = vec![to.clone()];
+        let mut plan = MutationPlan::new(MutationKind::MovePage);
+        plan.ensure_page_parent_directories(&self.root, &to);
+        plan.write_page(to.clone(), moved_html);
+        plan.delete_page(from.clone());
+        plan.move_page(from.clone(), to.clone());
         for (path, html) in rewrites {
-            writes.push((PathBuf::from(&path), html));
-            changed.push(PathBuf::from(path));
+            plan.write_page(PathBuf::from(path), html);
         }
         if kind == PageKind::Native {
             let from_parent = from.parent().unwrap_or_else(|| Path::new(""));
@@ -367,37 +476,32 @@ impl Project {
                     from_name.as_ref(),
                     to_name.as_ref(),
                 )? {
-                    changed.push(write.0.clone());
-                    writes.push(write);
+                    plan.write_page(write.0, write.1);
                 }
             } else {
                 if let Some(write) =
                     self.folder_metadata_child_change(from_parent, Some(from_name.as_ref()), None)?
                 {
-                    changed.push(write.0.clone());
-                    writes.push(write);
+                    plan.write_page(write.0, write.1);
                 }
                 if let Some(write) =
                     self.folder_metadata_child_change(to_parent, None, Some(to_name.as_ref()))?
                 {
-                    changed.push(write.0.clone());
-                    writes.push(write);
+                    plan.write_page(write.0, write.1);
                 }
             }
         }
-        commit_file_transaction(&self.root, writes, vec![from.clone()])?;
+        let receipt = plan.commit(&self.root)?;
         self.reload()?;
-        Ok(Mutation {
-            changed,
-            deleted: vec![from],
-        })
+        Ok(receipt)
     }
     pub(super) fn rename_native_with_title(
         &mut self,
         from: &Path,
         to: &Path,
         title: Option<&str>,
-    ) -> Result<Mutation> {
+        operation: MutationKind,
+    ) -> Result<MutationReceipt> {
         if from != to && path_exists(&self.root.join(PAGES).join(to)) {
             return Err(FractalError::already_exists(format!(
                 "page already exists: {}",
@@ -413,42 +517,32 @@ impl Project {
         if from != to {
             moved_document.rewrite_source_location(&from_string, &to_string);
         }
-        let mut writes = vec![(to.to_path_buf(), moved_document.serialize()?)];
-        let mut changed = vec![to.to_path_buf()];
+        let mut plan = MutationPlan::new(operation);
+        plan.write_page(to.to_path_buf(), moved_document.serialize()?);
         if from != to {
+            plan.delete_page(from.to_path_buf());
+            plan.move_page(from.to_path_buf(), to.to_path_buf());
             for (path, stored) in &self.pages {
                 if path == &from_string || stored.page.kind != PageKind::Native {
                     continue;
                 }
                 let document = Document::parse(&stored.html);
                 if document.rewrite_internal_target(path, &from_string, &to_string) > 0 {
-                    writes.push((PathBuf::from(path), document.serialize()?));
-                    changed.push(PathBuf::from(path));
+                    plan.write_page(PathBuf::from(path), document.serialize()?);
                 }
             }
             let parent = from.parent().unwrap_or_else(|| Path::new(""));
             let old = from.file_name().expect("page has a name").to_string_lossy();
             let new = to.file_name().expect("page has a name").to_string_lossy();
             if let Some(write) = self.folder_metadata_replace_child(parent, &old, &new)? {
-                changed.push(write.0.clone());
-                writes.push(write);
+                plan.write_page(write.0, write.1);
             }
         }
-        let deletes = (from != to)
-            .then(|| from.to_path_buf())
-            .into_iter()
-            .collect();
-        commit_file_transaction(&self.root, writes, deletes)?;
+        let receipt = plan.commit(&self.root)?;
         self.reload()?;
-        Ok(Mutation {
-            changed,
-            deleted: (from != to)
-                .then(|| from.to_path_buf())
-                .into_iter()
-                .collect(),
-        })
+        Ok(receipt)
     }
-    pub fn delete_page(&mut self, path: impl AsRef<Path>) -> Result<Mutation> {
+    pub fn delete_page(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
         self.delete_pages([path])
     }
 
@@ -456,7 +550,7 @@ impl Project {
     ///
     /// References between pages in the set do not block deletion. References
     /// from pages that survive do block it.
-    pub fn delete_pages<I, P>(&mut self, paths: I) -> Result<Mutation>
+    pub fn delete_pages<I, P>(&mut self, paths: I) -> Result<MutationReceipt>
     where
         I: IntoIterator<Item = P>,
         P: AsRef<Path>,
@@ -478,7 +572,6 @@ impl Project {
         }
         let targets: BTreeSet<String> = relative.iter().map(|path| path_string(path)).collect();
         self.reject_references_into(&targets, &targets)?;
-        let deleted: Vec<PathBuf> = relative.iter().cloned().collect();
         let mut metadata = BTreeMap::<PathBuf, FolderMetadata>::new();
         for path in &relative {
             let parent = path.parent().unwrap_or_else(|| Path::new(""));
@@ -510,14 +603,30 @@ impl Project {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
-        let changed = writes.iter().map(|(path, _)| path.clone()).collect();
-        let physical_deletes: Vec<_> = deleted
+        let physical_deletes: Vec<_> = relative
             .iter()
             .filter(|path| path_exists(&self.root.join(PAGES).join(path)))
             .cloned()
             .collect();
-        commit_file_transaction(&self.root, writes, physical_deletes)?;
+        let mut plan = MutationPlan::new(MutationKind::DeletePages);
+        for (path, contents) in writes {
+            plan.write_page(path, contents);
+        }
+        for path in physical_deletes {
+            plan.delete_page(path);
+        }
+        let receipt = plan.commit(&self.root)?;
         self.reload()?;
-        Ok(Mutation { changed, deleted })
+        Ok(receipt)
     }
+}
+
+fn validate_title_driven_page_path(path: &Path, title: &str) -> Result<()> {
+    let expected = format!("{}{}", slug(title)?, NATIVE_SUFFIX);
+    if path.file_name().and_then(|name| name.to_str()) != Some(expected.as_str()) {
+        return Err(FractalError::invalid_input(format!(
+            "native page path must end in `{expected}` to match its title"
+        )));
+    }
+    Ok(())
 }
