@@ -19,6 +19,16 @@ thread_local! {
     };
 }
 
+/// Schedules a transaction fault at the specified injection point.
+///
+/// The configured fault is consumed when the transaction reaches that point.
+///
+/// # Examples
+///
+/// ```
+/// let point = TransactionFaultPoint::default();
+/// inject_transaction_fault(point);
+/// ```
 #[cfg(test)]
 pub(crate) fn inject_transaction_fault(point: TransactionFaultPoint) {
     TRANSACTION_FAULT.set(Some(point));
@@ -45,6 +55,19 @@ fn injected_crash(point: TransactionFaultPoint) -> Result<()> {
     }
 }
 
+/// Normalizes export selection paths and returns them as sorted, unique strings.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::PathBuf;
+///
+/// let selections = [PathBuf::from("pages/guide"), PathBuf::from("pages/guide")];
+/// let normalized = normalize_export_selections(&selections)?;
+///
+/// assert_eq!(normalized.len(), 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub(super) fn normalize_export_selections(selections: &[PathBuf]) -> Result<BTreeSet<String>> {
     selections
         .iter()
@@ -364,6 +387,18 @@ pub(super) fn atomic_write(path: &Path, contents: &str) -> Result<()> {
     atomic_write_bytes(path, contents.as_bytes())
 }
 
+/// Atomically writes bytes to a file and durably synchronizes the file and its parent directory.
+///
+/// # Examples
+///
+/// ```
+/// let directory = tempfile::tempdir().unwrap();
+/// let path = directory.path().join("output.txt");
+///
+/// atomic_write_bytes(&path, b"hello").unwrap();
+///
+/// assert_eq!(std::fs::read(&path).unwrap(), b"hello");
+/// ```
 pub(super) fn atomic_write_bytes(path: &Path, contents: &[u8]) -> Result<()> {
     let parent = path
         .parent()
@@ -403,6 +438,14 @@ pub(super) struct MutationPlan {
 }
 
 impl MutationPlan {
+    /// Creates an empty mutation plan for the specified operation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let plan = MutationPlan::new(MutationKind::Create);
+    /// assert!(plan.writes.is_empty());
+    /// ```
     pub(super) fn new(operation: MutationKind) -> Self {
         Self {
             operation,
@@ -415,22 +458,67 @@ impl MutationPlan {
         }
     }
 
+    /// Schedules a page write relative to the project's pages directory.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut plan = MutationPlan::new();
+    /// plan.write_page("guide/intro.html", "<h1>Introduction</h1>");
+    /// ```
     pub(super) fn write_page(&mut self, path: impl Into<PathBuf>, contents: impl AsRef<[u8]>) {
         self.write_project(Path::new(PAGES).join(path.into()), contents);
     }
 
+    /// Schedules a project-relative file to be written with the specified contents.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut plan = MutationPlan::new();
+    /// plan.write_project("pages/index.html", b"<h1>Home</h1>");
+    /// ```
     pub(super) fn write_project(&mut self, path: impl Into<PathBuf>, contents: impl AsRef<[u8]>) {
         self.writes.insert(path.into(), contents.as_ref().to_vec());
     }
 
+    /// Schedules a page-relative path for deletion from the project.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut plan = MutationPlan::new();
+    /// plan.delete_page("guide/index.html");
+    /// ```
     pub(super) fn delete_page(&mut self, path: impl Into<PathBuf>) {
         self.delete_project(Path::new(PAGES).join(path.into()));
     }
 
+    /// Schedules a project-relative path for deletion.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut plan = MutationPlan::new();
+    /// plan.delete_project("docs/old.html");
+    /// ```
     pub(super) fn delete_project(&mut self, path: impl Into<PathBuf>) {
         self.deletes.insert(path.into());
     }
 
+    /// Schedules a page-relative file move within the project's `pages` directory.
+    ///
+    /// # Parameters
+    ///
+    /// * `from` - The source page path relative to `pages`.
+    /// * `to` - The destination page path relative to `pages`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut plan = MutationPlan::new();
+    /// plan.move_page("old.html", "new.html");
+    /// ```
     pub(super) fn move_page(&mut self, from: impl Into<PathBuf>, to: impl Into<PathBuf>) {
         self.file_moves.push((
             Path::new(PAGES).join(from.into()),
@@ -438,6 +526,18 @@ impl MutationPlan {
         ));
     }
 
+    /// Schedules a page-directory move within the project.
+    ///
+    /// The source and destination paths are interpreted relative to the project’s
+    /// `pages` directory.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut plan = MutationPlan::new();
+    /// plan.move_page_directory("old-section", "new-section");
+    /// ```
+    pub(super) fn move_page_directory...
     pub(super) fn move_page_directory(&mut self, from: impl Into<PathBuf>, to: impl Into<PathBuf>) {
         self.directory_moves.push((
             Path::new(PAGES).join(from.into()),
@@ -445,16 +545,53 @@ impl MutationPlan {
         ));
     }
 
+    /// Schedules creation of a page directory relative to the project's pages directory.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut plan = MutationPlan::new();
+    /// plan.create_page_directory("guides");
+    /// ```
+    ///
+    /// `path` is relative to the project's pages directory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `path` is absolute? Actually Path::join absolute replaces prefix in Rust? Path::join absolute replaces, no panic. Don't include. Need param? Rustdoc param via `@` not Rust. Could say inline. But summary says path relative. Good. Yet examples likely inaccessible due pub(super), but expected. final.
     pub(super) fn create_page_directory(&mut self, path: impl Into<PathBuf>) {
         self.create_directories
             .insert(Path::new(PAGES).join(path.into()));
     }
 
+    /// Schedules a page directory for removal.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut plan = MutationPlan::new();
+    /// plan.remove_page_directory("archive");
+    /// ```
     pub(super) fn remove_page_directory(&mut self, path: impl Into<PathBuf>) {
         self.remove_directories
             .insert(Path::new(PAGES).join(path.into()));
     }
 
+    /// Schedules creation of missing parent directories for a page under the project's `pages` directory.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::Path;
+    ///
+    /// let mut plan = MutationPlan::new();
+    /// plan.ensure_page_parent_directories(
+    ///     Path::new("/project"),
+    ///     Path::new("guides/setup/index.html"),
+    /// );
+    /// ```
+    ///
+    /// `root` is the project root, and `page` is relative to the project's `pages` directory.
     pub(super) fn ensure_page_parent_directories(&mut self, root: &Path, page: &Path) {
         let mut missing = Vec::new();
         let mut parent = page.parent();
@@ -472,6 +609,25 @@ impl MutationPlan {
         }
     }
 
+    /// Atomically applies the planned project mutations beneath `root`.
+    ///
+    /// The operation validates paths, records recoverable transaction state, installs
+    /// the changes, and rolls back when durability has not been committed. A
+    /// successful commit may include warnings when transaction cleanup remains
+    /// pending.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a path is invalid, a mutation is inconsistent, the
+    /// filesystem operation fails, or recovery cannot restore an interrupted
+    /// transaction.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let receipt = plan.commit(project_root)?;
+    /// assert!(receipt.warnings.is_empty());
+    /// ```
     pub(super) fn commit(mut self, root: &Path) -> Result<MutationReceipt> {
         for path in self.writes.keys().chain(&self.deletes) {
             validate_project_transaction_path(path)?;
@@ -670,6 +826,15 @@ impl MutationPlan {
     }
 }
 
+/// Creates a mutation receipt with the specified operation and no changes or warnings.
+///
+/// # Examples
+///
+/// ```
+/// let receipt = noop_receipt(MutationKind::Update);
+/// assert!(receipt.changes.is_empty());
+/// assert!(receipt.warnings.is_empty());
+/// ```
 pub(super) fn noop_receipt(operation: MutationKind) -> MutationReceipt {
     MutationReceipt {
         operation,
@@ -684,6 +849,15 @@ pub(super) struct ProjectLock {
 }
 
 impl ProjectLock {
+    /// Creates and durably initializes the project lock file.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let directory = tempfile::tempdir().unwrap();
+    /// initialize(directory.path()).unwrap();
+    /// assert!(directory.path().join(LOCK).exists());
+    /// ```
     pub(super) fn initialize(root: &Path) -> Result<()> {
         let file = OpenOptions::new()
             .write(true)
@@ -693,6 +867,13 @@ impl ProjectLock {
         sync_directory(root)
     }
 
+    /// Acquires a shared lock for the project root, using the legacy manifest lock when necessary.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let _lock = ProjectLock::shared(std::path::Path::new("/path/to/project")).unwrap();
+    /// ```
     pub(super) fn shared(root: &Path) -> Result<Self> {
         let lock_path = root.join(LOCK);
         loop {
@@ -721,6 +902,21 @@ impl ProjectLock {
         }
     }
 
+    /// Acquires an exclusive lock for a project.
+    ///
+    /// The lock is created under `root` when needed, with the manifest used as a
+    /// compatibility guard while the lock file is initialized.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _lock = ProjectLock::exclusive(project_root)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the lock cannot be opened, created, or acquired.
     pub(super) fn exclusive(root: &Path) -> Result<Self> {
         let lock_path = root.join(LOCK);
         loop {
@@ -766,6 +962,17 @@ impl ProjectLock {
     }
 }
 
+/// Recovers a pending transaction and reports the project changes made during recovery.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+///
+/// let changes = recover_transaction(Path::new(".project/transactions/txn-1"))?;
+/// println!("Recovered {} changes", changes.len());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub(super) fn recover_transaction(transaction_root: &Path) -> Result<Vec<ProjectChange>> {
     let plan_path = transaction_root.join("plan.json");
     if !plan_path.is_file() || transaction_root.join("committed").is_file() {
@@ -868,6 +1075,22 @@ pub(super) fn recover_transaction(transaction_root: &Path) -> Result<Vec<Project
     Ok(changes)
 }
 
+/// Discovers and inspects pending recovery transaction directories under the project root.
+///
+/// # Examples
+///
+/// ```
+/// let root = std::env::temp_dir().join(format!(
+///     "recovery-transactions-{}",
+///     std::process::id()
+/// ));
+/// std::fs::create_dir_all(&root).unwrap();
+///
+/// let transactions = inspect_recovery_transactions(&root).unwrap();
+/// assert!(transactions.is_empty());
+///
+/// std::fs::remove_dir_all(root).unwrap();
+/// ```
 pub(super) fn inspect_recovery_transactions(root: &Path) -> Result<Vec<RecoveryTransaction>> {
     let mut directories = transaction_directories(root)?;
     directories.sort();
@@ -877,6 +1100,19 @@ pub(super) fn inspect_recovery_transactions(root: &Path) -> Result<Vec<RecoveryT
         .collect()
 }
 
+/// Ensures the project has no pending or malformed recovery transactions.
+///
+/// # Examples
+///
+/// ```
+/// let root = std::path::Path::new("project");
+/// ensure_no_pending_transactions(root)?;
+/// # Ok::<(), FractalError>(())
+/// ```
+///
+/// # Errors
+///
+/// Returns an error when recovery is required or when recovery state cannot be inspected.
 pub(super) fn ensure_no_pending_transactions(root: &Path) -> Result<()> {
     let recovery = inspect_recovery_transactions(root)?;
     if let Some(transaction) = recovery.iter().find(|transaction| {
@@ -893,6 +1129,21 @@ pub(super) fn ensure_no_pending_transactions(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Recovers pending transactions and removes committed transaction data for a project.
+///
+/// Malformed or unrecoverable transactions are reported as failures, while cleanup
+/// errors are reported as warnings. The report includes recovered changes and the
+/// transaction paths processed successfully.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+///
+/// let report = recover_all_transactions(Path::new("."))?;
+/// assert!(report.failures.is_empty());
+/// # Ok::<(), _>(())
+/// ```
 pub(super) fn recover_all_transactions(root: &Path) -> Result<RecoveryReport> {
     let mut recovered_transactions = Vec::new();
     let mut cleaned_transactions = Vec::new();
@@ -964,6 +1215,28 @@ pub(super) fn recover_all_transactions(root: &Path) -> Result<RecoveryReport> {
     })
 }
 
+/// Lists transaction directories directly under the specified root.
+///
+/// # Errors
+///
+/// Returns an error if the root cannot be read or an entry cannot be inspected.
+///
+/// # Examples
+///
+/// ```
+/// use std::fs;
+///
+/// let root = std::env::temp_dir().join(format!(
+///     "transaction-directories-{}",
+///     std::process::id()
+/// ));
+/// fs::create_dir_all(&root).unwrap();
+///
+/// let directories = transaction_directories(&root).unwrap();
+/// assert!(directories.is_empty());
+///
+/// fs::remove_dir_all(root).unwrap();
+/// ```
 fn transaction_directories(root: &Path) -> Result<Vec<PathBuf>> {
     let mut output = Vec::new();
     for entry in fs::read_dir(root)? {
@@ -980,6 +1253,33 @@ fn transaction_directories(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(output)
 }
 
+/// Inspects a recovery transaction and classifies its state and affected project paths.
+///
+/// # Examples
+///
+/// ```
+/// use std::fs;
+///
+/// let root = std::env::temp_dir().join(format!(
+///     "recovery-inspection-{}",
+///     std::process::id()
+/// ));
+/// let transaction = root.join("transaction");
+/// fs::create_dir_all(&transaction).unwrap();
+///
+/// let result = inspect_recovery_transaction(&root, &transaction).unwrap();
+/// assert!(matches!(
+///     result.status,
+///     RecoveryTransactionStatus::Malformed
+/// ));
+///
+/// fs::remove_dir_all(root).unwrap();
+/// ```
+///
+/// # Returns
+///
+/// A recovery transaction summary with its status, affected paths, and any
+/// diagnostic message.
 fn inspect_recovery_transaction(
     root: &Path,
     transaction_root: &Path,
@@ -1074,6 +1374,25 @@ fn inspect_recovery_transaction(
     })
 }
 
+/// Validates that transaction paths are distinct and do not contain one another.
+///
+/// # Errors
+///
+/// Returns an error if any path is invalid or if one transaction path is an ancestor of another.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+/// use std::path::PathBuf;
+///
+/// let paths = BTreeSet::from([
+///     PathBuf::from("pages/index.html"),
+///     PathBuf::from("assets/style.css"),
+/// ]);
+///
+/// reject_overlapping_transaction_paths(&paths).unwrap();
+/// ```
 pub(super) fn reject_overlapping_transaction_paths(paths: &BTreeSet<PathBuf>) -> Result<()> {
     for path in paths {
         validate_transaction_path(path)?;
@@ -1089,6 +1408,17 @@ pub(super) fn reject_overlapping_transaction_paths(paths: &BTreeSet<PathBuf>) ->
     Ok(())
 }
 
+/// Validates that a transaction path is non-empty and contains only normal path components.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+///
+/// assert!(validate_transaction_path(Path::new("pages/index.html")).is_ok());
+/// assert!(validate_transaction_path(Path::new("../index.html")).is_err());
+/// ```
+fn validate_transaction_path(path: &Path) -> Result<()> {
 fn validate_transaction_path(path: &Path) -> Result<()> {
     if path.as_os_str().is_empty()
         || path
@@ -1103,6 +1433,17 @@ fn validate_transaction_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Validates that a transaction path belongs to the project's allowed path layout.
+///
+/// Accepted paths are the project manifest and paths located beneath the pages
+/// directory.
+///
+/// # Examples
+///
+/// ```
+/// assert!(validate_project_transaction_path(Path::new(MANIFEST)).is_ok());
+/// assert!(validate_project_transaction_path(Path::new(PAGES).join("index.html")).is_ok());
+/// ```
 fn validate_project_transaction_path(path: &Path) -> Result<()> {
     validate_transaction_path(path)?;
     let mut components = path.components();
@@ -1119,6 +1460,27 @@ fn validate_project_transaction_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Rejects paths that traverse symlinked ancestors beneath the project root.
+///
+/// When `include_leaf` is `true`, the final path component is checked as well.
+/// Missing components are allowed.
+///
+/// # Errors
+///
+/// Returns an error if a checked component is a symlink or if its metadata
+/// cannot be read for another reason.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+///
+/// assert!(reject_symlinked_ancestors(
+///     Path::new("project"),
+///     Path::new("pages/index.html"),
+///     false,
+/// ).is_ok());
+/// ```
 fn reject_symlinked_ancestors(root: &Path, path: &Path, include_leaf: bool) -> Result<()> {
     let component_count = path.components().count();
     let checked_count = component_count.saturating_sub(usize::from(!include_leaf));
@@ -1140,6 +1502,15 @@ fn reject_symlinked_ancestors(root: &Path, path: &Path, include_leaf: bool) -> R
     Ok(())
 }
 
+/// Converts a transaction path to a project-relative path, preserving root-relative paths and prefixing legacy page-relative paths with `pages`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let path = Path::new("guide/index.html");
+/// let project_path = transaction_project_path(&plan, path);
+/// assert_eq!(project_path, Path::new("pages/guide/index.html"));
+/// ```
 fn transaction_project_path(plan: &TransactionPlan, path: &Path) -> PathBuf {
     if plan.root_relative {
         path.to_path_buf()
@@ -1148,6 +1519,20 @@ fn transaction_project_path(plan: &TransactionPlan, path: &Path) -> PathBuf {
     }
 }
 
+/// Converts a valid project-relative path to a public path using forward slashes.
+///
+/// # Errors
+///
+/// Returns an error when the path is absolute, empty, contains non-normal
+/// components, or is not valid UTF-8.
+///
+/// # Examples
+///
+/// ```
+/// let path = public_project_path(std::path::Path::new("pages/index.html"))?;
+/// # let _ = path;
+/// # Ok::<(), _>(())
+/// ```
 pub(super) fn public_project_path(path: &Path) -> Result<ProjectPath> {
     if path.is_absolute()
         || path.as_os_str().is_empty()
@@ -1169,6 +1554,20 @@ pub(super) fn public_project_path(path: &Path) -> Result<ProjectPath> {
     Ok(ProjectPath::new(value.replace('\\', "/")))
 }
 
+/// Computes the project changes implied by a mutation plan without applying them.
+///
+/// File changes include content hashes before and after the mutation. Move operations
+/// are represented as moves rather than separate creations and deletions.
+///
+/// # Examples
+///
+/// ```
+/// # use std::path::Path;
+/// # let plan = MutationPlan::new();
+/// let changes = planned_changes(Path::new("."), &plan)?;
+/// assert!(changes.is_empty());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 fn planned_changes(root: &Path, plan: &MutationPlan) -> Result<Vec<ProjectChange>> {
     let mut changes = Vec::new();
     let moved_from: BTreeSet<&PathBuf> = plan.file_moves.iter().map(|(from, _)| from).collect();
@@ -1263,6 +1662,16 @@ fn planned_changes(root: &Path, plan: &MutationPlan) -> Result<Vec<ProjectChange
     Ok(changes)
 }
 
+/// Creates all directories needed to contain a path.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+///
+/// create_parent(Path::new("output/file.txt"))?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
 pub(super) fn create_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -1324,6 +1733,14 @@ pub(super) fn link_target_path(target: &LinkTarget) -> Option<&str> {
     }
 }
 
+/// Extracts the internal path from an iframe target.
+///
+/// # Examples
+///
+/// ```
+/// let target = IframeTarget::Internal("docs/guide.html".to_owned());
+/// assert_eq!(iframe_target_path(&target), Some("docs/guide.html"));
+/// ```
 pub(super) fn iframe_target_path(target: &IframeTarget) -> Option<&str> {
     match target {
         IframeTarget::Internal(path) | IframeTarget::InternalFile(path) => Some(path),
@@ -1331,14 +1748,44 @@ pub(super) fn iframe_target_path(target: &IframeTarget) -> Option<&str> {
     }
 }
 
+/// Computes the SHA-256 hash of text contents as a lowercase hexadecimal string.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(
+///     content_hash("hello"),
+///     "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+/// );
+/// ```
 pub(super) fn content_hash(contents: &str) -> String {
     content_hash_bytes(contents.as_bytes())
 }
 
+/// Computes a SHA-256 hash for byte content.
+///
+/// # Examples
+///
+/// ```
+/// let hash = content_hash_bytes(b"hello");
+/// assert_eq!(
+///     hash,
+///     "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+/// );
+/// ```
 pub(super) fn content_hash_bytes(contents: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(contents))
 }
 
+/// Converts a title into a lowercase, hyphen-separated slug.
+///
+/// Returns an error when the title contains no alphanumeric characters.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(slug("Hello, World!").unwrap(), "hello-world");
+/// ```
 pub(super) fn slug(title: &str) -> Result<String> {
     let mut output = String::new();
     let mut separator = false;

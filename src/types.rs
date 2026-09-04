@@ -185,10 +185,26 @@ pub struct ValidationIssue {
 pub struct ProjectPath(String);
 
 impl ProjectPath {
+    /// Provides the validated project-relative path as a string slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let path = ProjectPath::new("docs/index.html").unwrap();
+    /// assert_eq!(path.as_str(), "docs/index.html");
+    /// ```
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    /// Creates a project path from a path string.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let path = ProjectPath::new("docs/index.html".to_owned());
+    /// assert_eq!(path.as_str(), "docs/index.html");
+    /// ```
     pub(crate) fn new(path: String) -> Self {
         Self(path)
     }
@@ -201,6 +217,21 @@ impl fmt::Display for ProjectPath {
 }
 
 impl<'de> Deserialize<'de> for ProjectPath {
+    /// Deserializes a validated project-relative path.
+    ///
+    /// Paths must be non-empty, slash-separated, relative, and contain no empty,
+    /// `.` or `..` components or backslashes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the serialized path does not meet these requirements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let path: ProjectPath = serde_json::from_str("\"docs/index.html\").unwrap();
+    /// assert_eq!(path.as_str(), "docs/index.html");
+    /// ```
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -307,6 +338,15 @@ pub struct MutationReceipt {
 }
 
 impl MutationReceipt {
+    /// Determines whether the mutation recorded no project changes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn check(receipt: &MutationReceipt) {
+    /// assert!(receipt.is_noop());
+    /// # }
+    /// ```
     pub fn is_noop(&self) -> bool {
         self.changes.is_empty()
     }

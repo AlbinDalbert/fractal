@@ -23,6 +23,27 @@ trait NativeFixtureWrite {
 }
 
 impl NativeFixtureWrite for Project {
+    /// Replaces a page's HTML source and returns a receipt describing the update.
+    ///
+    /// Invalid native documents are rejected and the original page content is restored.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Project-relative path of the page to update.
+    /// * `html` - Complete HTML source to write to the page.
+    ///
+    /// # Returns
+    ///
+    /// A mutation receipt containing the page's previous and new content hashes.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let mut project = project();
+    /// let receipt = project.write_page("index.html", "<!doctype html><html></html>")?;
+    /// assert_eq!(receipt.changes.len(), 1);
+    /// # Ok::<(), crate::Error>(())
+    /// ```
     fn write_page(&mut self, path: impl AsRef<Path>, html: &str) -> crate::Result<MutationReceipt> {
         let page = self.page(path)?;
         let before_hash = page.content_hash.clone();
@@ -54,6 +75,26 @@ impl NativeFixtureWrite for Project {
         })
     }
 
+    /// Writes a page only when its current content hash matches the expected hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict error when the page has changed since the expected hash
+    /// was obtained, or propagates errors encountered while opening or writing the
+    /// project.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let page = project.page("index.html")?;
+    /// let receipt = project.write_page_if_unchanged(
+    ///     "index.html",
+    ///     "<!doctype html><html><body>Updated</body></html>",
+    ///     &page.content_hash,
+    /// )?;
+    /// # let _ = receipt;
+    /// # Ok::<(), crate::FractalError>(())
+    /// ```
     fn write_page_if_unchanged(
         &mut self,
         path: impl AsRef<Path>,
@@ -78,6 +119,16 @@ fn project() -> (TempDir, Project) {
     (temp, project)
 }
 
+/// Builds a complete native Fractal HTML document with the given title and body.
+///
+/// # Examples
+///
+/// ```
+/// let document = native("Welcome", "<p>Hello, world!</p>");
+///
+/// assert!(document.contains("<title>Welcome</title>"));
+/// assert!(document.contains("<p>Hello, world!</p>"));
+/// ```
 fn native(title: &str, body: &str) -> String {
     format!(
         "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><title>{title}</title><style data-fractal-style></style></head><body><main data-fractal-document><h1 data-fractal-title>{title}</h1>{body}</main></body></html>"
@@ -99,6 +150,28 @@ fn deleted_file_paths(receipt: &MutationReceipt) -> Vec<&str> {
         .collect()
 }
 
+/// Captures all files under a directory as a sorted map of relative paths to their contents.
+///
+/// Paths use `/` as the separator, including on Windows.
+///
+/// # Examples
+///
+/// ```
+/// use std::fs;
+/// use std::time::{SystemTime, UNIX_EPOCH};
+///
+/// let root = std::env::temp_dir().join(format!(
+///     "project-file-snapshot-{}",
+///     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+/// ));
+/// fs::create_dir_all(root.join("pages")).unwrap();
+/// fs::write(root.join("pages/index.html"), b"<html></html>").unwrap();
+///
+/// let snapshot = project_file_snapshot(&root);
+///
+/// assert_eq!(snapshot["pages/index.html"], b"<html></html>");
+/// fs::remove_dir_all(root).unwrap();
+/// ```
 fn project_file_snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
     fn collect(root: &Path, directory: &Path, output: &mut BTreeMap<String, Vec<u8>>) {
         let mut entries: Vec<_> = fs::read_dir(directory)
@@ -127,6 +200,16 @@ fn project_file_snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
     output
 }
 
+/// Computes a SHA-256 content hash with a `sha256:` prefix.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(
+///     hash_bytes(b"hello"),
+///     "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+/// );
+/// ```
 fn hash_bytes(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
@@ -200,12 +283,36 @@ fn assert_receipt_matches_files(
     assert_eq!(reported, actual);
 }
 
+/// Resolves the path to a named test fixture.
+///
+/// # Examples
+///
+/// ```
+/// let path = fixture("valid-project");
+/// assert!(path.ends_with("tests/fixtures/valid-project"));
+/// ```
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
 }
 
+/// Recursively copies a directory and its files to a destination path.
+///
+/// # Examples
+///
+/// ```
+/// # use std::fs;
+/// # use std::path::Path;
+/// # let source = std::env::temp_dir().join("copy-directory-source");
+/// # let destination = std::env::temp_dir().join("copy-directory-destination");
+/// # fs::create_dir_all(&source).unwrap();
+/// # fs::write(source.join("file.txt"), "content").unwrap();
+/// copy_directory(Path::new(&source), Path::new(&destination));
+/// assert_eq!(fs::read_to_string(destination.join("file.txt")).unwrap(), "content");
+/// # fs::remove_dir_all(source).unwrap();
+/// # fs::remove_dir_all(destination).unwrap();
+/// ```
 fn copy_directory(from: &Path, to: &Path) {
     fs::create_dir_all(to).unwrap();
     for entry in fs::read_dir(from).unwrap() {

@@ -2,6 +2,17 @@ use super::support::*;
 use super::*;
 
 impl Project {
+    /// Retrieves a folder by its path.
+    ///
+    /// The path is normalized before lookup. Returns an error if the folder does not exist.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let folder = project.folder("docs")?;
+    /// assert_eq!(folder.path, "docs");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn folder(&self, path: impl AsRef<Path>) -> Result<Folder> {
         let path = normalize_folder_path(path.as_ref())?;
         self.folders
@@ -15,6 +26,29 @@ impl Project {
             })
     }
 
+    /// Updates a folder's title and renames its path when the title produces a different slug.
+    ///
+    /// The folder must exist, the title must be nonempty, and the destination slug must not
+    /// conflict with another folder. The mutation also updates the folder metadata and project
+    /// manifest when required.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn example(project: &mut Project) -> Result<(), Box<dyn std::error::Error>> {
+    /// let _receipt = project.set_folder_title("guides", "Guides")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the title is empty, the folder does not exist, or the destination
+    /// path is already occupied.
+    ///
+    /// # Returns
+    ///
+    /// A receipt describing the committed mutation.
     pub fn set_folder_title(
         &mut self,
         path: impl AsRef<Path>,
@@ -93,6 +127,34 @@ impl Project {
         Ok(receipt)
     }
 
+    /// Sets the stored child order for a folder.
+    ///
+    /// The order must include every existing child exactly once. The project
+    /// manifest is upgraded when required.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let receipt = project.reorder_folder("docs", ["guide", "reference"])?;
+    /// # Ok::<(), FractalError>(())
+    /// ```
+    ///
+    /// `receipt` describes the committed mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the folder does not exist, a child name is invalid or
+    /// duplicated, or the order does not contain exactly the folder's existing
+    /// children.
+    ///
+    /// # Parameters
+    ///
+    /// * `path` - Path of the folder to reorder.
+    /// * `order` - Child names in their desired order.
+    ///
+    /// # Returns
+    ///
+    /// A receipt describing the committed mutation.
     pub fn reorder_folder<I, S>(
         &mut self,
         path: impl AsRef<Path>,
@@ -156,6 +218,23 @@ impl Project {
         Ok(receipt)
     }
 
+    /// Moves a folder to a destination whose final component matches the folder title's slug.
+    ///
+    /// The destination's parent folder must exist, and a folder cannot be moved into itself.
+    /// Moving a folder to its current path produces a no-op receipt.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # fn example(project: &mut Project) -> Result<(), Box<dyn std::error::Error>> {
+    /// project.move_folder("drafts", "archive/drafts")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// A receipt describing the folder move or no-op mutation.
     pub fn move_folder(
         &mut self,
         from: impl AsRef<Path>,
@@ -191,10 +270,18 @@ impl Project {
         }
         self.rename_folder(&from, &to, MutationKind::MoveFolder, None, None)
     }
-    /// Deletes a folder below `pages/` with a single namespace rename.
+    /// Deletes a folder below `pages/`, including its files and stored folder entry.
     ///
-    /// The returned `deleted` list includes every file that was below the
-    /// folder, including non-HTML assets.
+    /// The folder may exist physically or only as a missing folder entry in metadata. The operation
+    /// fails when surviving pages reference content inside the folder.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let project = unimplemented!();
+    /// let _receipt = project.delete_folder("drafts")?;
+    /// # Ok::<(), _>(())
+    /// ```
     pub fn delete_folder(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
         let folder = normalize_relative_path(path.as_ref())?;
         let _lock = self.lock_for_mutation()?;
@@ -253,6 +340,23 @@ impl Project {
         self.reload()?;
         Ok(receipt)
     }
+    /// Prepares the contents of a version 2 project manifest when an upgrade is required.
+    ///
+    /// The upgrade is rejected if a reserved folder metadata path already exists.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let contents = project.contract_upgrade_contents()?;
+    /// assert!(contents.is_some());
+    /// # Ok::<(), fractal_core::FractalError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if folder discovery fails, a reserved metadata path conflicts
+    /// with an existing path, or the upgraded manifest cannot be serialized.
+    fn contract_upgrade_contents(&self) -> Result<Option<String>> {
     fn contract_upgrade_contents(&self) -> Result<Option<String>> {
         if self.manifest.version >= 2 {
             return Ok(None);
@@ -276,6 +380,24 @@ impl Project {
         Ok(Some(serde_json::to_string_pretty(&manifest)?))
     }
 
+    /// Ensures that surviving pages do not reference files or pages selected for deletion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a surviving page contains a link or iframe targeting
+    /// an item in `targets`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::collections::BTreeSet;
+    /// # let project = project;
+    /// let targets = BTreeSet::from(["pages/old.md".to_owned()]);
+    /// let deleted_pages = BTreeSet::new();
+    ///
+    /// project.reject_references_into(&targets, &deleted_pages)?;
+    /// # Ok::<(), _>(())
+    /// ```
     pub(super) fn reject_references_into(
         &self,
         targets: &BTreeSet<String>,
@@ -341,6 +463,29 @@ impl Project {
         )))
     }
 
+    /// Replaces a child name in a folder's stored ordering metadata.
+    ///
+    /// If `old` is absent and `new` is not already listed, `new` is appended. Returns
+    /// the metadata path and serialized contents when the folder has stored ordering
+    /// metadata; otherwise, returns `None`.
+    ///
+    /// # Arguments
+    ///
+    /// * `folder` - Folder whose child ordering should be updated.
+    /// * `old` - Existing child name to replace.
+    /// * `new` - Replacement child name.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let result = project.folder_metadata_replace_child(
+    ///     std::path::Path::new("guides"),
+    ///     "intro",
+    ///     "welcome",
+    /// )?;
+    /// assert!(result.is_some());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub(super) fn folder_metadata_replace_child(
         &self,
         folder: &Path,
@@ -367,7 +512,19 @@ impl Project {
         )))
     }
 
-    /// Applies title-driven path repairs and pending folder-order additions.
+    /// Repairs folder and native-page paths based on their titles and adds missing entries to stored folder orders.
+    ///
+    /// Repair failures are recorded in the returned report when an individual repair or final reload cannot be completed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # fn example(project: &mut Project) -> Result<RepairReport> {
+    /// let report = project.repair()?;
+    /// println!("{:?}", report);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn repair(&mut self) -> Result<RepairReport> {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
@@ -475,6 +632,36 @@ impl Project {
         Ok(report)
     }
 
+    /// Renames a folder and updates its contained paths, references, metadata, and project state.
+    ///
+    /// # Parameters
+    ///
+    /// * `from` - Current folder path relative to the project’s pages directory.
+    /// * `to` - Destination folder path relative to the project’s pages directory.
+    /// * `operation` - Mutation operation recorded for the change.
+    /// * `metadata_override` - Optional metadata file and contents to write as part of the rename.
+    /// * `manifest_upgrade` - Optional upgraded project manifest to write as part of the rename.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the destination already exists, a path cannot be collected or transformed,
+    /// a page cannot be rewritten, or the mutation cannot be committed.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let receipt = project.rename_folder(
+    ///     Path::new("old-name"),
+    ///     Path::new("new-name"),
+    ///     operation,
+    ///     None,
+    ///     None,
+    /// )?;
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// A receipt describing the committed mutation.
     fn rename_folder(
         &mut self,
         from: &Path,
@@ -587,6 +774,22 @@ impl Project {
         Ok(receipt)
     }
 
+    /// Reloads the project's folder index from the directory structure and folder metadata.
+    ///
+    /// Missing ordered children are recorded as folder issues, while invalid metadata or child
+    /// ordering causes an invalid-project error.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// project.reload_folders()?;
+    /// # Ok::<(), FractalError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if folder discovery or metadata reading fails, or if folder metadata,
+    /// titles, or child ordering is invalid.
     pub(super) fn reload_folders(&mut self) -> Result<()> {
         let pages_root = self.root.join(PAGES);
         let mut paths = Vec::new();

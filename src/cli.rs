@@ -166,6 +166,14 @@ enum Command {
     Check,
 }
 
+/// Parses the command-line arguments, executes the selected project operation, and formats its output.
+///
+/// # Examples
+///
+/// ```no_run
+/// let result = run();
+/// assert!(result.is_ok());
+/// ```
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {

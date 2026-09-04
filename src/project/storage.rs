@@ -37,6 +37,22 @@ impl Project {
         }
     }
 
+    /// Resolves an existing native page path or a missing native child path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path does not identify an existing page or a missing
+    /// native child within a stored folder.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use std::path::Path;
+    ///
+    /// let resolved = project.existing_or_ghost_native_path(Path::new("docs/index"))?;
+    /// assert_eq!(resolved, Path::new("docs/index"));
+    /// # Ok::<(), _>(())
+    /// ```
     pub(super) fn existing_or_ghost_native_path(&self, path: &Path) -> Result<PathBuf> {
         if let Ok(path) = self.existing_path(path) {
             return Ok(path);
@@ -67,11 +83,33 @@ impl Project {
         }
     }
 
+    /// Acquires an exclusive lock for project mutation after verifying that no pending transactions exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the lock cannot be acquired or pending transactions are present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let lock = project.lock_for_mutation()?;
+    /// # drop(lock);
+    /// # Ok::<(), YourError>(())
+    /// ```
     pub(super) fn lock_for_mutation(&self) -> Result<ProjectLock> {
         let lock = ProjectLock::exclusive(&self.root)?;
         ensure_no_pending_transactions(&self.root)?;
         Ok(lock)
     }
+    /// Reloads the project folders and rebuilds the stored page index from the pages directory.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let mut project = /* an initialized project */;
+    /// project.reload()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub(super) fn reload(&mut self) -> Result<()> {
         self.reload_folders()?;
         let mut files = Vec::new();

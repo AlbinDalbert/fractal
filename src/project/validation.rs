@@ -2,7 +2,20 @@ use super::support::*;
 use super::*;
 
 impl Project {
-    /// Inspects project health without changing project files.
+    /// Inspects project health without modifying project files.
+    ///
+    /// The inspection includes recovery state, pending format repairs, validation results,
+    /// and issues that determine whether the project can be opened and whether it is healthy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let inspection = Project::inspect("path/to/project")?;
+    /// println!("Openable: {}", inspection.openable);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn inspect(path: impl AsRef<Path>) -> Result<ProjectInspection> {
         let root = path.as_ref().to_path_buf();
         let manifest_path = root.join(MANIFEST);
@@ -146,6 +159,20 @@ impl Project {
         })
     }
 
+    /// Validates the project's metadata, folders, native pages, links, and iframes.
+    ///
+    /// The report contains all detected issues and is marked valid only when no issues are found.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let report = project.validate();
+    /// assert!(report.valid);
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// A [`ValidationReport`] containing the validation status and any detected issues.
     pub fn validate(&self) -> ValidationReport {
         let mut issues = Vec::new();
         if self.manifest.name.trim().is_empty() {
@@ -211,6 +238,17 @@ impl Project {
         }
     }
 
+    /// Identifies project entries whose paths or folder ordering metadata require repair.
+    ///
+    /// The proposed repairs are reported without modifying the project. Path generation
+    /// and slugification errors are returned to the caller.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let repairs = project.proposed_repairs()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     fn proposed_repairs(&self) -> Result<Vec<ProposedRepair>> {
         let mut repairs = Vec::new();
         for stored in self.folders.values() {

@@ -145,6 +145,26 @@ impl Project {
         Ok(links)
     }
 
+    /// Inserts a semantic link into matching unlinked text on a native page.
+    ///
+    /// The source and target paths must exist and refer to different pages. The
+    /// returned receipt identifies the committed page mutation.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let receipt = project.insert_link("notes.md", "read more", "guide.md")?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either path does not exist, the source is not a native
+    /// document, the source and target are the same page, or the text cannot be
+    /// found as unlinked text.
+    ///
+    /// # Returns
+    ///
+    /// A receipt for the committed link insertion.
     pub fn insert_link(
         &mut self,
         page: impl AsRef<Path>,

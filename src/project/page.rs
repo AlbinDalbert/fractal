@@ -2,9 +2,21 @@ use super::support::*;
 use super::*;
 
 impl NativePageDraft {
-    /// Parses complete native source into the sections needed for guarded
-    /// recreation. This does not permit whole-source replacement of a live
-    /// native document.
+    /// Parses a complete native document and extracts the sections required to recreate it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source does not contain a valid native-document structure
+    /// or when a required section cannot be extracted.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # let source = include_str!("fixtures/native-page.html");
+    /// let draft = NativePageDraft::from_source(source)?;
+    /// assert!(!draft.title.is_empty());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn from_source(source: &str) -> Result<Self> {
         let document = Document::parse(source);
         let issues = native_document_issues(&document);
@@ -24,6 +36,17 @@ impl NativePageDraft {
 }
 
 impl Project {
+    /// Retrieves the stored page for a path.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # fn example(project: &Project) -> Result<()> {
+    /// let page = project.page("docs/index.html")?;
+    /// # let _ = page;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn page(&self, path: impl AsRef<Path>) -> Result<Page> {
         Ok(self.stored(path.as_ref())?.page.clone())
     }
@@ -64,10 +87,25 @@ impl Project {
         Ok(self.stored(path.as_ref())?.page.content_hash.clone())
     }
 
-    /// Changes a native document title and derives its filename from that title.
+    /// Renames a native page using a title-derived path and updates its document title.
+    
     ///
-    /// The source update, path change, explicit-link rewrites, and folder order
-    /// update commit as one recoverable transaction.
+    
+    /// References to the page and folder ordering are updated as part of the same mutation.
+    
+    ///
+    
+    /// # Examples
+    
+    ///
+    
+    /// ```rust,ignore
+    
+    /// let receipt = project.set_page_title("docs/old-page.html", "New Page")?;
+    
+    /// # Ok::<(), YourErrorType>(())
+    
+    /// ```
     pub fn set_page_title(
         &mut self,
         path: impl AsRef<Path>,
@@ -76,6 +114,31 @@ impl Project {
         self.set_page_title_inner(path.as_ref(), title, None)
     }
 
+    /// Sets a page title when its current source matches the expected hash.
+    ///
+    /// The title is normalized and used to derive the page path. Returns an error if
+    /// the page has changed since the expected hash was recorded.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let receipt = project.set_page_title_if_unchanged(
+    ///     "docs/old-title.html",
+    ///     "New Title",
+    ///     expected_hash,
+    /// )?;
+    /// # Ok::<(), YourError>(())
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path of the native page to rename.
+    /// * `title` - New page title.
+    /// * `expected_hash` - Source hash that must match the current page.
+    ///
+    /// # Returns
+    ///
+    /// A receipt describing the committed mutation.
     pub fn set_page_title_if_unchanged(
         &mut self,
         path: impl AsRef<Path>,
@@ -85,6 +148,30 @@ impl Project {
         self.set_page_title_inner(path.as_ref(), title, Some(expected_hash))
     }
 
+    /// Renames a native page and updates its document title.
+    ///
+    /// The destination filename is derived from the trimmed, slugified title. When
+    /// provided, `expected_hash` must match the current title hash.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path of the native page to rename.
+    /// * `title` - New title for the page.
+    /// * `expected_hash` - Optional hash of the title previously read by the caller.
+    ///
+    /// # Returns
+    ///
+    /// A receipt describing the committed mutation.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let receipt = project.set_page_title_inner(
+    ///     Path::new("guide/page.html"),
+    ///     "Updated Page",
+    ///     None,
+    /// )?;
+    /// ```
     fn set_page_title_inner(
         &mut self,
         path: &Path,
@@ -114,11 +201,40 @@ impl Project {
         self.rename_native_with_title(&from, &to, Some(title), MutationKind::SetPageTitle)
     }
 
+    /// Creates a native page at a title-derived path.
+    ///
+    /// The title is converted to a slug and combined with the native page suffix.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let receipt = project.create_page("Getting Started")?;
+    /// # let _ = receipt;
+    /// # Ok::<(), Error>(())
+    /// ```
     pub fn create_page(&mut self, title: &str) -> Result<MutationReceipt> {
         let stem = slug(title)?;
         self.create_page_at(format!("{stem}{NATIVE_SUFFIX}"), title)
     }
 
+    /// Creates a native page at a title-derived path.
+    ///
+    /// The path must end with the native filename generated from `title`, and the
+    /// destination must not already exist. The page is initialized with the
+    /// default document structure and style, and its containing folder metadata is
+    /// updated.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let mut project: Project = todo!();
+    /// let receipt = project.create_page_at(
+    ///     "guides/getting-started.html",
+    ///     "Getting Started",
+    /// )?;
+    /// # let _ = receipt;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn create_page_at(
         &mut self,
         path: impl AsRef<Path>,
@@ -168,8 +284,26 @@ impl Project {
 
     /// Recreates a missing native page from editor-owned recovery data.
     ///
-    /// The operation checks absence while holding the project lock and never
-    /// overwrites a path that has reappeared.
+    /// The path must match the title-derived native filename. The operation rejects
+    /// paths that have reappeared and validates the reconstructed document before
+    /// committing it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path or recovered document is invalid, or if a page
+    /// already exists at the path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn example(
+    /// #     project: &mut Project,
+    /// #     draft: &NativePageDraft,
+    /// # ) -> Result<MutationReceipt> {
+    /// project.recreate_page_from_draft("guide.html", draft)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn recreate_page_from_draft(
         &mut self,
         path: impl AsRef<Path>,
@@ -217,7 +351,26 @@ impl Project {
         Ok(receipt)
     }
 
-    /// Recreates an absent native page from a complete recovery source.
+    /// Recreates an absent native page from complete native HTML source.
+    ///
+    /// The source must contain a valid native document with the required managed
+    /// sections.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let receipt = project.recreate_page_from_source("docs/page.html", source)?;
+    /// # Ok::<(), project::Error>(())
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path at which to recreate the page.
+    /// * `source` - Complete native HTML source for the page.
+    ///
+    /// # Returns
+    ///
+    /// A receipt describing the committed page recreation.
     pub fn recreate_page_from_source(
         &mut self,
         path: impl AsRef<Path>,
@@ -227,6 +380,19 @@ impl Project {
         self.recreate_page_from_draft(path, &draft)
     }
 
+    /// Replaces the raw HTML page at the specified path.
+    
+    ///
+    
+    /// # Examples
+    
+    ///
+    
+    /// ```rust,ignore
+    
+    /// let receipt = project.write_raw_page("about.html", "<h1>About</h1>")?;
+    
+    /// ```
     pub fn write_raw_page(
         &mut self,
         path: impl AsRef<Path>,
@@ -235,10 +401,29 @@ impl Project {
         self.write_raw_page_inner(path.as_ref(), html, None)
     }
 
-    /// Replaces a page only when its current source hash matches `expected_hash`.
+    /// Replaces a raw page when its current source matches the expected hash.
     ///
-    /// Fractal holds the project lock while it refreshes the page, compares the
-    /// hash, and atomically replaces the file.
+    /// # Parameters
+    ///
+    /// - `path`: Path of the page to replace.
+    /// - `html`: Replacement HTML source.
+    /// - `expected_hash`: Source hash expected for the current page.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the page has changed since `expected_hash` was obtained
+    /// or if the replacement cannot be committed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// let receipt = project.write_raw_page_if_unchanged(
+    ///     "about.html",
+    ///     "<h1>About</h1>",
+    ///     expected_hash,
+    /// )?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn write_raw_page_if_unchanged(
         &mut self,
         path: impl AsRef<Path>,
@@ -248,6 +433,19 @@ impl Project {
         self.write_raw_page_inner(path.as_ref(), html, Some(expected_hash))
     }
 
+    /// Replaces a raw HTML page, optionally requiring its content hash to match.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the page does not exist, the expected hash does not match,
+    /// or the page is a native document.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let receipt = project.write_raw_page("about.html", "<h1>About</h1>")?;
+    /// # Ok::<(), fractal::FractalError>(())
+    /// ```
     fn write_raw_page_inner(
         &mut self,
         path: &Path,
@@ -278,6 +476,16 @@ impl Project {
         Ok(receipt)
     }
 
+    /// Updates the HTML content section of a native page after verifying its expected hash.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let receipt = project.set_page_content("docs/guide.html", "<p>Updated</p>", expected_hash)?;
+    /// # Ok::<(), project::Error>(())
+    /// ```
+    ///
+    /// `expected_hash` must match the current content section hash.
     pub fn set_page_content(
         &mut self,
         path: impl AsRef<Path>,
@@ -293,6 +501,45 @@ impl Project {
         )
     }
 
+    /// Updates the managed CSS style of a native page.
+    
+    ///
+    
+    /// The operation succeeds only when `expected_hash` matches the page's current
+    
+    /// style hash.
+    
+    ///
+    
+    /// # Examples
+    
+    ///
+    
+    /// ```ignore
+    
+    /// let receipt = project.set_page_style("docs/guide.html", "body { color: red; }", expected_hash)?;
+    
+    /// # Ok::<(), Error>(())
+    
+    /// ```
+    
+    ///
+    
+    /// # Returns
+    
+    ///
+    
+    /// A receipt describing the committed mutation.
+    
+    ///
+    
+    /// # Errors
+    
+    ///
+    
+    /// Returns an error if the page is not a native page or if its current style
+    
+    /// hash differs from `expected_hash`.
     pub fn set_page_style(
         &mut self,
         path: impl AsRef<Path>,
@@ -308,6 +555,18 @@ impl Project {
         )
     }
 
+    /// Restores the default style of a native page after verifying its current style hash.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # let mut project = /* an existing project */ todo!();
+    /// # let expected_hash = /* the current style hash */ "";
+    /// let receipt = project.restore_default_page_style("index.html", expected_hash)?;
+    /// # Ok::<(), _>(())
+    /// ```
+    ///
+    /// `expected_hash` prevents the update from overwriting a style changed since it was read.
     pub fn restore_default_page_style(
         &mut self,
         path: impl AsRef<Path>,
@@ -316,6 +575,33 @@ impl Project {
         self.set_page_style(path, DEFAULT_STYLE, expected_hash)
     }
 
+    /// Replaces the user-defined metadata section of a native page.
+    ///
+    /// The update succeeds only when `expected_hash` matches the current metadata
+    /// section hash.
+    ///
+    /// # Parameters
+    ///
+    /// * `html` — The replacement metadata HTML.
+    /// * `expected_hash` — The hash of the metadata section expected before the update.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let mut project = todo!();
+    /// let receipt = project.set_page_metadata(
+    ///     "docs/page.html",
+    ///     "<meta name=\"description\" content=\"Example\">",
+    ///     "current-metadata-hash",
+    /// )?;
+    /// # let _ = receipt;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the page is not a native page, the expected hash is
+    /// stale, or the metadata cannot be committed.
     pub fn set_page_metadata(
         &mut self,
         path: impl AsRef<Path>,
@@ -331,6 +617,22 @@ impl Project {
         )
     }
 
+    /// Replaces the managed head-links section of a native page.
+    ///
+    /// `expected_hash` must match the current hash of the head-links section.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn example(mut project: Project) -> Result<MutationReceipt> {
+    /// let receipt = project.set_page_head_links(
+    ///     "docs/example.html",
+    ///     r#"<link rel="stylesheet" href="styles.css">"#,
+    ///     "current-head-links-hash",
+    /// )?;
+    /// # Ok(receipt)
+    /// # }
+    /// ```
     pub fn set_page_head_links(
         &mut self,
         path: impl AsRef<Path>,
@@ -346,6 +648,18 @@ impl Project {
         )
     }
 
+    /// Repairs the managed structure of a native page and saves the corrected document.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path does not identify a native page or if the document
+    /// cannot be parsed, repaired, validated, or saved.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// project.repair_page_structure("docs/page.html")?;
+    /// ```
     pub fn repair_page_structure(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
@@ -360,6 +674,21 @@ impl Project {
         self.commit_native_document(relative, document, MutationKind::RepairPageStructure)
     }
 
+    /// Applies a mutation to a section of a native page after verifying its expected content hash.
+    ///
+    /// Returns a mutation receipt on success. Fails if the page is not native or if the section
+    /// changed since the expected hash was obtained.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// project.set_page_content(
+    ///     Path::new("docs/example.html"),
+    ///     expected_hash,
+    ///     MutationKind::SetPageContent,
+    ///     |document| document.set_content("<p>Updated content</p>"),
+    /// )?;
+    /// ```
     fn mutate_native_section<F>(
         &mut self,
         path: &Path,
@@ -396,6 +725,21 @@ impl Project {
         self.commit_native_document(relative, document, operation)
     }
 
+    /// Commits a validated native document and reloads the project state.
+    ///
+    /// Returns a receipt describing the committed mutation. Rejects documents containing
+    /// native-structure issues.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let receipt = project.commit_native_document(relative, document, operation)?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the document is invalid, serialization fails, the mutation
+    /// cannot be committed, or the project cannot be reloaded.
     fn commit_native_document(
         &mut self,
         relative: PathBuf,
@@ -414,6 +758,15 @@ impl Project {
         self.reload()?;
         Ok(receipt)
     }
+    /// Moves a page to a new path and updates affected native-page references and folder metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # let mut project = /* an open Project */;
+    /// project.move_page("draft.html", "archive/draft.html")?;
+    /// # Ok::<(), _>(())
+    /// ```
     pub fn move_page(
         &mut self,
         from: impl AsRef<Path>,
@@ -495,6 +848,26 @@ impl Project {
         self.reload()?;
         Ok(receipt)
     }
+    /// Renames a native page and optionally updates its title.
+    ///
+    /// When the path changes, internal references and folder ordering metadata are
+    /// updated to point to the new path.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let receipt = project.rename_native_with_title(
+    ///     Path::new("old-page.html"),
+    ///     Path::new("new-page.html"),
+    ///     Some("New Page"),
+    ///     MutationKind::Rename,
+    /// )?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the destination already exists, the source page cannot
+    /// be loaded, the updated document cannot be serialized, or the mutation fails.
     pub(super) fn rename_native_with_title(
         &mut self,
         from: &Path,
@@ -542,14 +915,31 @@ impl Project {
         self.reload()?;
         Ok(receipt)
     }
+    /// Deletes the page at the specified path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # let mut project = project;
+    /// project.delete_page("notes.html")?;
+    /// # Ok::<(), YourError>(())
+    /// ```
     pub fn delete_page(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
         self.delete_pages([path])
     }
 
-    /// Deletes a set of pages as one locked project operation.
+    /// Deletes the specified pages in a single project mutation.
     ///
-    /// References between pages in the set do not block deletion. References
-    /// from pages that survive do block it.
+    /// References from surviving pages prevent deletion, while references between
+    /// pages being deleted are allowed. Folder ordering metadata is updated, and
+    /// only files that currently exist are physically removed.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// project.delete_pages(["docs/old-page.html"])?;
+    /// # Ok::<(), fractal::FractalError>(())
+    /// ```
     pub fn delete_pages<I, P>(&mut self, paths: I) -> Result<MutationReceipt>
     where
         I: IntoIterator<Item = P>,
@@ -621,6 +1011,22 @@ impl Project {
     }
 }
 
+/// Validates that a native page path uses the filename derived from its title.
+///
+/// # Errors
+///
+/// Returns an error if the title cannot be converted to a slug or if the path
+/// does not end with the title-derived native filename.
+///
+/// # Examples
+///
+/// ```
+/// validate_title_driven_page_path(
+///     std::path::Path::new("docs/my-page.html"),
+///     "My Page",
+/// )
+/// .unwrap();
+/// ```
 fn validate_title_driven_page_path(path: &Path, title: &str) -> Result<()> {
     let expected = format!("{}{}", slug(title)?, NATIVE_SUFFIX);
     if path.file_name().and_then(|name| name.to_str()) != Some(expected.as_str()) {
