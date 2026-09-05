@@ -1,10 +1,38 @@
 # Fractal format contract
 
-A Fractal project may contain native Fractal documents and raw HTML files. Both use HTML as their stored representation, but they have different ownership rules.
+Fractal projects contain native Fractal documents stored as HTML. A valid
+Fractal project is stricter than a general HTML directory.
 
-## Project
+## Recognized project entries
 
-A project contains `fractal.json`, a `pages/` directory, and—when created or mutated by a current engine—an empty `.fractal.lock` coordination file. The lock file is not document content. Older projects remain readable without it and gain it only when an explicit mutation first needs a stable cross-process lock. The manifest has two fields:
+Fractal recognizes:
+
+- the root `fractal.json` manifest;
+- the `.fractal.lock` coordination file;
+- directories below `pages/`;
+- native `*.fractal.html` documents;
+- `fractal.json` folder metadata below `pages/`.
+
+Every other file is opaque. Fractal does not expose opaque files as pages or
+resources and does not list, read, search, validate, hash, rewrite, export, or
+report them. Fractal preserves opaque files where they are.
+
+Folder operations that could relocate or delete opaque content use a stricter
+rule. Setting a folder title, moving or deleting a folder, and repairing a
+folder path scan the complete materialized subtree first. If it contains an
+opaque file, symlink, or other unsupported entry, the operation fails before
+changing any native or opaque bytes. Deleting a missing ordered folder only
+removes its ghost order entry and has no subtree to inspect. Page operations do
+not inspect unrelated opaque files in the same folder.
+
+## Project manifest and lock
+
+A project root contains `fractal.json` and a `pages/` directory. Projects
+created by Fractal also contain an empty `.fractal.lock` file used to coordinate
+processes. Opening and inspection do not create a missing lock. The next
+explicit mutation creates it while holding the manifest lock.
+
+The manifest requires these fields:
 
 ```json
 {
@@ -13,17 +41,21 @@ A project contains `fractal.json`, a `pages/` directory, and—when created or m
 }
 ```
 
-`name` must not be empty. `version` must be supported by the engine. There is no required `.fractal/` directory or persistent graph data.
+The name must contain a non-whitespace character. The version identifies the
+project format, not the crate version or a user revision. Fractal supports
+project format 2 only. `Project::open` returns an unsupported-version error for
+any other value, while `Project::inspect` reports the unsupported version
+without writing files.
 
-The manifest version identifies the project format, not the engine package version or a user-managed project revision. Format v1 is stable and corresponds to the repository's `contract-v1` Git tag. Format v2 is the current unstable contract. Changes may accumulate under v2 until a later `contract-v*` tag marks a new stable contract boundary. New projects use v2. The engine can still open v1 projects, but folder metadata is available only in v2. The first folder metadata mutation on a v1 project upgrades its root manifest to v2. A v1 project may contain ordinary assets named `fractal.json` below `pages/`; the engine preserves them and refuses the upgrade until the naming conflict is explicitly resolved.
-
-For read compatibility, Fractal also accepts the former `project_name` field as the project name. Retired manifest fields are ignored. Fractal does not rewrite a legacy manifest when opening it, and legacy `.html` pages remain raw HTML unless an explicit migration converts them to the native document contract.
-
-All page paths are UTF-8 HTML files below `pages/`. Absolute paths, parent traversal, and non-HTML page paths are rejected. A native document's filename is its kebab-case title plus `.fractal.html`. Changing the title renames the file and rewrites stored internal references. Duplicate titles within one folder are therefore rejected by the resulting path collision.
+Native document paths are UTF-8 paths below `pages/`. Absolute paths and parent
+traversal are rejected. A document filename is the kebab-case form of its title
+plus `.fractal.html`. A title change renames the document and rewrites stored
+native references in the same transaction.
 
 ## Folders
 
-Every directory below `pages/`, and `pages/` itself, is a Fractal folder. A folder may contain a `fractal.json` file:
+Every directory below `pages/`, including `pages/` itself, is a Fractal folder.
+A folder may contain a `fractal.json` file:
 
 ```json
 {
@@ -36,118 +68,185 @@ Every directory below `pages/`, and `pages/` itself, is a Fractal folder. A fold
 }
 ```
 
-Folder metadata accepts only `title` and `order`. The title must be a non-empty string. A nested folder's directory name is the kebab-case form of its title. Changing the title renames the directory and rewrites stored internal references. Without metadata, a nested folder's title is its directory name and the pages root's title is the project name. Fractal creates folder metadata when a caller sets a title or submits an explicit order. The pages root is not renamed.
+Folder metadata accepts only `title` and `order`. The title must be non-empty.
+A nested folder name is the kebab-case form of its title. The pages root is not
+renamed. Without metadata, a nested folder uses its directory name as its title
+and the pages root uses the project name.
 
-Read-only inspection reports native filenames and nested directory names that do not match their titles. Explicit project repair renames them and reports every changed path. Repair fails if the derived destination already exists. Raw HTML filenames are not title-driven.
+Callers create folders explicitly. `Project::create_folder(parent, title)`
+requires an existing parent, derives the directory name from the title, writes
+folder metadata, and updates an explicit parent order in one transaction.
+`Project::create_page_at` also requires its parent folder to exist. Neither
+operation creates missing ancestors.
 
-Only direct child directories and native `.fractal.html` documents participate in folder order. Raw HTML and other files do not. The default order sorts direct child folders alphabetically first, followed by native documents alphabetically. Sorting is case-sensitive Unicode code-point order and does not use a locale.
+Only direct child directories and native documents participate in folder
+order. Opaque files do not. The default order places child folders first, then
+native documents, with case-sensitive Unicode code-point sorting inside each
+group.
 
-An explicit `order` is a complete permutation of the folder's known children. Each entry is one direct child name, with no path separators, absolute paths, parent traversal, duplicates, or `fractal.json`. Directory names ending in `.fractal.html` are reserved because that suffix identifies native documents. A reorder request must contain every present child and every missing ordered child exactly once.
+An explicit `order` is a complete permutation of present children and retained
+missing children. Each entry is one direct child name. Entries cannot contain
+path separators, parent traversal, duplicates, or `fractal.json`. Directory
+names ending in `.fractal.html` are reserved for native documents.
 
-If an explicitly ordered child disappears outside Fractal, its entry remains as a missing child. Validation reports it, and folder inspection returns it with a missing status. A normal page or folder deletion operation removes this ghost entry even though no filesystem object remains.
+If an explicitly ordered child disappears outside Fractal, its entry remains
+as a missing child. Validation reports it and folder inspection returns it with
+missing status. Deleting that page or folder through Fractal removes the ghost
+entry.
 
-If Fractal discovers a new direct child while an explicit order exists, it places that child after the stored order in the effective in-memory order. Inspection reports the pending addition. Explicit project repair appends it to stored metadata. Fractal-managed creation, movement, renaming, and deletion update affected explicit orders as part of the mutation. Folders without an explicit order remain unordered during those operations.
+A new child discovered outside Fractal appears after the stored order in the
+effective in-memory order. Inspection reports the pending addition. Explicit
+project repair appends it to metadata. Fractal-managed child creation, movement,
+renaming, and deletion update an existing explicit order in the same
+transaction.
 
-`fractal.json` is reserved inside every folder. It is metadata, never a page or ordinary asset. Fractal does not follow symlinked directories as folders.
+Read-only inspection reports native filenames and nested folder names that do
+not match their titles. `Project::repair` applies those path changes and pending
+order additions. A destination collision fails the repair. Folder path repair
+also obeys the opaque-descendant rule.
 
 ## Native documents
 
-Files ending in `.fractal.html` are native documents. Fractal owns their meaning and may normalize their source while applying semantic mutations.
+The `.fractal.html` suffix declares a native document. Fractal catalogs the
+file even when its contents are invalid, so inspection and validation can
+report the problem.
 
-A native document must have:
+A valid native document has:
 
 - an HTML doctype;
 - `<meta name="fractal-format" content="1">`;
 - a non-empty title from `<title>` or the first `<h1>`;
-- exactly one `<main data-fractal-document>` as the only body element.
-- exactly one direct `<h1 data-fractal-title>` child owned by Fractal;
+- exactly one `<main data-fractal-document>` as the only body element;
+- exactly one direct `<h1 data-fractal-title>` child of that document root;
 - exactly one `<style data-fractal-style>` in the head.
 
-The `content="1"` marker identifies native document profile version 1. It is
-independent of the project format version in the root manifest.
+The native marker identifies document profile version 1. It is independent of
+project format 2.
 
-The native document root accepts the following standard HTML elements:
+The native document root accepts these HTML elements:
 
 ```text
 a abbr b blockquote br caption cite code col colgroup del em
-figcaption figure h1 h2 h3 h4 h5 h6 hr i iframe img ins kbd
-li mark ol p pre q s samp small span strong sub sup table tbody
-td tfoot th thead time tr u ul var
+figcaption figure h1 h2 h3 h4 h5 h6 hr i ins kbd li mark ol
+p pre q s samp small span strong sub sup table tbody td tfoot
+th thead time tr u ul var
 ```
 
-This vocabulary covers prose, headings, line breaks, images, lists, inline formatting, quotations, code blocks, figures, and tables. Fractal uses normal HTML meaning for these elements. Attributes remain ordinary HTML attributes.
+The head accepts `title`, `meta`, and `style`. Fractal owns the title, charset,
+viewport, native marker, managed title heading, and managed style element.
+Other `meta` elements and unmarked styles are user-owned. Elements outside this
+profile make the native document invalid.
 
-The document head may contain `title`, `meta`, `link`, and `style`. Scripts and base URL overrides are outside the native profile. Raw HTML and iframe targets may use them. Fractal owns the title, charset, viewport, format marker, marked title heading, and marked style element. The marked style contains arbitrary user CSS and can be restored to the default explicitly. Other styles, user metadata, and head links remain allowed.
+HTML parsing follows HTML5 recovery rules. Parser recovery does not make a
+document valid Fractal. `Project::repair_page_structure` can mark or create a
+missing managed title and managed style, but it does not remove unsupported
+content.
 
-Native validation reports unsupported elements, missing structure, broken internal links, and broken local iframe sources. HTML parsing follows HTML5 recovery rules, but recovery does not make a document valid Fractal.
+## Native sections and hashes
 
-## Raw HTML
+`Project::native_document_parts` returns the title, content HTML, managed CSS,
+and user metadata. It supplies independent SHA-256 hashes for the editable
+sections and the exact complete source. `Project::source` returns that source.
 
-Other `.html` files are raw HTML. Their source belongs to the author.
+Native mutations replace only the requested title, content, managed CSS, or
+user metadata. Fractal compares the supplied section hash while holding the
+project lock, validates the complete result, and commits it as a recoverable
+transaction. This lets edits to different sections merge while a stale edit to
+the same section returns `FractalErrorCode::Conflict`.
 
-Fractal may read raw source, extract text and links, search it, preview it, and report references to it. Raw files do not need a title or a native document structure. Problems inside raw HTML do not make the Fractal project invalid.
+Live native documents have no whole-source replacement operation.
+`NativePageDraft::from_source` parses already-native recovery source, and the
+recreation methods use that data only when the destination is still missing.
 
-Fractal does not normalize, repair, insert semantic links into, or automatically rewrite raw HTML. A direct source replacement, move, or deletion is explicit. Moving a raw file may update links and iframe sources in native documents that target it, but the raw file itself remains byte-for-byte unchanged.
+## Links and search
 
-If a native document moves, Fractal updates relative references inside that native document and references from other native documents. References inside raw HTML remain untouched.
+Stored links are ordinary `<a href="...">` elements. Native link queries index
+only relationships between native documents:
 
-## Links
+- relative links resolve from the source document's folder;
+- root-relative links resolve from `pages/`;
+- query strings and fragments do not change the resolved target;
+- a link to an existing native document is resolved;
+- a link that clearly ends in `.fractal.html` but has no target is broken;
+- external URLs, fragment-only links, mail links, and local opaque targets are
+  ignored by link queries.
 
-Links are ordinary `<a href="…">` elements.
+Ignored anchors remain in source when Fractal serializes an unrelated section.
+Broken native targets fail validation. `Project::insert_link` accepts only a
+different existing native target. Moving a native document rewrites affected
+references between native documents in the same transaction.
 
-- Relative internal links resolve from the source file's directory.
-- Root-relative links resolve from `pages/`.
-- Fragment-only links remain local fragments.
-- URI schemes and protocol-relative URLs are external.
-- Relative links to existing non-page files are allowed.
-- Query strings and fragments do not change the resolved target.
+Text search requires every whitespace-separated query term to occur in a native
+title or visible native content, without case sensitivity. It reads only the
+in-memory native document catalog.
 
-Native documents must not contain links to missing local targets. Raw files may contain any links, although Fractal still exposes their resolved state to callers.
+Derived links are case-insensitive exact-title matches in unlinked visible
+native text. Fractal reports only titles with one possible target. Results
+include DOM text-node ordinals and UTF-16 offsets for rendering. Derivation does
+not change source. A stored link is created only by an explicit insertion.
 
-## Iframes
+Opening, inspection, validation, search, and link derivation do not write
+project files.
 
-Native documents may use ordinary `<iframe>` elements. Fractal treats iframes as references distinct from hyperlinks.
+## Transactions, receipts, recovery, and repair
 
-- A relative or root-relative `src` may target a project page or another project file.
-- A remote `src` is allowed.
-- `srcdoc` is allowed and takes precedence over `src`.
-- An iframe without a non-empty `src` or a `srcdoc` attribute is invalid in a native document.
-- A missing local iframe target is invalid in a native document.
+Every normal project mutation takes the common lock, refreshes the catalog,
+builds a change plan, and commits through the common recoverable transaction
+implementation. Page moves, folder moves, backlink rewrites, folder metadata
+updates, and document changes commit together when one operation requires them.
 
-Fractal records `title` and `sandbox` attributes but does not impose permissions. Applications should use sandboxed iframes by default. Remote servers and browser policy may prevent a valid iframe from loading.
+Each mutation returns a `MutationReceipt` derived from its plan. Receipts list
+created, updated, moved, and deleted project entries. File changes include
+SHA-256 hashes when the corresponding bytes are available. Paths are relative
+to the project root, use `/` separators, and never identify opaque files.
 
-Fractal does not interpret an iframe target as part of its containing native document. A raw HTML target remains source-owned.
+An incomplete transaction prevents ordinary opening. `Project::inspect`
+reports recovery state without changing it. `Project::recover` restores the
+pre-operation state. A committed transaction whose cleanup did not finish does
+not block opening, but inspection reports it until explicit recovery removes
+the transaction directory.
 
-## Derived links and mutations
+`Project::repair` applies proposed format repairs as explicit operations. A
+repair report retains completed changes and a typed failure if a later repair
+cannot finish.
 
-Derived links are case-insensitive exact-title matches in unlinked visible text. Fractal reports only matches with one possible target and never stores them in page source. Applications may render these matches as links at runtime. Stored explicit links and derived links remain distinct.
+## Single-document HTML export
 
-Opening, inspection, searching, validation, and link derivation do not write files. Native semantic mutations may serialize affected native documents. Native editing replaces only the requested content, managed style, user metadata, or head-link section. Each section has its own SHA-256 comparison hash, so concurrent changes to different sections merge under the project lock. Fractal validates and transactionally writes the complete result. Whole-source replacement is available only for raw HTML.
+`Project::export_html` validates one native document and writes one standalone
+HTML file. It removes Fractal's native marker and document-root attribute while
+keeping native content, inline styles, and ordinary anchors.
 
-Every project mutation returns a receipt derived from its committed change plan. Receipts distinguish created, updated, moved, and deleted entries. File changes include SHA-256 hashes when the corresponding bytes are available. Paths are relative to the project root and use `/` separators.
-
-An incomplete transaction prevents ordinary opening. `Project::inspect` reports the recovery state without changing it. `Project::recover` explicitly restores the pre-operation state. A committed transaction whose cleanup did not finish does not block opening, but inspection reports it until cleanup succeeds.
-
-Recreating a native page from recovery data is one guarded transaction. Fractal checks that the title-derived destination remains absent, validates the complete native document, updates explicit folder ordering, and never overwrites a path that has reappeared. Applications own durable storage of the recovery data.
-
-Legacy native documents without the managed title or style markers remain discoverable. An explicit structure repair marks the first direct title heading and first head style when present. It creates a missing managed heading or default style without replacing existing CSS.
-
-## Single-file HTML export
-
-`Project::export_html` accepts one native document and writes one HTML file. It does not export a project or copy a set of files.
-
-The export keeps the source document's HTML content and inline styles, removes the Fractal format marker and document-root attribute, drops external stylesheet links, and replaces images and iframes with `[image]` and `[iframe]` text markers. External links and fragment-only links remain links. Links to native documents become fragment links to their reference blocks. Links to other local files are unwrapped to their content.
-
-Direct links from the source document to other native documents become one-level references in a collapsed `<details>` section at the bottom of the output. Referenced documents contribute their visible text only. Links inside referenced documents do not add more references. Links to raw HTML or other local project files are unwrapped and do not create references. Derived native links can be included with the export option.
+Direct links to native documents become one-level references in a collapsed
+section at the end. A referenced document contributes visible text only, and
+its links do not add further references. Derived links can be included by
+option and follow the same rule.
 
 ## Folder HTML export
 
-Folder HTML export produces one standalone HTML document from an ordered folder tree. It recursively walks direct child folders and native documents depth-first using each folder's effective order. Missing ordered pages and folders are ignored. Raw HTML and other assets do not participate.
+`Project::export_folder_html` writes one HTML document from an ordered folder
+tree. It walks direct child folders and native documents depth-first in each
+folder's effective order. Missing ordered children and opaque files do not
+participate.
 
-Without selections, the export includes every present native document below the requested folder. Selections are page or folder paths relative to that folder. Selecting a page includes exactly that page. Selecting a folder without a more specific selected descendant includes its full subtree. If descendants of a selected folder are also selected, only those selected descendants and their required container path participate. The caller's selection order does not alter document order. Unknown selections are errors; selected ghosts produce no output.
+Without selections, the export includes every present native document below
+the requested folder. Selection paths are relative to that folder. A page
+selection includes that page. A folder selection includes its full subtree
+unless more specific selected descendants narrow it. Selection order does not
+change document order. Unknown selections are errors, while selected ghosts
+produce no output.
 
-The exporter generates a neutral document shell whose `<title>` is the effective folder title. It does not merge source document styles. Every included page becomes a section identified by its project path. The exporter replaces the source page's first top-level `<h1>` with a generated `<h1>` using the native document title. An `<hr>` separates adjacent page sections. Optional numbering prefixes exported page headings from one after selection, validation, and ghost filtering.
+The exporter creates a neutral document shell titled with the effective folder
+title. It does not merge source styles. Each included document becomes a
+section with a generated `<h1>`, and `<hr>` separates adjacent sections.
+Optional numbering prefixes headings after selection, validation, and ghost
+filtering.
 
-Links between included pages become fragment links to their generated sections. Direct links to excluded native pages become one-level collapsed text references at the end of the combined document. When derived links are enabled, they link to included sections or add one-level references by the same rule. The reference section always follows every exported page and does not recursively collect more references. Links to local non-native files are unwrapped. Images and iframes become `[image]` and `[iframe]` markers.
+Links between included native documents become fragment links. Links to
+excluded native documents become one-level text references at the end. Derived
+links follow the same rules when enabled.
 
-Every included native document must satisfy the native contract. By default, one invalid document refuses the entire export and identifies its path. Force mode skips invalid documents and records their paths and reasons in the export report. A folder export with no remaining pages still produces a valid empty HTML document.
+Every included native document must validate. By default, one invalid document
+refuses the export. Force mode skips invalid documents and records each path and
+reason. An export with no remaining documents still writes a valid empty HTML
+document. Export writes only the requested output file and does not mutate the
+project.

@@ -1,4 +1,33 @@
-//! Fractal makes operations on linked HTML documents cheap, reliable, and composable.
+//! A project engine for native Fractal documents.
+//!
+//! Fractal creates, validates, repairs, mutates, searches, links, and exports
+//! native Fractal document projects. Other files may coexist in project
+//! directories, but Fractal does not interpret or manage them.
+//!
+//! Project format 2 is the only supported format. Opening a project builds an
+//! in-memory native document catalog and native link index without writing
+//! generated state.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use fractal::{Project, Result};
+//!
+//! fn main() -> Result<()> {
+//!     let mut project = Project::init("field-notes", "Field notes")?;
+//!     project.create_folder("", "Trips")?;
+//!     project.create_page_at("trips/stockholm.fractal.html", "Stockholm")?;
+//!
+//!     let page = project.page("trips/stockholm")?;
+//!     println!("{}", page.content_hash);
+//!
+//!     for result in project.search("Stockholm") {
+//!         println!("{}", result.path);
+//!     }
+//!
+//!     Ok(())
+//! }
+//! ```
 
 #[cfg(feature = "cli")]
 /// Command-line argument parsing and command dispatch.
