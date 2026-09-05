@@ -12,7 +12,7 @@ impl Project {
         Ok(self.stored(path.as_ref())?.page.iframes.clone())
     }
 
-    /// Returns links from other pages that resolve to `path`.
+    /// Returns links that resolve to `path`.
     pub fn backlinks(&self, path: impl AsRef<Path>) -> Result<Vec<Backlink>> {
         let target = path_string(&self.existing_path(path.as_ref())?);
         let mut backlinks = Vec::new();
@@ -29,7 +29,7 @@ impl Project {
         Ok(backlinks)
     }
 
-    /// Returns iframes from other pages that resolve to `path`.
+    /// Returns iframes that resolve to `path`.
     pub fn iframe_backlinks(&self, path: impl AsRef<Path>) -> Result<Vec<IframeBacklink>> {
         let target = path_string(&self.existing_path(path.as_ref())?);
         let mut backlinks = Vec::new();

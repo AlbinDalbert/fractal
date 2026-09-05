@@ -21,8 +21,9 @@ impl Project {
     /// Changes a folder title and, outside the pages root, renames the folder to
     /// the title-derived path.
     ///
-    /// The rename, internal reference rewrites, and parent ordering update are
-    /// committed as one recoverable mutation.
+    /// The rename and parent ordering update, along with reference rewrites in
+    /// [`PageKind::Native`] pages, are committed as one recoverable mutation.
+    /// References in [`PageKind::Raw`] pages are not rewritten.
     pub fn set_folder_title(
         &mut self,
         path: impl AsRef<Path>,
@@ -167,7 +168,9 @@ impl Project {
         Ok(receipt)
     }
 
-    /// Moves a folder and rewrites internal references to its descendants.
+    /// Moves a folder and rewrites internal references to its descendants in
+    /// [`PageKind::Native`] pages. References in [`PageKind::Raw`] pages are not
+    /// rewritten.
     ///
     /// The destination parent must exist and the destination name must remain
     /// consistent with the folder title.
@@ -206,10 +209,13 @@ impl Project {
         }
         self.rename_folder(&from, &to, MutationKind::MoveFolder, None, None)
     }
-    /// Deletes a folder below `pages/` with a single namespace rename.
+    /// Deletes a folder below `pages/`. Materialized folders use a single
+    /// namespace rename.
     ///
-    /// The receipt includes every file below the folder, including non-HTML
-    /// assets. References from surviving pages reject the operation.
+    /// The receipt includes every materialized file below the folder, including
+    /// non-HTML assets. References from surviving pages to those files reject
+    /// the operation. Deleting an ordered but missing folder only removes its
+    /// ghost entry; references to nonexistent descendants are not checked.
     pub fn delete_folder(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
         let folder = normalize_relative_path(path.as_ref())?;
         let _lock = self.lock_for_mutation()?;
