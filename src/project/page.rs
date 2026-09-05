@@ -18,7 +18,6 @@ impl NativePageDraft {
             content_html: document.content_html()?,
             style_css: document.managed_style_css()?,
             metadata_html: document.user_metadata_html()?,
-            head_links_html: document.head_links_html()?,
         })
     }
 }
@@ -43,7 +42,6 @@ impl Project {
         let content_html = document.content_html()?;
         let style_css = document.managed_style_css()?;
         let metadata_html = document.user_metadata_html()?;
-        let head_links_html = document.head_links_html()?;
         Ok(NativeDocumentParts {
             title_hash: content_hash(&title),
             title,
@@ -53,8 +51,6 @@ impl Project {
             style_css,
             metadata_hash: content_hash(&metadata_html),
             metadata_html,
-            head_links_hash: content_hash(&head_links_html),
-            head_links_html,
             source_hash: stored.page.content_hash.clone(),
         })
     }
@@ -145,7 +141,7 @@ impl Project {
         }
         let title = title.trim();
         let html = format!(
-            "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <meta name=\"fractal-format\" content=\"1\">\n  <title>{}</title>\n  <style>\n    :root {{ color-scheme: dark; }}\n    * {{ box-sizing: border-box; }}\n    body {{\n      margin: 0;\n      background: #0c0c0a;\n      color: #e8e1d5;\n      font: 1.125rem/1.65 ui-sans-serif, system-ui, sans-serif;\n    }}\n    main {{\n      width: min(100% - 2rem, 45rem);\n      margin: 0 auto;\n      padding: clamp(4rem, 12vh, 8rem) 0;\n    }}\n    h1 {{\n      margin: 0 0 2.5rem;\n      font-size: clamp(2.75rem, 8vw, 4rem);\n      line-height: 1;\n      letter-spacing: -0.04em;\n    }}\n    h2, h3, h4, h5, h6 {{ line-height: 1.2; }}\n    p, ul, ol, blockquote, pre, figure, table {{ margin: 1.25rem 0; }}\n    a {{ color: #e8bb4d; text-underline-offset: 0.18em; }}\n    img, iframe {{ max-width: 100%; }}\n    code, pre {{ font-family: ui-monospace, monospace; }}\n  </style>\n</head>\n<body>\n  <main data-fractal-document>\n    <h1>{}</h1>\n  </main>\n</body>\n</html>\n",
+            "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <meta name=\"fractal-format\" content=\"1\">\n  <title>{}</title>\n  <style>\n    :root {{ color-scheme: dark; }}\n    * {{ box-sizing: border-box; }}\n    body {{\n      margin: 0;\n      background: #0c0c0a;\n      color: #e8e1d5;\n      font: 1.125rem/1.65 ui-sans-serif, system-ui, sans-serif;\n    }}\n    main {{\n      width: min(100% - 2rem, 45rem);\n      margin: 0 auto;\n      padding: clamp(4rem, 12vh, 8rem) 0;\n    }}\n    h1 {{\n      margin: 0 0 2.5rem;\n      font-size: clamp(2.75rem, 8vw, 4rem);\n      line-height: 1;\n      letter-spacing: -0.04em;\n    }}\n    h2, h3, h4, h5, h6 {{ line-height: 1.2; }}\n    p, ul, ol, blockquote, pre, figure, table {{ margin: 1.25rem 0; }}\n    a {{ color: #e8bb4d; text-underline-offset: 0.18em; }}\n    code, pre {{ font-family: ui-monospace, monospace; }}\n  </style>\n</head>\n<body>\n  <main data-fractal-document>\n    <h1>{}</h1>\n  </main>\n</body>\n</html>\n",
             escape_html(title),
             escape_html(title)
         )
@@ -200,7 +196,6 @@ impl Project {
         document.set_content_html(&draft.content_html)?;
         document.set_managed_style_css(&draft.style_css)?;
         document.set_user_metadata_html(&draft.metadata_html)?;
-        document.set_head_links_html(&draft.head_links_html)?;
         let issues = native_document_issues(&document);
         if let Some(issue) = issues.first() {
             return Err(FractalError::invalid_input(format!(
@@ -303,26 +298,6 @@ impl Project {
         )
     }
 
-    /// Replaces a native document's user-owned head links if they have not
-    /// changed since they were read.
-    ///
-    /// `expected_hash` is the `head_links_hash` returned by
-    /// [`Project::native_document_parts`].
-    pub fn set_page_head_links(
-        &mut self,
-        path: impl AsRef<Path>,
-        html: &str,
-        expected_hash: &str,
-    ) -> Result<MutationReceipt> {
-        self.mutate_native_section(
-            path.as_ref(),
-            expected_hash,
-            "head links",
-            MutationKind::SetPageHeadLinks,
-            |document| document.set_head_links_html(html),
-        )
-    }
-
     /// Restores required native document elements and the default style where
     /// managed structure is missing.
     pub fn repair_page_structure(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
@@ -353,7 +328,6 @@ impl Project {
             "content" => content_hash(&document.content_html()?),
             "style" => content_hash(&document.managed_style_css()?),
             "metadata" => content_hash(&document.user_metadata_html()?),
-            "head links" => content_hash(&document.head_links_html()?),
             _ => unreachable!(),
         };
         if actual_hash != expected_hash {
@@ -507,7 +481,7 @@ impl Project {
         self.reload()?;
         Ok(receipt)
     }
-    /// Deletes one page if no surviving page links to or embeds it.
+    /// Deletes one page if no surviving page links to it.
     pub fn delete_page(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
         self.delete_pages([path])
     }
@@ -518,8 +492,8 @@ impl Project {
     /// from pages that survive do block it.
     /// Deletes several pages in one transaction.
     ///
-    /// References between pages in the deletion set are allowed. A link or
-    /// iframe from a surviving page rejects the whole operation.
+    /// References between pages in the deletion set are allowed. A link from a
+    /// surviving page rejects the whole operation.
     pub fn delete_pages<I, P>(&mut self, paths: I) -> Result<MutationReceipt>
     where
         I: IntoIterator<Item = P>,

@@ -7,11 +7,6 @@ impl Project {
         Ok(self.stored(path.as_ref())?.page.links.clone())
     }
 
-    /// Returns iframes parsed from a page in document order.
-    pub fn iframes(&self, path: impl AsRef<Path>) -> Result<Vec<Iframe>> {
-        Ok(self.stored(path.as_ref())?.page.iframes.clone())
-    }
-
     /// Returns links that resolve to `path`.
     pub fn backlinks(&self, path: impl AsRef<Path>) -> Result<Vec<Backlink>> {
         let target = path_string(&self.existing_path(path.as_ref())?);
@@ -22,23 +17,6 @@ impl Project {
                     backlinks.push(Backlink {
                         page: page.page.path.clone(),
                         text: link.text.clone(),
-                    });
-                }
-            }
-        }
-        Ok(backlinks)
-    }
-
-    /// Returns iframes that resolve to `path`.
-    pub fn iframe_backlinks(&self, path: impl AsRef<Path>) -> Result<Vec<IframeBacklink>> {
-        let target = path_string(&self.existing_path(path.as_ref())?);
-        let mut backlinks = Vec::new();
-        for page in self.pages.values() {
-            for iframe in &page.page.iframes {
-                if matches!(&iframe.target, IframeTarget::Internal(value) if value == &target) {
-                    backlinks.push(IframeBacklink {
-                        page: page.page.path.clone(),
-                        title: iframe.title.clone(),
                     });
                 }
             }

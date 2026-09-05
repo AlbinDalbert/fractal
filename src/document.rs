@@ -9,13 +9,6 @@ pub(crate) struct Document {
     root: NodeRef,
 }
 
-pub(crate) struct RawIframe {
-    pub(crate) src: Option<String>,
-    pub(crate) title: Option<String>,
-    pub(crate) sandbox: Option<String>,
-    pub(crate) has_srcdoc: bool,
-}
-
 pub(crate) struct UnlinkedTextNode {
     pub(crate) index: usize,
     pub(crate) text: String,
@@ -129,11 +122,6 @@ impl Document {
         serialize_children_matching(head.as_node(), is_user_meta)
     }
 
-    pub(crate) fn head_links_html(&self) -> Result<String> {
-        let head = self.head()?;
-        serialize_children_matching(head.as_node(), |child| element_name(child) == Some("link"))
-    }
-
     pub(crate) fn set_user_metadata_html(&self, html: &str) -> Result<()> {
         let nodes = head_fragment_nodes(html, "meta")?;
         if nodes.iter().any(|node| !is_user_meta(node)) {
@@ -142,11 +130,6 @@ impl Document {
             ));
         }
         self.replace_head_children(is_user_meta, nodes)
-    }
-
-    pub(crate) fn set_head_links_html(&self, html: &str) -> Result<()> {
-        let nodes = head_fragment_nodes(html, "link")?;
-        self.replace_head_children(|node| element_name(node) == Some("link"), nodes)
     }
 
     pub(crate) fn repair_managed_structure(&self, default_style: &str) -> Result<()> {
@@ -286,8 +269,6 @@ impl Document {
             "h6",
             "hr",
             "i",
-            "iframe",
-            "img",
             "ins",
             "kbd",
             "li",
@@ -332,7 +313,7 @@ impl Document {
     }
 
     pub(crate) fn unsupported_native_head_elements(&self) -> Vec<String> {
-        const ALLOWED: &[&str] = &["link", "meta", "style", "title"];
+        const ALLOWED: &[&str] = &["meta", "style", "title"];
         let Ok(head) = self.root.select_first("head") else {
             return Vec::new();
         };
@@ -402,22 +383,6 @@ impl Document {
             .collect()
     }
 
-    pub(crate) fn raw_iframes(&self) -> Vec<RawIframe> {
-        self.root
-            .select("iframe")
-            .expect("static selector")
-            .map(|iframe| {
-                let attributes = iframe.attributes.borrow();
-                RawIframe {
-                    src: attributes.get("src").map(str::to_string),
-                    title: attributes.get("title").map(str::to_string),
-                    sandbox: attributes.get("sandbox").map(str::to_string),
-                    has_srcdoc: attributes.contains("srcdoc"),
-                }
-            })
-            .collect()
-    }
-
     pub(crate) fn rewrite_internal_target(
         &self,
         source: &str,
@@ -439,25 +404,6 @@ impl Document {
                 .unwrap_or("");
             let relative = relative_href(source, new_target);
             attributes.insert("href", format!("{relative}{suffix}"));
-            count += 1;
-        }
-        for iframe in self.root.select("iframe[src]").expect("static selector") {
-            let mut attributes = iframe.attributes.borrow_mut();
-            if attributes.contains("srcdoc") {
-                continue;
-            }
-            let Some(src) = attributes.get("src").map(str::to_string) else {
-                continue;
-            };
-            if resolve_internal_href(source, &src).as_deref() != Some(old_target) {
-                continue;
-            }
-            let suffix = src
-                .find(['?', '#'])
-                .map(|index| &src[index..])
-                .unwrap_or("");
-            let relative = relative_href(source, new_target);
-            attributes.insert("src", format!("{relative}{suffix}"));
             count += 1;
         }
         count
@@ -486,30 +432,6 @@ impl Document {
             );
             count += 1;
         }
-        for iframe in self.root.select("iframe[src]").expect("static selector") {
-            let mut attributes = iframe.attributes.borrow_mut();
-            if attributes.contains("srcdoc") {
-                continue;
-            }
-            let Some(src) = attributes.get("src").map(str::to_string) else {
-                continue;
-            };
-            let Some(mut target) = resolve_internal_href(old_source, &src) else {
-                continue;
-            };
-            if target == old_source {
-                target = new_source.to_string();
-            }
-            let suffix = src
-                .find(['?', '#'])
-                .map(|index| &src[index..])
-                .unwrap_or("");
-            attributes.insert(
-                "src",
-                format!("{}{}", relative_href(new_source, &target), suffix),
-            );
-            count += 1;
-        }
         count
     }
 
@@ -521,44 +443,34 @@ impl Document {
         new_prefix: &str,
     ) -> usize {
         let mut count = 0;
-        for selector in ["a[href]", "iframe[src]"] {
-            for node in self.root.select(selector).expect("static selector") {
-                let attribute = if selector.starts_with('a') {
-                    "href"
-                } else {
-                    "src"
-                };
-                let mut attributes = node.attributes.borrow_mut();
-                if attribute == "src" && attributes.contains("srcdoc") {
-                    continue;
-                }
-                let Some(value) = attributes.get(attribute).map(str::to_string) else {
-                    continue;
-                };
-                let Some(target) = resolve_internal_href(source, &value) else {
-                    continue;
-                };
-                let old = Path::new(old_prefix);
-                if !Path::new(&target).starts_with(old) {
-                    continue;
-                }
-                let suffix = value
-                    .find(['?', '#'])
-                    .map(|index| &value[index..])
-                    .unwrap_or("");
-                let remainder = Path::new(&target)
-                    .strip_prefix(old)
-                    .expect("prefix checked");
-                let target = Path::new(new_prefix)
-                    .join(remainder)
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                attributes.insert(
-                    attribute,
-                    format!("{}{suffix}", relative_href(new_source, &target)),
-                );
-                count += 1;
+        for node in self.root.select("a[href]").expect("static selector") {
+            let mut attributes = node.attributes.borrow_mut();
+            let Some(value) = attributes.get("href").map(str::to_string) else {
+                continue;
+            };
+            let Some(target) = resolve_internal_href(source, &value) else {
+                continue;
+            };
+            let old = Path::new(old_prefix);
+            if !Path::new(&target).starts_with(old) {
+                continue;
             }
+            let suffix = value
+                .find(['?', '#'])
+                .map(|index| &value[index..])
+                .unwrap_or("");
+            let remainder = Path::new(&target)
+                .strip_prefix(old)
+                .expect("prefix checked");
+            let target = Path::new(new_prefix)
+                .join(remainder)
+                .to_string_lossy()
+                .replace('\\', "/");
+            attributes.insert(
+                "href",
+                format!("{}{suffix}", relative_href(new_source, &target)),
+            );
+            count += 1;
         }
         count
     }
@@ -647,43 +559,6 @@ impl Document {
 
         insert_derived_export_links(self, derived_links, &BTreeMap::new())?;
 
-        let media: Vec<_> = self
-            .root
-            .select("img, iframe")
-            .expect("static selector")
-            .filter(|node| {
-                !node.as_node().ancestors().any(|ancestor| {
-                    ancestor.as_element().is_some_and(|element| {
-                        matches!(element.name.local.as_ref(), "img" | "iframe")
-                    })
-                })
-            })
-            .collect();
-        for media in media {
-            let marker = match media.name.local.as_ref() {
-                "img" => " [image] ",
-                "iframe" => " [iframe] ",
-                _ => continue,
-            };
-            media.as_node().insert_before(NodeRef::new_text(marker));
-            media.as_node().detach();
-        }
-
-        let links: Vec<_> = self
-            .root
-            .select("link")
-            .expect("static selector")
-            .filter(|node| {
-                node.attributes.borrow().get("rel").is_some_and(|rel| {
-                    rel.split_ascii_whitespace()
-                        .any(|value| value.eq_ignore_ascii_case("stylesheet"))
-                })
-            })
-            .collect();
-        for link in links {
-            link.as_node().detach();
-        }
-
         let markers: Vec<_> = self
             .root
             .select("meta[name]")
@@ -741,21 +616,6 @@ impl Document {
             }
         }
         insert_derived_export_links(self, derived_links, included_targets)?;
-
-        let media: Vec<_> = self
-            .root
-            .select("img, iframe")
-            .expect("static selector")
-            .collect();
-        for media in media {
-            let marker = match media.name.local.as_ref() {
-                "img" => " [image] ",
-                "iframe" => " [iframe] ",
-                _ => continue,
-            };
-            media.as_node().insert_before(NodeRef::new_text(marker));
-            media.as_node().detach();
-        }
 
         let main = self
             .root
@@ -986,8 +846,6 @@ fn append_export_text(node: &NodeRef, output: &mut String) {
         NodeData::Element(element) => {
             let name = element.name.local.as_ref();
             match name {
-                "img" => output.push_str(" [image] "),
-                "iframe" => output.push_str(" [iframe] "),
                 "script" | "style" => {}
                 _ => {
                     let block = matches!(

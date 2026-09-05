@@ -190,10 +190,8 @@ impl Project {
     /// Deletes a folder below `pages/`. Materialized folders use a single
     /// namespace rename.
     ///
-    /// The receipt includes every materialized file below the folder, including
-    /// non-HTML assets. References from surviving pages to those files reject
-    /// the operation. Deleting an ordered but missing folder only removes its
-    /// ghost entry; references to nonexistent descendants are not checked.
+    /// Deleting an ordered but missing folder only removes its ghost entry;
+    /// references to nonexistent descendants are not checked.
     pub fn delete_folder(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
         let folder = normalize_relative_path(path.as_ref())?;
         let _lock = self.lock_for_mutation()?;
@@ -225,9 +223,9 @@ impl Project {
         let mut deleted = Vec::new();
         if exists {
             collect_files(&self.root.join(PAGES), &absolute, &mut deleted)?;
-            if deleted.iter().any(|path| is_ordinary_html(path)) {
+            if deleted.iter().any(|path| !is_managed_folder_file(path)) {
                 return Err(FractalError::invalid_input(
-                    "folder contains ordinary HTML files that Fractal does not manage",
+                    "folder contains unsupported content that Fractal does not manage",
                 ));
             }
         }
@@ -263,7 +261,6 @@ impl Project {
         deleted_pages: &BTreeSet<String>,
     ) -> Result<()> {
         let mut links = 0;
-        let mut iframes = 0;
         for stored in self.pages.values() {
             if deleted_pages.contains(&stored.page.path) {
                 continue;
@@ -276,20 +273,12 @@ impl Project {
                     link_target_path(&link.target).is_some_and(|path| targets.contains(path))
                 })
                 .count();
-            iframes += stored
-                .page
-                .iframes
-                .iter()
-                .filter(|iframe| {
-                    iframe_target_path(&iframe.target).is_some_and(|path| targets.contains(path))
-                })
-                .count();
         }
-        if links == 0 && iframes == 0 {
+        if links == 0 {
             return Ok(());
         }
         Err(FractalError::invalid_input(format!(
-            "cannot delete while {links} link(s) and {iframes} iframe(s) from surviving pages target the selection"
+            "cannot delete while {links} link(s) from surviving pages target the selection"
         )))
     }
 
@@ -471,9 +460,9 @@ impl Project {
         }
         let mut old_files = Vec::new();
         collect_files(&pages, &pages.join(from), &mut old_files)?;
-        if old_files.iter().any(|path| is_ordinary_html(path)) {
+        if old_files.iter().any(|path| !is_managed_folder_file(path)) {
             return Err(FractalError::invalid_input(
-                "folder contains ordinary HTML files that Fractal does not manage",
+                "folder contains unsupported content that Fractal does not manage",
             ));
         }
         let mut old_directories = Vec::new();

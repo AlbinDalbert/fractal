@@ -149,8 +149,8 @@ impl Project {
         })
     }
 
-    /// Validates the loaded manifest, folder metadata, native documents, links,
-    /// and iframes without changing project files.
+    /// Validates the loaded manifest, folder metadata, native documents, and
+    /// links without changing project files.
     pub fn validate(&self) -> ValidationReport {
         let mut issues = Vec::new();
         if self.manifest.name.trim().is_empty() {
@@ -188,22 +188,6 @@ impl Project {
                             link.href
                         ),
                     });
-                }
-            }
-            for iframe in &stored.page.iframes {
-                match &iframe.target {
-                    IframeTarget::Broken(target) => issues.push(ValidationIssue {
-                        path: Some(stored.page.path.clone()),
-                        message: format!(
-                            "broken iframe source `{}` resolves to `{target}`",
-                            iframe.src.as_deref().unwrap_or("")
-                        ),
-                    }),
-                    IframeTarget::Missing => issues.push(ValidationIssue {
-                        path: Some(stored.page.path.clone()),
-                        message: "iframe needs a non-empty `src` or a `srcdoc` attribute".into(),
-                    }),
-                    _ => {}
                 }
             }
         }

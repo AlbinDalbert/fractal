@@ -76,13 +76,6 @@ enum Command {
         #[arg(long)]
         expected_hash: String,
     },
-    SetHeadLinks {
-        page: PathBuf,
-        #[arg(long)]
-        file: PathBuf,
-        #[arg(long)]
-        expected_hash: String,
-    },
     RepairPage {
         page: PathBuf,
     },
@@ -120,13 +113,7 @@ enum Command {
     Links {
         page: PathBuf,
     },
-    Iframes {
-        page: PathBuf,
-    },
     Backlinks {
-        page: PathBuf,
-    },
-    EmbeddedBy {
         page: PathBuf,
     },
     DerivedLinks {
@@ -250,18 +237,6 @@ pub fn run() -> Result<()> {
                     )?,
                     cli.json,
                 ),
-                Command::SetHeadLinks {
-                    page,
-                    file,
-                    expected_hash,
-                } => output(
-                    &project.set_page_head_links(
-                        page,
-                        &std::fs::read_to_string(file)?,
-                        &expected_hash,
-                    )?,
-                    cli.json,
-                ),
                 Command::RepairPage { page } => {
                     output(&project.repair_page_structure(page)?, cli.json)
                 }
@@ -293,9 +268,7 @@ pub fn run() -> Result<()> {
                 }
                 Command::Search { query } => output(&project.search(&query), cli.json),
                 Command::Links { page } => output(&project.links(page)?, cli.json),
-                Command::Iframes { page } => output(&project.iframes(page)?, cli.json),
                 Command::Backlinks { page } => output(&project.backlinks(page)?, cli.json),
-                Command::EmbeddedBy { page } => output(&project.iframe_backlinks(page)?, cli.json),
                 Command::DerivedLinks { page } => output(&project.derived_links(page)?, cli.json),
                 Command::Link { page, text, target } => {
                     output(&project.insert_link(page, &text, target)?, cli.json)

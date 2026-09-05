@@ -312,9 +312,9 @@ pub(super) fn collect_native_documents(
     Ok(())
 }
 
-pub(super) fn is_ordinary_html(path: &Path) -> bool {
-    path.extension().and_then(|extension| extension.to_str()) == Some("html")
-        && !path_string(path).ends_with(NATIVE_SUFFIX)
+pub(super) fn is_managed_folder_file(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| name == MANIFEST)
+        || path_string(path).ends_with(NATIVE_SUFFIX)
 }
 
 pub(super) fn collect_files(
@@ -1294,14 +1294,7 @@ pub(super) fn path_starts_with(path: &Path, parent: &Path) -> bool {
 
 pub(super) fn link_target_path(target: &LinkTarget) -> Option<&str> {
     match target {
-        LinkTarget::Internal(path) | LinkTarget::InternalFile(path) => Some(path),
-        _ => None,
-    }
-}
-
-pub(super) fn iframe_target_path(target: &IframeTarget) -> Option<&str> {
-    match target {
-        IframeTarget::Internal(path) | IframeTarget::InternalFile(path) => Some(path),
+        LinkTarget::Internal(path) => Some(path),
         _ => None,
     }
 }

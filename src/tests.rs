@@ -1,7 +1,7 @@
 use crate::{
     FolderChildKind, FolderChildStatus, FolderHtmlExportOptions, FractalErrorCode,
-    HtmlExportOptions, IframeTarget, LinkTarget, MutationKind, MutationReceipt, Project,
-    ProjectChange, ProjectPath,
+    HtmlExportOptions, LinkTarget, MutationKind, MutationReceipt, Project, ProjectChange,
+    ProjectPath,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -465,6 +465,26 @@ fn ordinary_html_files_are_opaque() {
 }
 
 #[test]
+fn local_links_do_not_resolve_to_opaque_files() {
+    let (temp, mut project) = project();
+    project.create_page("Notes").unwrap();
+    fs::write(temp.path().join("pages/attachment.pdf"), "opaque").unwrap();
+    project
+        .write_page(
+            "notes",
+            &native("Notes", "<a href=\"attachment.pdf\">Attachment</a>"),
+        )
+        .unwrap();
+
+    let link = &project.links("notes").unwrap()[0];
+
+    assert!(matches!(
+        &link.target,
+        LinkTarget::Broken(path) if path == "attachment.pdf"
+    ));
+}
+
+#[test]
 fn page_hashes_cover_the_exact_source_bytes() {
     let (temp, _project) = project();
     fs::write(temp.path().join("pages/native.fractal.html"), "abc").unwrap();
@@ -520,7 +540,7 @@ fn conditional_write_accepts_the_current_hash_and_exposes_the_new_hash() {
 fn native_documents_support_standard_text_elements() {
     let (_temp, mut project) = project();
     project.create_page("Elements").unwrap();
-    let body = "<p>Text<br><img src=\"image.png\" alt=\"Image\"></p><blockquote>Quote</blockquote><pre><code>let x = 1;</code></pre><table><thead><tr><th>Name</th></tr></thead><tbody><tr><td>Fractal</td></tr></tbody></table>";
+    let body = "<p>Text<br></p><blockquote>Quote</blockquote><pre><code>let x = 1;</code></pre><table><thead><tr><th>Name</th></tr></thead><tbody><tr><td>Fractal</td></tr></tbody></table>";
     project
         .write_page("elements", &native("Elements", body))
         .unwrap();
@@ -551,55 +571,34 @@ fn native_documents_reject_scripts_in_the_head() {
 }
 
 #[test]
-fn iframe_references_are_typed_and_validated() {
-    let (_temp, mut project) = project();
-    project.create_page("Widget").unwrap();
-    project.create_page("Dashboard").unwrap();
-    project
-        .write_page(
-            "dashboard",
-            &native(
-                "Dashboard",
-                "<iframe src=\"widget.fractal.html\" title=\"Widget\" sandbox></iframe><iframe srcdoc=\"&lt;p&gt;Inline&lt;/p&gt;\"></iframe><iframe src=\"https://example.com\"></iframe>",
-            ),
-        )
-        .unwrap();
+fn native_documents_reject_head_links_images_and_iframes() {
+    let (temp, _project) = project();
+    let source = "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><title>Removed elements</title><link rel=\"stylesheet\" href=\"theme.css\"><style data-fractal-style></style></head><body><main data-fractal-document><h1 data-fractal-title>Removed elements</h1><img src=\"image.png\"><iframe src=\"frame.html\"></iframe></main></body></html>";
+    let path = temp.path().join("pages/removed-elements.fractal.html");
+    fs::write(&path, source).unwrap();
 
-    let page = project.page("dashboard").unwrap();
-    assert!(matches!(
-        &page.iframes[0].target,
-        IframeTarget::Internal(path) if path == "widget.fractal.html"
-    ));
-    assert_eq!(page.iframes[0].sandbox.as_deref(), Some(""));
-    assert_eq!(page.iframes[1].target, IframeTarget::Inline);
-    assert!(matches!(
-        &page.iframes[2].target,
-        IframeTarget::External(url) if url == "https://example.com"
-    ));
-    assert_eq!(
-        project.iframe_backlinks("widget").unwrap()[0].page,
-        "dashboard.fractal.html"
-    );
-    assert!(project.validate().valid);
-}
+    let project = Project::open(temp.path()).unwrap();
+    let report = project.validate();
 
-#[test]
-fn deleting_an_embedded_page_is_rejected() {
-    let (_temp, mut project) = project();
-    project.create_page("Widget").unwrap();
-    project.create_page("Dashboard").unwrap();
-    project
-        .write_page(
-            "dashboard",
-            &native(
-                "Dashboard",
-                "<iframe src=\"widget.fractal.html\" title=\"Widget\"></iframe>",
-            ),
-        )
-        .unwrap();
+    assert!(!report.valid);
+    assert!(report
+        .issues
+        .iter()
+        .any(|issue| issue.message.contains("unsupported elements: iframe, img")));
+    assert!(report.issues.iter().any(|issue| issue
+        .message
+        .contains("head contains unsupported elements: link")));
+    assert_eq!(project.source("removed-elements").unwrap(), source);
+    assert_eq!(fs::read_to_string(path).unwrap(), source);
 
-    let error = project.delete_page("widget").unwrap_err();
-    assert!(error.message.contains("1 iframe(s)"));
+    let output = temp.path().join("invalid-export.html");
+    let error = project
+        .export_html("removed-elements", &output, HtmlExportOptions::default())
+        .unwrap_err();
+    assert!(error
+        .message
+        .contains("cannot export invalid native document"));
+    assert!(!output.exists());
 }
 
 #[test]
@@ -632,12 +631,11 @@ fn batch_delete_checks_every_path_before_deleting_any_page() {
 }
 
 #[test]
-fn folder_delete_removes_nested_pages_and_assets() {
+fn folder_delete_removes_nested_pages() {
     let (temp, mut project) = project();
     project.create_page_at("section/one", "One").unwrap();
     project.create_page_at("section/nested/two", "Two").unwrap();
     project.create_page("Keep").unwrap();
-    fs::write(temp.path().join("pages/section/image.png"), "image").unwrap();
     project = Project::open(temp.path()).unwrap();
 
     let mutation = project.delete_folder("section").unwrap();
@@ -645,7 +643,6 @@ fn folder_delete_removes_nested_pages_and_assets() {
     assert_eq!(
         deleted_file_paths(&mutation),
         vec![
-            "pages/section/image.png",
             "pages/section/nested/two.fractal.html",
             "pages/section/one.fractal.html",
         ]
@@ -673,23 +670,23 @@ fn folder_delete_rejects_references_from_surviving_pages() {
 }
 
 #[test]
-fn folder_mutations_refuse_to_relocate_or_delete_ordinary_html() {
+fn folder_mutations_refuse_to_relocate_or_delete_opaque_files() {
     let (temp, _) = project();
     fs::create_dir_all(temp.path().join("pages/archive")).unwrap();
     fs::create_dir_all(temp.path().join("pages/section")).unwrap();
-    let opaque = temp.path().join("pages/section/notes.html");
-    fs::write(&opaque, "<p>Keep me here</p>").unwrap();
+    let opaque = temp.path().join("pages/section/image.png");
+    fs::write(&opaque, "keep me here").unwrap();
     let mut project = Project::open(temp.path()).unwrap();
 
     let move_error = project
         .move_folder("section", "archive/section")
         .unwrap_err();
     assert_eq!(move_error.code, FractalErrorCode::InvalidInput);
-    assert_eq!(fs::read_to_string(&opaque).unwrap(), "<p>Keep me here</p>");
+    assert_eq!(fs::read_to_string(&opaque).unwrap(), "keep me here");
 
     let delete_error = project.delete_folder("section").unwrap_err();
     assert_eq!(delete_error.code, FractalErrorCode::InvalidInput);
-    assert_eq!(fs::read_to_string(opaque).unwrap(), "<p>Keep me here</p>");
+    assert_eq!(fs::read_to_string(opaque).unwrap(), "keep me here");
 }
 
 #[test]
@@ -809,21 +806,6 @@ fn recovery_rolls_back_an_interrupted_folder_rename() {
 }
 
 #[test]
-fn missing_local_iframe_target_invalidates_a_native_document() {
-    let (_temp, mut project) = project();
-    project.create_page("Dashboard").unwrap();
-    project
-        .write_page(
-            "dashboard",
-            &native("Dashboard", "<iframe src=\"missing.html\"></iframe>"),
-        )
-        .unwrap();
-    let report = project.validate();
-    assert!(!report.valid);
-    assert!(report.issues[0].message.contains("broken iframe source"));
-}
-
-#[test]
 fn derived_links_report_exact_title_occurrences_without_writing() {
     let (_temp, mut project) = project();
     project.create_page("Ada Lovelace").unwrap();
@@ -914,7 +896,7 @@ fn html_export_flattens_direct_native_links_into_text_references() {
     project
         .write_page(
             "source",
-            "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><meta name=\"viewport\" content=\"width=device-width\"><link rel=\"stylesheet\" href=\"theme.css\"><style data-fractal-style>body { color: red }</style><title>Source</title></head><body><main data-fractal-document><h1 data-fractal-title>Source</h1><p>Read <strong><a href=\"reference.fractal.html\">Reference</a></strong> and <a href=\"widget.html\">Widget</a>. <a href=\"https://example.com\">External</a>.</p><img src=\"image.png\"><iframe src=\"frame.html\"></iframe></main></body></html>",
+            "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><meta name=\"viewport\" content=\"width=device-width\"><style data-fractal-style>body { color: red }</style><title>Source</title></head><body><main data-fractal-document><h1 data-fractal-title>Source</h1><p>Read <strong><a href=\"reference.fractal.html\">Reference</a></strong> and <a href=\"widget.html\">Widget</a>. <a href=\"https://example.com\">External</a>.</p></main></body></html>",
         )
         .unwrap();
 
@@ -929,10 +911,7 @@ fn html_export_flattens_direct_native_links_into_text_references() {
         "Read <strong><a href=\"#fractal-reference-reference.fractal.html\">Reference</a></strong> and Widget."
     ));
     assert!(exported.contains("<a href=\"https://example.com\">External</a>"));
-    assert!(exported.contains("[image]"));
-    assert!(exported.contains("[iframe]"));
     assert!(exported.contains("<style data-fractal-style=\"\">body { color: red }</style>"));
-    assert!(!exported.contains("theme.css"));
     assert!(!exported.contains("fractal-format"));
     assert!(!exported.contains("data-fractal-document"));
     assert!(exported.contains("<section id=\"fractal-references\">"));
@@ -1308,7 +1287,6 @@ fn moving_a_folder_preserves_its_title_and_rewrites_references() {
         native("Topic", "<p>Body</p>"),
     )
     .unwrap();
-    fs::write(temp.path().join("pages/section/image.png"), "asset").unwrap();
     let mut project = Project::open(temp.path()).unwrap();
     project.create_page("Index").unwrap();
     project
@@ -1325,15 +1303,11 @@ fn moving_a_folder_preserves_its_title_and_rewrites_references() {
         .source("index")
         .unwrap()
         .contains("archive/section/topic.fractal.html"));
-    assert!(temp
-        .path()
-        .join("pages/archive/section/image.png")
-        .is_file());
     assert!(mutation.changes.iter().any(|change| matches!(
         change,
         ProjectChange::Moved { from, to, .. }
-            if from.as_str() == "pages/section/image.png"
-                && to.as_str() == "pages/archive/section/image.png"
+            if from.as_str() == "pages/section/topic.fractal.html"
+                && to.as_str() == "pages/archive/section/topic.fractal.html"
     )));
 }
 
@@ -1440,7 +1414,7 @@ fn structure_repair_marks_legacy_title_and_style() {
 }
 
 #[test]
-fn metadata_and_head_links_are_contained_sections() {
+fn metadata_is_a_contained_section() {
     let (_temp, mut project) = project();
     project.create_page("Sections").unwrap();
     let parts = project.native_document_parts("sections").unwrap();
@@ -1452,16 +1426,7 @@ fn metadata_and_head_links_are_contained_sections() {
         )
         .unwrap();
     let parts = project.native_document_parts("sections").unwrap();
-    project
-        .set_page_head_links(
-            "sections",
-            "<link rel=\"stylesheet\" href=\"theme.css\">",
-            &parts.head_links_hash,
-        )
-        .unwrap();
-    let parts = project.native_document_parts("sections").unwrap();
     assert!(parts.metadata_html.contains("description"));
-    assert!(parts.head_links_html.contains("theme.css"));
     let error = project
         .set_page_metadata(
             "sections",
@@ -1680,7 +1645,6 @@ fn guarded_recreation_restores_all_native_sections_and_never_overwrites() {
         content_html: "<p>Unsaved words.</p>".into(),
         style_css: "body { color: rebeccapurple; }".into(),
         metadata_html: "<meta name=\"description\" content=\"Recovered draft\">".into(),
-        head_links_html: "<link rel=\"stylesheet\" href=\"theme.css\">".into(),
     };
     project.delete_page("recovered").unwrap();
     let before = project_file_snapshot(temp.path());
@@ -1694,7 +1658,6 @@ fn guarded_recreation_restores_all_native_sections_and_never_overwrites() {
     assert!(restored.content_html.contains("Unsaved words."));
     assert_eq!(restored.style_css, draft.style_css);
     assert!(restored.metadata_html.contains("Recovered draft"));
-    assert!(restored.head_links_html.contains("theme.css"));
     assert_ne!(restored.source_hash, parts.source_hash);
 
     let error = project

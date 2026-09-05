@@ -41,7 +41,6 @@ const DEFAULT_STYLE: &str = r#"
     h2, h3, h4, h5, h6 { line-height: 1.2; }
     p, ul, ol, blockquote, pre, figure, table { margin: 1.25rem 0; }
     a { color: #e8bb4d; text-underline-offset: 0.18em; }
-    img, iframe { max-width: 100%; }
     code, pre { font-family: ui-monospace, monospace; }
   "#;
 

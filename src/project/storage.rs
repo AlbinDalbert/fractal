@@ -77,8 +77,6 @@ impl Project {
                     } else if let Some(resolved) = resolve_internal_href(&path, &href) {
                         if known.contains(&resolved) {
                             LinkTarget::Internal(resolved)
-                        } else if self.root.join(PAGES).join(&resolved).is_file() {
-                            LinkTarget::InternalFile(resolved)
                         } else {
                             LinkTarget::Broken(resolved)
                         }
@@ -88,46 +86,12 @@ impl Project {
                     Link { href, text, target }
                 })
                 .collect();
-            let iframes = document
-                .raw_iframes()
-                .into_iter()
-                .map(|iframe| {
-                    let target = if iframe.has_srcdoc {
-                        IframeTarget::Inline
-                    } else if let Some(src) =
-                        iframe.src.as_deref().filter(|value| !value.is_empty())
-                    {
-                        if is_external_href(src) {
-                            IframeTarget::External(src.to_string())
-                        } else if let Some(resolved) = resolve_internal_href(&path, src) {
-                            if known.contains(&resolved) {
-                                IframeTarget::Internal(resolved)
-                            } else if self.root.join(PAGES).join(&resolved).is_file() {
-                                IframeTarget::InternalFile(resolved)
-                            } else {
-                                IframeTarget::Broken(resolved)
-                            }
-                        } else {
-                            IframeTarget::Broken(src.to_string())
-                        }
-                    } else {
-                        IframeTarget::Missing
-                    };
-                    Iframe {
-                        src: iframe.src,
-                        title: iframe.title,
-                        sandbox: iframe.sandbox,
-                        target,
-                    }
-                })
-                .collect();
             let page = Page {
                 path: path.clone(),
                 content_hash: content_hash(&html),
                 title: document.title(),
                 text: document.text(),
                 links,
-                iframes,
             };
             pages.insert(path, StoredPage { page, html });
         }

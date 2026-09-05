@@ -13,12 +13,12 @@ pub use project::Project;
 pub use types::{
     Backlink, DerivedLink, Folder, FolderChild, FolderChildKind, FolderChildStatus,
     FolderHtmlExportOptions, FolderHtmlExportReport, FolderIssue, HealthIssue, HealthIssueCode,
-    HtmlExportOptions, HtmlExportReport, Iframe, IframeBacklink, IframeTarget, Link, LinkTarget,
-    MutationKind, MutationReceipt, NativeDocumentParts, NativePageDraft, OperationFailure,
-    OperationWarning, OperationWarningCode, Page, ProjectChange, ProjectEntryKind,
-    ProjectInspection, ProjectManifest, ProjectPath, ProposedRepair, RecoveryReport,
-    RecoveryTransaction, RecoveryTransactionStatus, RepairReport, SearchResult, SkippedExportPage,
-    TextOccurrence, TextPosition, ValidationIssue, ValidationReport,
+    HtmlExportOptions, HtmlExportReport, Link, LinkTarget, MutationKind, MutationReceipt,
+    NativeDocumentParts, NativePageDraft, OperationFailure, OperationWarning, OperationWarningCode,
+    Page, ProjectChange, ProjectEntryKind, ProjectInspection, ProjectManifest, ProjectPath,
+    ProposedRepair, RecoveryReport, RecoveryTransaction, RecoveryTransactionStatus, RepairReport,
+    SearchResult, SkippedExportPage, TextOccurrence, TextPosition, ValidationIssue,
+    ValidationReport,
 };
 
 /// The result type returned by Fractal operations.

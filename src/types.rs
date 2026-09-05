@@ -18,7 +18,6 @@ pub struct Page {
     pub title: Option<String>,
     pub text: String,
     pub links: Vec<Link>,
-    pub iframes: Vec<Iframe>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -70,8 +69,6 @@ pub struct NativeDocumentParts {
     pub style_hash: String,
     pub metadata_html: String,
     pub metadata_hash: String,
-    pub head_links_html: String,
-    pub head_links_hash: String,
     /// SHA-256 of the exact complete source bytes.
     pub source_hash: String,
 }
@@ -87,34 +84,8 @@ pub struct Link {
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum LinkTarget {
     Internal(String),
-    InternalFile(String),
     External(String),
     Fragment(String),
-    Broken(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Iframe {
-    pub src: Option<String>,
-    pub title: Option<String>,
-    pub sandbox: Option<String>,
-    pub target: IframeTarget,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct IframeBacklink {
-    pub page: String,
-    pub title: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-pub enum IframeTarget {
-    Internal(String),
-    InternalFile(String),
-    External(String),
-    Inline,
-    Missing,
     Broken(String),
 }
 
@@ -264,7 +235,6 @@ pub enum MutationKind {
     SetPageContent,
     SetPageStyle,
     SetPageMetadata,
-    SetPageHeadLinks,
     RepairPageStructure,
     SetPageTitle,
     MovePage,
@@ -315,7 +285,6 @@ pub struct NativePageDraft {
     pub content_html: String,
     pub style_css: String,
     pub metadata_html: String,
-    pub head_links_html: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
