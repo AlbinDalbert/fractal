@@ -2,6 +2,7 @@ use crate::{NativePageDraft, Project, Result};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 #[derive(Parser)]
 #[command(version, about = "Engine for native Fractal documents")]
@@ -153,7 +154,42 @@ enum Command {
 
 /// Parses process arguments, runs the selected command, and writes its output.
 pub fn run() -> Result<()> {
-    let cli = Cli::parse();
+    execute(Cli::parse())
+}
+
+/// Runs the CLI and reports failures in the requested output format.
+///
+/// This is the process entry point used by the `fractal` binary. Library
+/// callers should use [`run`] when they need to handle errors themselves.
+#[doc(hidden)]
+pub fn run_and_report() -> ExitCode {
+    let json_requested = std::env::args_os().any(|argument| argument == "--json");
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            if error.exit_code() == 0 {
+                let _ = error.print();
+                return ExitCode::SUCCESS;
+            }
+            if json_requested {
+                report_error(&crate::FractalError::invalid_input(error.to_string()), true);
+            } else {
+                let _ = error.print();
+            }
+            return ExitCode::from(error.exit_code() as u8);
+        }
+    };
+    let json = cli.json;
+    match execute(cli) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            report_error(&error, json);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn execute(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Init { path, name } => {
             let name = name
@@ -321,6 +357,17 @@ pub fn run() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn report_error(error: &crate::FractalError, json: bool) {
+    if json {
+        eprintln!(
+            "{}",
+            serde_json::to_string_pretty(error).expect("serializable error")
+        );
+    } else {
+        eprintln!("Error: {error}");
+    }
 }
 
 fn output(value: &impl Serialize, json: bool) {

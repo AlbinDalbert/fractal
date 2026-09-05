@@ -1,3 +1,3 @@
-fn main() -> fractal::Result<()> {
-    fractal::cli::run()
+fn main() -> std::process::ExitCode {
+    fractal::cli::run_and_report()
 }
