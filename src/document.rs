@@ -543,7 +543,7 @@ impl Document {
         Ok(String::from_utf8(bytes)?)
     }
 
-    pub(crate) fn flatten_for_html(
+    pub(crate) fn prepare_html_export(
         &self,
         source: &str,
         native_targets: &BTreeSet<String>,
@@ -569,8 +569,6 @@ impl Document {
                 link.attributes
                     .borrow_mut()
                     .insert("href", export_reference_href(&target));
-            } else {
-                unwrap_element(link.as_node().clone());
             }
         }
 
@@ -628,8 +626,6 @@ impl Document {
                 link.attributes
                     .borrow_mut()
                     .insert("href", export_reference_href(&target));
-            } else {
-                unwrap_element(link.as_node().clone());
             }
         }
         insert_derived_export_links(self, derived_links, included_targets)?;
@@ -847,14 +843,6 @@ fn utf16_offset_to_byte(value: &str, offset: usize) -> Option<usize> {
         }
     }
     (utf16_offset == offset).then_some(value.len())
-}
-
-fn unwrap_element(node: NodeRef) {
-    let children: Vec<_> = node.children().collect();
-    for child in children {
-        node.insert_before(child);
-    }
-    node.detach();
 }
 
 fn append_export_text(node: &NodeRef, output: &mut String) {

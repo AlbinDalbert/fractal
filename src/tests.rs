@@ -1029,7 +1029,7 @@ fn derived_links_prefer_the_longest_exact_title() {
 }
 
 #[test]
-fn html_export_flattens_direct_native_links_into_text_references() {
+fn html_export_rewrites_native_links_and_preserves_opaque_links() {
     let (temp, mut project) = project();
     project.create_page("Source").unwrap();
     project.create_page("Reference").unwrap();
@@ -1063,7 +1063,7 @@ fn html_export_flattens_direct_native_links_into_text_references() {
 
     assert_eq!(report.references, vec!["reference.fractal.html"]);
     assert!(exported.contains(
-        "Read <strong><a href=\"#fractal-reference-reference.fractal.html\">Reference</a></strong> and Widget."
+        "Read <strong><a href=\"#fractal-reference-reference.fractal.html\">Reference</a></strong> and <a href=\"widget.html\">Widget</a>."
     ));
     assert!(exported.contains("<a href=\"https://example.com\">External</a>"));
     assert!(exported.contains("<style data-fractal-style=\"\">body { color: red }</style>"));
@@ -1083,7 +1083,7 @@ fn html_export_flattens_direct_native_links_into_text_references() {
 }
 
 #[test]
-fn html_export_can_include_derived_native_references() {
+fn derived_links_match_in_page_and_folder_exports() {
     let (temp, mut project) = project();
     project.create_page("Target").unwrap();
     project.create_page("Source").unwrap();
@@ -1111,9 +1111,27 @@ fn html_export_can_include_derived_native_references() {
         )
         .unwrap();
     assert_eq!(with.references, vec!["target.fractal.html"]);
-    let exported = fs::read_to_string(output_with).unwrap();
-    assert!(exported.contains("<a href=\"#fractal-reference-target.fractal.html\">Target</a>"));
-    assert!(exported.contains("<summary>Target</summary>"));
+    let page_html = fs::read_to_string(output_with).unwrap();
+
+    let folder_output = temp.path().join("folder.html");
+    let folder = project
+        .export_folder_html(
+            ".",
+            &folder_output,
+            FolderHtmlExportOptions {
+                selections: vec!["source.fractal.html".into()],
+                include_derived_links: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let folder_html = fs::read_to_string(folder_output).unwrap();
+
+    assert_eq!(folder.references, with.references);
+    for html in [page_html, folder_html] {
+        assert!(html.contains("<a href=\"#fractal-reference-target.fractal.html\">Target</a>"));
+        assert!(html.contains("<summary>Target</summary>"));
+    }
 }
 
 #[test]
@@ -1259,7 +1277,7 @@ fn folder_export_links_included_pages_and_places_derived_references_last() {
             "first",
             &native(
                 "First",
-                "<p><a href=\"second.fractal.html\">Second</a> and Reference.</p>",
+                "<p><a href=\"second.fractal.html\">Second</a>, Reference, and <a href=\"attachment.pdf\">Attachment</a>.</p>",
             ),
         )
         .unwrap();
@@ -1279,6 +1297,7 @@ fn folder_export_links_included_pages_and_places_derived_references_last() {
     let html = fs::read_to_string(output).unwrap();
     assert!(html.contains("href=\"#fractal-page-"));
     assert!(!html.contains("href=\"#fractal-reference-second.fractal.html\""));
+    assert!(html.contains("href=\"attachment.pdf\""));
     assert_eq!(report.references, vec!["reference.fractal.html"]);
     assert!(
         html.find("id=\"fractal-references\"").unwrap() > html.find("<h1>Second</h1>").unwrap()

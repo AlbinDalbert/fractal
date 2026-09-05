@@ -30,29 +30,24 @@ impl Project {
                 if target == page_path_string || !seen.insert(target.to_string()) {
                     return;
                 }
-                if self.pages.contains_key(target) {
-                    references.push(target.to_string());
-                }
+                references.push(target.to_string());
             };
 
-        let document = Document::parse(&stored.html);
-        for (href, _) in document.raw_links() {
-            if let Some(target) = resolve_internal_href(&page_path_string, &href) {
-                add_reference(&target, &mut references, &mut seen);
+        for link in &stored.page.links {
+            if let LinkTarget::Resolved(target) = &link.target {
+                add_reference(target, &mut references, &mut seen);
             }
         }
         if options.include_derived_links {
             for link in self.derived_links(&page_path)? {
-                if self.pages.contains_key(&link.target) {
-                    add_reference(&link.target, &mut references, &mut seen);
-                    derived_references.push(link);
-                }
+                add_reference(&link.target, &mut references, &mut seen);
+                derived_references.push(link);
             }
         }
 
         let export = Document::parse(&stored.html);
         let native_targets: BTreeSet<_> = references.iter().cloned().collect();
-        export.flatten_for_html(&page_path_string, &native_targets, &derived_references)?;
+        export.prepare_html_export(&page_path_string, &native_targets, &derived_references)?;
         if !references.is_empty() {
             let mut section = String::from(
                 r#"<section id="fractal-references">
@@ -152,10 +147,7 @@ impl Project {
             let stored = self.pages.get(path).expect("included page exists");
             for link in &stored.page.links {
                 if let LinkTarget::Resolved(target) = &link.target {
-                    if !included.contains(target)
-                        && self.pages.contains_key(target)
-                        && seen_references.insert(target.clone())
-                    {
+                    if !included.contains(target) && seen_references.insert(target.clone()) {
                         references.push(target.clone());
                     }
                 }
