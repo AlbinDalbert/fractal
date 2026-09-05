@@ -213,6 +213,29 @@ impl Project {
 
     fn proposed_repairs(&self) -> Result<Vec<ProposedRepair>> {
         let mut repairs = Vec::new();
+        let mut moved_paths = BTreeMap::new();
+        for stored in self.folders.values() {
+            let path = Path::new(&stored.folder.path);
+            if let Some(parent) = path.parent() {
+                let desired = parent.join(slug(&stored.folder.title)?);
+                if desired != path {
+                    moved_paths.insert(path.to_path_buf(), desired);
+                }
+            }
+        }
+        for stored in self.pages.values() {
+            if stored.page.kind != PageKind::Native {
+                continue;
+            }
+            let Some(title) = stored.page.title.as_deref() else {
+                continue;
+            };
+            let path = PathBuf::from(&stored.page.path);
+            let desired = path.with_file_name(format!("{}{}", slug(title)?, NATIVE_SUFFIX));
+            if desired != path {
+                moved_paths.insert(path, desired);
+            }
+        }
         for stored in self.folders.values() {
             let path = Path::new(&stored.folder.path);
             if let Some(parent) = path.parent() {
@@ -231,7 +254,14 @@ impl Project {
                     .folder
                     .children
                     .iter()
-                    .map(|child| child.name.clone())
+                    .map(|child| {
+                        let child_path = path.join(&child.name);
+                        moved_paths
+                            .get(&child_path)
+                            .and_then(|moved| moved.file_name())
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| child.name.clone())
+                    })
                     .filter(|name| !known.contains(name))
                     .collect();
                 if !additions.is_empty() {

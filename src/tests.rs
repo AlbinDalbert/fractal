@@ -1602,6 +1602,38 @@ fn inspection_reports_and_repair_fixes_title_path_mismatches() {
 }
 
 #[test]
+fn inspection_proposes_post_rename_name_for_folder_order() {
+    let (temp, mut project) = project();
+    project.create_page("One").unwrap();
+    project.reorder_folder(".", ["one.fractal.html"]).unwrap();
+    fs::write(
+        temp.path().join("pages/wrong.fractal.html"),
+        native("Correct title", ""),
+    )
+    .unwrap();
+    drop(project);
+
+    let inspection = Project::inspect(temp.path()).unwrap();
+    assert!(inspection.proposed_repairs.iter().any(|repair| matches!(
+        repair,
+        crate::ProposedRepair::AppendFolderOrder { additions, .. }
+            if additions == &["correct-title.fractal.html"]
+    )));
+    assert!(!inspection.proposed_repairs.iter().any(|repair| matches!(
+        repair,
+        crate::ProposedRepair::AppendFolderOrder { additions, .. }
+            if additions.iter().any(|name| name == "wrong.fractal.html")
+    )));
+
+    let mut project = Project::open(temp.path()).unwrap();
+    project.repair().unwrap();
+    assert_eq!(
+        project.folder(".").unwrap().order.unwrap(),
+        vec!["one.fractal.html", "correct-title.fractal.html"]
+    );
+}
+
+#[test]
 fn opening_and_inspection_never_rewrite_project_files() {
     let (temp, mut project) = project();
     project.create_page("One").unwrap();
