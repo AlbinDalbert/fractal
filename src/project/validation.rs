@@ -172,9 +172,6 @@ impl Project {
             }
         }
         for stored in self.pages.values() {
-            if stored.page.kind != PageKind::Native {
-                continue;
-            }
             let document = Document::parse(&stored.html);
             for message in native_document_issues(&document) {
                 issues.push(ValidationIssue {
@@ -234,9 +231,6 @@ impl Project {
             }
         }
         for stored in self.pages.values() {
-            if stored.page.kind != PageKind::Native {
-                continue;
-            }
             let Some(title) = stored.page.title.as_deref() else {
                 continue;
             };

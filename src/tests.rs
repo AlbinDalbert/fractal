@@ -1,6 +1,6 @@
 use crate::{
     FolderChildKind, FolderChildStatus, FolderHtmlExportOptions, FractalErrorCode,
-    HtmlExportOptions, IframeTarget, LinkTarget, MutationKind, MutationReceipt, PageKind, Project,
+    HtmlExportOptions, IframeTarget, LinkTarget, MutationKind, MutationReceipt, Project,
     ProjectChange, ProjectPath,
 };
 use sha2::{Digest, Sha256};
@@ -395,6 +395,7 @@ fn validation_reports_missing_titles_and_broken_links() {
     )
     .unwrap();
     let project = Project::open(temp.path()).unwrap();
+    assert_eq!(project.pages()[0].path, "broken.fractal.html");
     let report = project.validate();
     assert!(!report.valid);
     assert_eq!(report.issues.len(), 4);
@@ -419,7 +420,6 @@ fn new_pages_are_native_documents() {
     project.create_page("Native page").unwrap();
     let page = project.page("native-page").unwrap();
     assert_eq!(page.path, "native-page.fractal.html");
-    assert_eq!(page.kind, PageKind::Native);
     let source = project.source("native-page").unwrap();
     assert!(source.contains("<meta name=\"fractal-format\" content=\"1\">"));
     assert!(source.contains("<meta name=\"viewport\""));
@@ -429,43 +429,50 @@ fn new_pages_are_native_documents() {
 }
 
 #[test]
-fn raw_html_is_readable_without_being_native() {
-    let (temp, _project) = project();
-    let source = "<article><custom-card>Hand-authored content</custom-card></article>";
-    fs::write(temp.path().join("pages/raw.html"), source).unwrap();
+fn ordinary_html_files_are_opaque() {
+    let (temp, mut project) = project();
+    project.create_page("Notes").unwrap();
+    let path = temp.path().join("pages/opaque.html");
+    let same_stem_path = temp.path().join("pages/notes.html");
+    let source =
+        "<title>Opaque</title><p>unindexed phrase <a href=\"missing.fractal.html\">Missing</a></p>";
+    fs::write(&path, source).unwrap();
+    fs::write(&same_stem_path, source).unwrap();
     let project = Project::open(temp.path()).unwrap();
-    let page = project.page("raw").unwrap();
-    assert_eq!(page.kind, PageKind::Raw);
-    assert_eq!(page.title, None);
-    assert_eq!(project.source("raw").unwrap(), source);
-    assert!(project.validate().valid);
-}
 
-#[test]
-fn explicit_raw_source_write_preserves_the_supplied_bytes() {
-    let (temp, _project) = project();
-    fs::write(temp.path().join("pages/raw.html"), "<p>Before</p>").unwrap();
-    let mut project = Project::open(temp.path()).unwrap();
-    let replacement = "  <CUSTOM-ELEMENT data-value='one'>After</CUSTOM-ELEMENT>\n";
-
-    project.write_page("raw", replacement).unwrap();
-
-    assert_eq!(project.source("raw").unwrap(), replacement);
+    assert_eq!(project.pages().len(), 1);
+    assert_eq!(project.page("notes").unwrap().path, "notes.fractal.html");
+    assert!(project.search("unindexed phrase").is_empty());
     assert_eq!(
-        fs::read_to_string(temp.path().join("pages/raw.html")).unwrap(),
-        replacement
+        project.page("opaque").unwrap_err().code,
+        FractalErrorCode::NotFound
     );
+    assert_eq!(
+        project.source("opaque").unwrap_err().code,
+        FractalErrorCode::NotFound
+    );
+    assert_eq!(
+        project.content_hash("opaque").unwrap_err().code,
+        FractalErrorCode::NotFound
+    );
+    assert_eq!(
+        project.links("opaque").unwrap_err().code,
+        FractalErrorCode::NotFound
+    );
+    assert!(project.validate().valid);
+    assert_eq!(fs::read_to_string(path).unwrap(), source);
+    assert_eq!(fs::read_to_string(same_stem_path).unwrap(), source);
 }
 
 #[test]
 fn page_hashes_cover_the_exact_source_bytes() {
     let (temp, _project) = project();
-    fs::write(temp.path().join("pages/raw.html"), "abc").unwrap();
+    fs::write(temp.path().join("pages/native.fractal.html"), "abc").unwrap();
     let project = Project::open(temp.path()).unwrap();
 
     let hash = "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-    assert_eq!(project.content_hash("raw").unwrap(), hash);
-    assert_eq!(project.page("raw").unwrap().content_hash, hash);
+    assert_eq!(project.content_hash("native").unwrap(), hash);
+    assert_eq!(project.page("native").unwrap().content_hash, hash);
 }
 
 #[test]
@@ -510,33 +517,6 @@ fn conditional_write_accepts_the_current_hash_and_exposes_the_new_hash() {
 }
 
 #[test]
-fn semantic_link_insertion_rejects_raw_html() {
-    let (temp, _project) = project();
-    fs::write(
-        temp.path().join("pages/raw.html"),
-        "<title>Raw</title><p>Visit Native.</p>",
-    )
-    .unwrap();
-    let mut project = Project::open(temp.path()).unwrap();
-    project.create_page("Native").unwrap();
-    let error = project.insert_link("raw", "Native", "native").unwrap_err();
-    assert!(error
-        .message
-        .contains("only available for native documents"));
-}
-
-#[test]
-fn moving_a_native_page_does_not_rewrite_raw_html() {
-    let (temp, mut project) = project();
-    project.create_page("Native").unwrap();
-    let raw = "<title>Raw</title><a href=\"native.fractal.html\">Native</a>";
-    fs::write(temp.path().join("pages/raw.html"), raw).unwrap();
-    project = Project::open(temp.path()).unwrap();
-    project.move_page("native", "moved/native").unwrap();
-    assert_eq!(project.source("raw").unwrap(), raw);
-}
-
-#[test]
 fn native_documents_support_standard_text_elements() {
     let (_temp, mut project) = project();
     project.create_page("Elements").unwrap();
@@ -572,20 +552,15 @@ fn native_documents_reject_scripts_in_the_head() {
 
 #[test]
 fn iframe_references_are_typed_and_validated() {
-    let (temp, _project) = project();
-    fs::write(
-        temp.path().join("pages/widget.html"),
-        "<style>body { color: tomato }</style><p>Widget</p>",
-    )
-    .unwrap();
-    let mut project = Project::open(temp.path()).unwrap();
+    let (_temp, mut project) = project();
+    project.create_page("Widget").unwrap();
     project.create_page("Dashboard").unwrap();
     project
         .write_page(
             "dashboard",
             &native(
                 "Dashboard",
-                "<iframe src=\"widget.html\" title=\"Widget\" sandbox></iframe><iframe srcdoc=\"&lt;p&gt;Inline&lt;/p&gt;\"></iframe><iframe src=\"https://example.com\"></iframe>",
+                "<iframe src=\"widget.fractal.html\" title=\"Widget\" sandbox></iframe><iframe srcdoc=\"&lt;p&gt;Inline&lt;/p&gt;\"></iframe><iframe src=\"https://example.com\"></iframe>",
             ),
         )
         .unwrap();
@@ -593,7 +568,7 @@ fn iframe_references_are_typed_and_validated() {
     let page = project.page("dashboard").unwrap();
     assert!(matches!(
         &page.iframes[0].target,
-        IframeTarget::Internal(path) if path == "widget.html"
+        IframeTarget::Internal(path) if path == "widget.fractal.html"
     ));
     assert_eq!(page.iframes[0].sandbox.as_deref(), Some(""));
     assert_eq!(page.iframes[1].target, IframeTarget::Inline);
@@ -609,44 +584,16 @@ fn iframe_references_are_typed_and_validated() {
 }
 
 #[test]
-fn moving_raw_html_updates_native_iframes_without_changing_raw_source() {
-    let (temp, _project) = project();
-    let raw = "<style>body { color: tomato }</style><p>Widget</p>";
-    fs::write(temp.path().join("pages/widget.html"), raw).unwrap();
-    let mut project = Project::open(temp.path()).unwrap();
-    project.create_page("Dashboard").unwrap();
-    project
-        .write_page(
-            "dashboard",
-            &native(
-                "Dashboard",
-                "<iframe src=\"widget.html#preview\" title=\"Widget\"></iframe>",
-            ),
-        )
-        .unwrap();
-
-    project.move_page("widget", "embeds/widget").unwrap();
-
-    assert_eq!(project.source("embeds/widget").unwrap(), raw);
-    assert!(project
-        .source("dashboard")
-        .unwrap()
-        .contains("embeds/widget.html#preview"));
-    assert!(project.validate().valid);
-}
-
-#[test]
 fn deleting_an_embedded_page_is_rejected() {
-    let (temp, _project) = project();
-    fs::write(temp.path().join("pages/widget.html"), "<p>Widget</p>").unwrap();
-    let mut project = Project::open(temp.path()).unwrap();
+    let (_temp, mut project) = project();
+    project.create_page("Widget").unwrap();
     project.create_page("Dashboard").unwrap();
     project
         .write_page(
             "dashboard",
             &native(
                 "Dashboard",
-                "<iframe src=\"widget.html\" title=\"Widget\"></iframe>",
+                "<iframe src=\"widget.fractal.html\" title=\"Widget\"></iframe>",
             ),
         )
         .unwrap();
@@ -723,6 +670,26 @@ fn folder_delete_rejects_references_from_surviving_pages() {
 
     assert!(error.message.contains("1 link(s)"));
     assert!(project.page("section/one").is_ok());
+}
+
+#[test]
+fn folder_mutations_refuse_to_relocate_or_delete_ordinary_html() {
+    let (temp, _) = project();
+    fs::create_dir_all(temp.path().join("pages/archive")).unwrap();
+    fs::create_dir_all(temp.path().join("pages/section")).unwrap();
+    let opaque = temp.path().join("pages/section/notes.html");
+    fs::write(&opaque, "<p>Keep me here</p>").unwrap();
+    let mut project = Project::open(temp.path()).unwrap();
+
+    let move_error = project
+        .move_folder("section", "archive/section")
+        .unwrap_err();
+    assert_eq!(move_error.code, FractalErrorCode::InvalidInput);
+    assert_eq!(fs::read_to_string(&opaque).unwrap(), "<p>Keep me here</p>");
+
+    let delete_error = project.delete_folder("section").unwrap_err();
+    assert_eq!(delete_error.code, FractalErrorCode::InvalidInput);
+    assert_eq!(fs::read_to_string(opaque).unwrap(), "<p>Keep me here</p>");
 }
 
 #[test]
@@ -930,7 +897,11 @@ fn html_export_flattens_direct_native_links_into_text_references() {
     project.create_page("Source").unwrap();
     project.create_page("Reference").unwrap();
     project.create_page("Nested").unwrap();
-    fs::write(temp.path().join("pages/widget.html"), "<p>Raw widget</p>").unwrap();
+    fs::write(
+        temp.path().join("pages/widget.html"),
+        "<p>Opaque widget</p>",
+    )
+    .unwrap();
     project
         .write_page(
             "reference",
@@ -1009,26 +980,6 @@ fn html_export_can_include_derived_native_references() {
     let exported = fs::read_to_string(output_with).unwrap();
     assert!(exported.contains("<a href=\"#fractal-reference-target.fractal.html\">Target</a>"));
     assert!(exported.contains("<summary>Target</summary>"));
-}
-
-#[test]
-fn html_export_rejects_raw_html_pages() {
-    let (temp, _project) = project();
-    fs::write(temp.path().join("pages/raw.html"), "<p>Raw</p>").unwrap();
-    let project = Project::open(temp.path()).unwrap();
-
-    let error = project
-        .export_html(
-            "raw",
-            temp.path().join("export.html"),
-            HtmlExportOptions::default(),
-        )
-        .unwrap_err();
-
-    assert_eq!(error.code, FractalErrorCode::InvalidInput);
-    assert!(error
-        .message
-        .contains("only available for native documents"));
 }
 
 #[test]
@@ -1203,7 +1154,7 @@ fn folders_default_to_folders_first_then_native_files() {
     let (temp, mut project) = project();
     fs::create_dir_all(temp.path().join("pages/z-folder")).unwrap();
     fs::create_dir_all(temp.path().join("pages/a-folder")).unwrap();
-    fs::write(temp.path().join("pages/raw.html"), "<p>Raw</p>").unwrap();
+    fs::write(temp.path().join("pages/notes.html"), "<p>Opaque</p>").unwrap();
     project.create_page_at("z.fractal.html", "Z").unwrap();
     project.create_page_at("a.fractal.html", "A").unwrap();
 
@@ -1469,16 +1420,6 @@ fn native_section_hash_rejects_a_stale_change_to_the_same_section() {
         .set_page_content("draft", "<p>Stale</p>", &parts.content_hash)
         .unwrap_err();
     assert_eq!(error.code, FractalErrorCode::Conflict);
-}
-
-#[test]
-fn raw_writes_cannot_replace_a_native_document() {
-    let (_temp, mut project) = project();
-    project.create_page("Native").unwrap();
-    let error = project
-        .write_raw_page("native", "<p>replacement</p>")
-        .unwrap_err();
-    assert!(error.message.contains("only available for raw HTML"));
 }
 
 #[test]

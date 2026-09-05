@@ -16,11 +16,6 @@ impl Project {
         let page_path = self.existing_path(path.as_ref())?;
         let page_path_string = path_string(&page_path);
         let stored = self.stored(&page_path)?;
-        if stored.page.kind != PageKind::Native {
-            return Err(FractalError::invalid_input(
-                "HTML export is only available for native documents",
-            ));
-        }
         if let Some(issue) = native_document_issues(&Document::parse(&stored.html)).first() {
             return Err(FractalError::invalid_input(format!(
                 "cannot export invalid native document: {issue}"
@@ -35,11 +30,7 @@ impl Project {
                 if target == page_path_string || !seen.insert(target.to_string()) {
                     return;
                 }
-                if self
-                    .pages
-                    .get(target)
-                    .is_some_and(|page| page.page.kind == PageKind::Native)
-                {
+                if self.pages.contains_key(target) {
                     references.push(target.to_string());
                 }
             };
@@ -52,11 +43,7 @@ impl Project {
         }
         if options.include_derived_links {
             for link in self.derived_links(&page_path)? {
-                if self
-                    .pages
-                    .get(&link.target)
-                    .is_some_and(|page| page.page.kind == PageKind::Native)
-                {
+                if self.pages.contains_key(&link.target) {
                     add_reference(&link.target, &mut references, &mut seen);
                     derived_references.push(link);
                 }
@@ -166,10 +153,7 @@ impl Project {
             for link in &stored.page.links {
                 if let LinkTarget::Internal(target) = &link.target {
                     if !included.contains(target)
-                        && self
-                            .pages
-                            .get(target)
-                            .is_some_and(|page| page.page.kind == PageKind::Native)
+                        && self.pages.contains_key(target)
                         && seen_references.insert(target.clone())
                     {
                         references.push(target.clone());
@@ -293,10 +277,7 @@ impl Project {
 
     fn export_selection_exists(&self, folder: &Path, selection: &str) -> bool {
         let absolute = folder.join(selection);
-        if self
-            .pages
-            .get(&path_string(&absolute))
-            .is_some_and(|stored| stored.page.kind == PageKind::Native)
+        if self.pages.contains_key(&path_string(&absolute))
             || self.folders.contains_key(&path_string(&absolute))
         {
             return true;

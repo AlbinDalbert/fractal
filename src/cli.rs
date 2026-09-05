@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(version, about = "Engine for native Fractal documents and raw HTML")]
+#[command(version, about = "Engine for native Fractal documents")]
 struct Cli {
     #[arg(short, long, global = true, default_value = ".")]
     project: PathBuf,
@@ -96,13 +96,6 @@ enum Command {
         page: PathBuf,
         #[arg(long)]
         draft: PathBuf,
-    },
-    Write {
-        page: PathBuf,
-        #[arg(long)]
-        file: PathBuf,
-        #[arg(long)]
-        expected_hash: Option<String>,
     },
     Move {
         page: PathBuf,
@@ -285,19 +278,6 @@ pub fn run() -> Result<()> {
                     let draft: NativePageDraft =
                         serde_json::from_str(&std::fs::read_to_string(draft)?)?;
                     output(&project.recreate_page_from_draft(page, &draft)?, cli.json)
-                }
-                Command::Write {
-                    page,
-                    file,
-                    expected_hash,
-                } => {
-                    let source = std::fs::read_to_string(file)?;
-                    let result = if let Some(expected_hash) = expected_hash {
-                        project.write_raw_page_if_unchanged(page, &source, &expected_hash)?
-                    } else {
-                        project.write_raw_page(page, &source)?
-                    };
-                    output(&result, cli.json)
                 }
                 Command::Move { page, destination } => {
                     output(&project.move_page(page, destination)?, cli.json)

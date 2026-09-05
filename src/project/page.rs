@@ -24,27 +24,20 @@ impl NativePageDraft {
 }
 
 impl Project {
-    /// Returns the indexed metadata for a page.
+    /// Returns the indexed metadata for a native document.
     pub fn page(&self, path: impl AsRef<Path>) -> Result<Page> {
         Ok(self.stored(path.as_ref())?.page.clone())
     }
 
-    /// Returns the exact HTML source stored for a page.
+    /// Returns the exact HTML source stored for a native document.
     pub fn source(&self, path: impl AsRef<Path>) -> Result<String> {
         Ok(self.stored(path.as_ref())?.html.clone())
     }
 
     /// Extracts the editor-owned sections of a native document and hashes each
     /// section for guarded mutation.
-    ///
-    /// Raw HTML pages do not have native document sections and are rejected.
     pub fn native_document_parts(&self, path: impl AsRef<Path>) -> Result<NativeDocumentParts> {
         let stored = self.stored(path.as_ref())?;
-        if stored.page.kind != PageKind::Native {
-            return Err(FractalError::invalid_input(
-                "document parts are only available for native documents",
-            ));
-        }
         let document = Document::parse(&stored.html);
         let title = document.title().unwrap_or_default();
         let content_html = document.content_html()?;
@@ -66,7 +59,7 @@ impl Project {
         })
     }
 
-    /// Returns the SHA-256 hash of the page's exact UTF-8 source bytes.
+    /// Returns the SHA-256 hash of a native document's exact UTF-8 source bytes.
     pub fn content_hash(&self, path: impl AsRef<Path>) -> Result<String> {
         Ok(self.stored(path.as_ref())?.page.content_hash.clone())
     }
@@ -108,11 +101,6 @@ impl Project {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
         let from = self.existing_path(path)?;
-        if page_kind(&from) != PageKind::Native {
-            return Err(FractalError::invalid_input(
-                "titles can only be changed on native documents",
-            ));
-        }
         if let Some(expected_hash) = expected_hash {
             let actual_title = self.stored(&from)?.page.title.as_deref().unwrap_or("");
             let actual_hash = content_hash(actual_title);
@@ -245,60 +233,6 @@ impl Project {
         self.recreate_page_from_draft(path, &draft)
     }
 
-    /// Replaces the complete source of a raw HTML page.
-    ///
-    /// Native documents must be changed through their section mutation methods.
-    pub fn write_raw_page(
-        &mut self,
-        path: impl AsRef<Path>,
-        html: &str,
-    ) -> Result<MutationReceipt> {
-        self.write_raw_page_inner(path.as_ref(), html, None)
-    }
-
-    /// Replaces a page only when its current source hash matches `expected_hash`.
-    ///
-    /// Fractal holds the project lock while it refreshes the page, compares the
-    /// hash, and atomically replaces the file.
-    pub fn write_raw_page_if_unchanged(
-        &mut self,
-        path: impl AsRef<Path>,
-        html: &str,
-        expected_hash: &str,
-    ) -> Result<MutationReceipt> {
-        self.write_raw_page_inner(path.as_ref(), html, Some(expected_hash))
-    }
-
-    fn write_raw_page_inner(
-        &mut self,
-        path: &Path,
-        html: &str,
-        expected_hash: Option<&str>,
-    ) -> Result<MutationReceipt> {
-        let _lock = self.lock_for_mutation()?;
-        self.reload()?;
-        let relative = self.existing_path(path.as_ref())?;
-        if let Some(expected_hash) = expected_hash {
-            let actual_hash = &self.stored(&relative)?.page.content_hash;
-            if actual_hash != expected_hash {
-                return Err(FractalError::conflict(format!(
-                    "page changed since it was read: {} (expected {expected_hash}, found {actual_hash})",
-                    relative.display()
-                )));
-            }
-        }
-        if page_kind(&relative) == PageKind::Native {
-            return Err(FractalError::invalid_input(
-                "whole-source writes are only available for raw HTML; use a native section mutation",
-            ));
-        }
-        let mut plan = MutationPlan::new(MutationKind::WriteRawPage);
-        plan.write_page(relative, html);
-        let receipt = plan.commit(&self.root)?;
-        self.reload()?;
-        Ok(receipt)
-    }
-
     /// Replaces a native document's content section if it has not changed since
     /// it was read.
     ///
@@ -395,11 +329,6 @@ impl Project {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
         let relative = self.existing_path(path.as_ref())?;
-        if page_kind(&relative) != PageKind::Native {
-            return Err(FractalError::invalid_input(
-                "structure repair is only available for native documents",
-            ));
-        }
         let document = Document::parse(&self.stored(&relative)?.html);
         document.repair_managed_structure(DEFAULT_STYLE)?;
         self.commit_native_document(relative, document, MutationKind::RepairPageStructure)
@@ -419,11 +348,6 @@ impl Project {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
         let relative = self.existing_path(path)?;
-        if page_kind(&relative) != PageKind::Native {
-            return Err(FractalError::invalid_input(
-                "native section mutations require a native document",
-            ));
-        }
         let document = Document::parse(&self.stored(&relative)?.html);
         let actual_hash = match section {
             "content" => content_hash(&document.content_html()?),
@@ -471,8 +395,7 @@ impl Project {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
         let from = self.existing_path(from.as_ref())?;
-        let kind = page_kind(&from);
-        let to = normalize_destination_page_path(to.as_ref(), kind)?;
+        let to = normalize_native_page_path(to.as_ref())?;
         if from == to {
             return Ok(noop_receipt(MutationKind::MovePage));
         }
@@ -486,18 +409,13 @@ impl Project {
 
         let from_string = path_string(&from);
         let to_string = path_string(&to);
-        let source_html = self.stored(&from)?.html.clone();
-        let moved_html = if kind == PageKind::Native {
-            let moved_document = Document::parse(&source_html);
-            moved_document.rewrite_source_location(&from_string, &to_string);
-            moved_document.serialize()?
-        } else {
-            source_html
-        };
+        let moved_document = Document::parse(&self.stored(&from)?.html);
+        moved_document.rewrite_source_location(&from_string, &to_string);
+        let moved_html = moved_document.serialize()?;
 
         let mut rewrites = Vec::new();
         for (path, stored) in &self.pages {
-            if path == &from_string || stored.page.kind != PageKind::Native {
+            if path == &from_string {
                 continue;
             }
             let document = Document::parse(&stored.html);
@@ -514,30 +432,28 @@ impl Project {
         for (path, html) in rewrites {
             plan.write_page(PathBuf::from(path), html);
         }
-        if kind == PageKind::Native {
-            let from_parent = from.parent().unwrap_or_else(|| Path::new(""));
-            let to_parent = to.parent().unwrap_or_else(|| Path::new(""));
-            let from_name = from.file_name().expect("page has a name").to_string_lossy();
-            let to_name = to.file_name().expect("page has a name").to_string_lossy();
-            if from_parent == to_parent {
-                if let Some(write) = self.folder_metadata_replace_child(
-                    from_parent,
-                    from_name.as_ref(),
-                    to_name.as_ref(),
-                )? {
-                    plan.write_page(write.0, write.1);
-                }
-            } else {
-                if let Some(write) =
-                    self.folder_metadata_child_change(from_parent, Some(from_name.as_ref()), None)?
-                {
-                    plan.write_page(write.0, write.1);
-                }
-                if let Some(write) =
-                    self.folder_metadata_child_change(to_parent, None, Some(to_name.as_ref()))?
-                {
-                    plan.write_page(write.0, write.1);
-                }
+        let from_parent = from.parent().unwrap_or_else(|| Path::new(""));
+        let to_parent = to.parent().unwrap_or_else(|| Path::new(""));
+        let from_name = from.file_name().expect("page has a name").to_string_lossy();
+        let to_name = to.file_name().expect("page has a name").to_string_lossy();
+        if from_parent == to_parent {
+            if let Some(write) = self.folder_metadata_replace_child(
+                from_parent,
+                from_name.as_ref(),
+                to_name.as_ref(),
+            )? {
+                plan.write_page(write.0, write.1);
+            }
+        } else {
+            if let Some(write) =
+                self.folder_metadata_child_change(from_parent, Some(from_name.as_ref()), None)?
+            {
+                plan.write_page(write.0, write.1);
+            }
+            if let Some(write) =
+                self.folder_metadata_child_change(to_parent, None, Some(to_name.as_ref()))?
+            {
+                plan.write_page(write.0, write.1);
             }
         }
         let receipt = plan.commit(&self.root)?;
@@ -572,7 +488,7 @@ impl Project {
             plan.delete_page(from.to_path_buf());
             plan.move_page(from.to_path_buf(), to.to_path_buf());
             for (path, stored) in &self.pages {
-                if path == &from_string || stored.page.kind != PageKind::Native {
+                if path == &from_string {
                     continue;
                 }
                 let document = Document::parse(&stored.html);

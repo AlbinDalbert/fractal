@@ -168,11 +168,6 @@ impl Project {
         self.reload()?;
         let page = self.existing_path(page.as_ref())?;
         let target = self.existing_path(target.as_ref())?;
-        if page_kind(&page) != PageKind::Native {
-            return Err(FractalError::invalid_input(
-                "semantic link insertion is only available for native documents",
-            ));
-        }
         if page == target {
             return Err(FractalError::invalid_input("cannot link a page to itself"));
         }

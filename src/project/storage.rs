@@ -10,30 +10,14 @@ impl Project {
     }
 
     pub(super) fn existing_path(&self, path: &Path) -> Result<PathBuf> {
-        let normalized = normalize_relative_path(path)?;
-        let candidates = if normalized.extension().is_some() {
-            validate_html_path(&normalized)?;
-            vec![normalized]
+        let normalized = normalize_native_page_path(path)?;
+        if self.pages.contains_key(&path_string(&normalized)) {
+            Ok(normalized)
         } else {
-            vec![
-                append_native_suffix(&normalized)?,
-                normalized.with_extension("html"),
-            ]
-        };
-        let found: Vec<_> = candidates
-            .into_iter()
-            .filter(|candidate| self.pages.contains_key(&path_string(candidate)))
-            .collect();
-        match found.as_slice() {
-            [path] => Ok(path.clone()),
-            [] => Err(FractalError::not_found(format!(
+            Err(FractalError::not_found(format!(
                 "page does not exist: {}",
                 path.display()
-            ))),
-            _ => Err(FractalError::invalid_input(format!(
-                "page path is ambiguous, include the suffix: {}",
-                path.display()
-            ))),
+            )))
         }
     }
 
@@ -75,7 +59,7 @@ impl Project {
     pub(super) fn reload(&mut self) -> Result<()> {
         self.reload_folders()?;
         let mut files = Vec::new();
-        collect_html(&self.root.join(PAGES), &self.root.join(PAGES), &mut files)?;
+        collect_native_documents(&self.root.join(PAGES), &self.root.join(PAGES), &mut files)?;
         let known: BTreeSet<String> = files.iter().map(|path| path_string(path)).collect();
         let mut pages = BTreeMap::new();
         for relative in files {
@@ -140,7 +124,6 @@ impl Project {
             let page = Page {
                 path: path.clone(),
                 content_hash: content_hash(&html),
-                kind: page_kind(&relative),
                 title: document.title(),
                 text: document.text(),
                 links,

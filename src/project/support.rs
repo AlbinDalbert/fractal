@@ -221,13 +221,6 @@ pub(super) fn normalize_relative_path(path: &Path) -> Result<PathBuf> {
     Ok(output)
 }
 
-pub(super) fn validate_html_path(path: &Path) -> Result<()> {
-    if path.extension().and_then(|extension| extension.to_str()) != Some("html") {
-        return Err(FractalError::invalid_input("page path must end in .html"));
-    }
-    Ok(())
-}
-
 pub(super) fn append_native_suffix(path: &Path) -> Result<PathBuf> {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Err(FractalError::invalid_input("invalid native page path"));
@@ -244,39 +237,12 @@ pub(super) fn normalize_native_page_path(path: &Path) -> Result<PathBuf> {
     } else {
         path
     };
-    if page_kind(&path) != PageKind::Native {
+    if !path_string(&path).ends_with(NATIVE_SUFFIX) {
         return Err(FractalError::invalid_input(format!(
             "native page path must end in {NATIVE_SUFFIX}"
         )));
     }
     Ok(path)
-}
-
-pub(super) fn normalize_destination_page_path(path: &Path, kind: PageKind) -> Result<PathBuf> {
-    let path = normalize_relative_path(path)?;
-    let path = if path.extension().is_none() {
-        match kind {
-            PageKind::Native => append_native_suffix(&path)?,
-            PageKind::Raw => path.with_extension("html"),
-        }
-    } else {
-        path
-    };
-    validate_html_path(&path)?;
-    if page_kind(&path) != kind {
-        return Err(FractalError::invalid_input(
-            "moving a page cannot change whether it is native or raw",
-        ));
-    }
-    Ok(path)
-}
-
-pub(super) fn page_kind(path: &Path) -> PageKind {
-    if path_string(path).ends_with(NATIVE_SUFFIX) {
-        PageKind::Native
-    } else {
-        PageKind::Raw
-    }
 }
 
 pub(super) fn native_document_issues(document: &Document) -> Vec<String> {
@@ -328,18 +294,27 @@ pub(super) fn native_document_issues(document: &Document) -> Vec<String> {
     issues
 }
 
-pub(super) fn collect_html(root: &Path, directory: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
+pub(super) fn collect_native_documents(
+    root: &Path,
+    directory: &Path,
+    output: &mut Vec<PathBuf>,
+) -> Result<()> {
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
         let path = entry.path();
         if entry.file_type()?.is_dir() {
-            collect_html(root, &path, output)?;
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("html") {
+            collect_native_documents(root, &path, output)?;
+        } else if path_string(&path).ends_with(NATIVE_SUFFIX) {
             output.push(path.strip_prefix(root)?.to_path_buf());
         }
     }
     output.sort();
     Ok(())
+}
+
+pub(super) fn is_ordinary_html(path: &Path) -> bool {
+    path.extension().and_then(|extension| extension.to_str()) == Some("html")
+        && !path_string(path).ends_with(NATIVE_SUFFIX)
 }
 
 pub(super) fn collect_files(

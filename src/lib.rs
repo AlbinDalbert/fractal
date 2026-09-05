@@ -15,7 +15,7 @@ pub use types::{
     FolderHtmlExportOptions, FolderHtmlExportReport, FolderIssue, HealthIssue, HealthIssueCode,
     HtmlExportOptions, HtmlExportReport, Iframe, IframeBacklink, IframeTarget, Link, LinkTarget,
     MutationKind, MutationReceipt, NativeDocumentParts, NativePageDraft, OperationFailure,
-    OperationWarning, OperationWarningCode, Page, PageKind, ProjectChange, ProjectEntryKind,
+    OperationWarning, OperationWarningCode, Page, ProjectChange, ProjectEntryKind,
     ProjectInspection, ProjectManifest, ProjectPath, ProposedRepair, RecoveryReport,
     RecoveryTransaction, RecoveryTransactionStatus, RepairReport, SearchResult, SkippedExportPage,
     TextOccurrence, TextPosition, ValidationIssue, ValidationReport,

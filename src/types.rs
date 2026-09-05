@@ -15,7 +15,6 @@ pub struct Page {
     pub path: String,
     /// SHA-256 of the exact UTF-8 source bytes, prefixed with `sha256:`.
     pub content_hash: String,
-    pub kind: PageKind,
     pub title: Option<String>,
     pub text: String,
     pub links: Vec<Link>,
@@ -59,13 +58,6 @@ pub enum FolderChildStatus {
 pub struct FolderIssue {
     pub name: String,
     pub message: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PageKind {
-    Native,
-    Raw,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,9 +146,9 @@ pub struct TextOccurrence {
 
 /// A DOM text-node ordinal and UTF-16 code-unit offset within it.
 ///
-/// Text nodes are numbered in document order below the native document root,
-/// or below `body` for raw HTML. Counting includes text nodes that Fractal does
-/// not derive links inside, so a DOM `TreeWalker` can resolve the ordinal.
+/// Text nodes are numbered in document order below the native document root.
+/// Counting includes text nodes that Fractal does not derive links inside, so
+/// a DOM `TreeWalker` can resolve the ordinal.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TextPosition {
     pub text_node: usize,
@@ -269,7 +261,6 @@ pub enum ProjectChange {
 pub enum MutationKind {
     CreatePage,
     RecreatePage,
-    WriteRawPage,
     SetPageContent,
     SetPageStyle,
     SetPageMetadata,

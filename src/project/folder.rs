@@ -21,9 +21,8 @@ impl Project {
     /// Changes a folder title and, outside the pages root, renames the folder to
     /// the title-derived path.
     ///
-    /// The rename and parent ordering update, along with reference rewrites in
-    /// [`PageKind::Native`] pages, are committed as one recoverable mutation.
-    /// References in [`PageKind::Raw`] pages are not rewritten.
+    /// The rename, parent ordering update, and native reference rewrites commit
+    /// as one recoverable mutation.
     pub fn set_folder_title(
         &mut self,
         path: impl AsRef<Path>,
@@ -148,9 +147,8 @@ impl Project {
         Ok(receipt)
     }
 
-    /// Moves a folder and rewrites internal references to its descendants in
-    /// [`PageKind::Native`] pages. References in [`PageKind::Raw`] pages are not
-    /// rewritten.
+    /// Moves a folder and rewrites internal native document references to its
+    /// descendants.
     ///
     /// The destination parent must exist and the destination name must remain
     /// consistent with the folder title.
@@ -227,6 +225,11 @@ impl Project {
         let mut deleted = Vec::new();
         if exists {
             collect_files(&self.root.join(PAGES), &absolute, &mut deleted)?;
+            if deleted.iter().any(|path| is_ordinary_html(path)) {
+                return Err(FractalError::invalid_input(
+                    "folder contains ordinary HTML files that Fractal does not manage",
+                ));
+            }
         }
         let targets: BTreeSet<String> = deleted.iter().map(|path| path_string(path)).collect();
         let deleted_pages: BTreeSet<String> = self
@@ -381,9 +384,6 @@ impl Project {
         }
         loop {
             let mismatch = self.pages.values().find_map(|stored| {
-                if stored.page.kind != PageKind::Native {
-                    return None;
-                }
                 let title = stored.page.title.as_deref()?;
                 let path = PathBuf::from(&stored.page.path);
                 let desired =
@@ -471,6 +471,11 @@ impl Project {
         }
         let mut old_files = Vec::new();
         collect_files(&pages, &pages.join(from), &mut old_files)?;
+        if old_files.iter().any(|path| is_ordinary_html(path)) {
+            return Err(FractalError::invalid_input(
+                "folder contains ordinary HTML files that Fractal does not manage",
+            ));
+        }
         let mut old_directories = Vec::new();
         collect_directories(&pages, &pages.join(from), &mut old_directories)?;
         let new_files: Vec<PathBuf> = old_files
@@ -488,9 +493,6 @@ impl Project {
         let new_prefix = path_string(to);
         let mut rewrites = BTreeMap::new();
         for stored in self.pages.values() {
-            if stored.page.kind != PageKind::Native {
-                continue;
-            }
             let old_source = &stored.page.path;
             let new_source = if Path::new(old_source).starts_with(from) {
                 path_string(&to.join(Path::new(old_source).strip_prefix(from)?))

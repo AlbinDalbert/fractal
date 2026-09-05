@@ -103,7 +103,7 @@ impl Project {
         &self.manifest
     }
 
-    /// Returns all indexed pages in project-path order.
+    /// Returns all indexed native documents in project-path order.
     pub fn pages(&self) -> Vec<Page> {
         self.pages
             .values()
