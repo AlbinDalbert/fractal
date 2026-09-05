@@ -47,6 +47,7 @@ const DEFAULT_STYLE: &str = r#"
   "#;
 
 #[derive(Debug)]
+/// An opened Fractal project and its in-memory page, folder, and graph index.
 pub struct Project {
     root: PathBuf,
     manifest: ProjectManifest,

@@ -185,6 +185,7 @@ pub struct ValidationIssue {
 pub struct ProjectPath(String);
 
 impl ProjectPath {
+    /// Returns the validated, slash-separated path.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -312,6 +313,7 @@ pub struct MutationReceipt {
 }
 
 impl MutationReceipt {
+    /// Returns `true` when the operation did not change any project entry.
     pub fn is_noop(&self) -> bool {
         self.changes.is_empty()
     }

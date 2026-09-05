@@ -24,14 +24,20 @@ impl NativePageDraft {
 }
 
 impl Project {
+    /// Returns the indexed metadata for a page.
     pub fn page(&self, path: impl AsRef<Path>) -> Result<Page> {
         Ok(self.stored(path.as_ref())?.page.clone())
     }
 
+    /// Returns the exact HTML source stored for a page.
     pub fn source(&self, path: impl AsRef<Path>) -> Result<String> {
         Ok(self.stored(path.as_ref())?.html.clone())
     }
 
+    /// Extracts the editor-owned sections of a native document and hashes each
+    /// section for guarded mutation.
+    ///
+    /// Raw HTML pages do not have native document sections and are rejected.
     pub fn native_document_parts(&self, path: impl AsRef<Path>) -> Result<NativeDocumentParts> {
         let stored = self.stored(path.as_ref())?;
         if stored.page.kind != PageKind::Native {
@@ -60,6 +66,7 @@ impl Project {
         })
     }
 
+    /// Returns the SHA-256 hash of the page's exact UTF-8 source bytes.
     pub fn content_hash(&self, path: impl AsRef<Path>) -> Result<String> {
         Ok(self.stored(path.as_ref())?.page.content_hash.clone())
     }
@@ -76,6 +83,11 @@ impl Project {
         self.set_page_title_inner(path.as_ref(), title, None)
     }
 
+    /// Changes a native document title if the title has not changed since it
+    /// was read.
+    ///
+    /// `expected_hash` is the `title_hash` returned by
+    /// [`Project::native_document_parts`].
     pub fn set_page_title_if_unchanged(
         &mut self,
         path: impl AsRef<Path>,
@@ -114,11 +126,17 @@ impl Project {
         self.rename_native_with_title(&from, &to, Some(title), MutationKind::SetPageTitle)
     }
 
+    /// Creates a native page in the pages root using a path derived from
+    /// `title`.
     pub fn create_page(&mut self, title: &str) -> Result<MutationReceipt> {
         let stem = slug(title)?;
         self.create_page_at(format!("{stem}{NATIVE_SUFFIX}"), title)
     }
 
+    /// Creates a native page at an explicit title-derived project path.
+    ///
+    /// The filename must match the slug Fractal derives from `title`. Parent
+    /// folders are created as needed and stored folder order is updated.
     pub fn create_page_at(
         &mut self,
         path: impl AsRef<Path>,
@@ -227,6 +245,9 @@ impl Project {
         self.recreate_page_from_draft(path, &draft)
     }
 
+    /// Replaces the complete source of a raw HTML page.
+    ///
+    /// Native documents must be changed through their section mutation methods.
     pub fn write_raw_page(
         &mut self,
         path: impl AsRef<Path>,
@@ -278,6 +299,11 @@ impl Project {
         Ok(receipt)
     }
 
+    /// Replaces a native document's content section if it has not changed since
+    /// it was read.
+    ///
+    /// `expected_hash` is the `content_hash` returned by
+    /// [`Project::native_document_parts`].
     pub fn set_page_content(
         &mut self,
         path: impl AsRef<Path>,
@@ -293,6 +319,11 @@ impl Project {
         )
     }
 
+    /// Replaces a native document's managed CSS if it has not changed since it
+    /// was read.
+    ///
+    /// `expected_hash` is the `style_hash` returned by
+    /// [`Project::native_document_parts`].
     pub fn set_page_style(
         &mut self,
         path: impl AsRef<Path>,
@@ -308,6 +339,8 @@ impl Project {
         )
     }
 
+    /// Restores Fractal's default managed CSS if the current CSS matches
+    /// `expected_hash`.
     pub fn restore_default_page_style(
         &mut self,
         path: impl AsRef<Path>,
@@ -316,6 +349,11 @@ impl Project {
         self.set_page_style(path, DEFAULT_STYLE, expected_hash)
     }
 
+    /// Replaces a native document's user-owned head metadata if it has not
+    /// changed since it was read.
+    ///
+    /// `expected_hash` is the `metadata_hash` returned by
+    /// [`Project::native_document_parts`].
     pub fn set_page_metadata(
         &mut self,
         path: impl AsRef<Path>,
@@ -331,6 +369,11 @@ impl Project {
         )
     }
 
+    /// Replaces a native document's user-owned head links if they have not
+    /// changed since they were read.
+    ///
+    /// `expected_hash` is the `head_links_hash` returned by
+    /// [`Project::native_document_parts`].
     pub fn set_page_head_links(
         &mut self,
         path: impl AsRef<Path>,
@@ -346,6 +389,8 @@ impl Project {
         )
     }
 
+    /// Restores required native document elements and the default style where
+    /// managed structure is missing.
     pub fn repair_page_structure(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
@@ -414,6 +459,10 @@ impl Project {
         self.reload()?;
         Ok(receipt)
     }
+    /// Moves a page and rewrites affected internal references atomically.
+    ///
+    /// Moving a native page also updates stored folder order. A move to the
+    /// current path returns a no-op receipt.
     pub fn move_page(
         &mut self,
         from: impl AsRef<Path>,
@@ -542,6 +591,7 @@ impl Project {
         self.reload()?;
         Ok(receipt)
     }
+    /// Deletes one page if no surviving page links to or embeds it.
     pub fn delete_page(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
         self.delete_pages([path])
     }
@@ -550,6 +600,10 @@ impl Project {
     ///
     /// References between pages in the set do not block deletion. References
     /// from pages that survive do block it.
+    /// Deletes several pages in one transaction.
+    ///
+    /// References between pages in the deletion set are allowed. A link or
+    /// iframe from a surviving page rejects the whole operation.
     pub fn delete_pages<I, P>(&mut self, paths: I) -> Result<MutationReceipt>
     where
         I: IntoIterator<Item = P>,

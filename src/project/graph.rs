@@ -2,14 +2,17 @@ use super::support::*;
 use super::*;
 
 impl Project {
+    /// Returns links parsed from a page in document order.
     pub fn links(&self, path: impl AsRef<Path>) -> Result<Vec<Link>> {
         Ok(self.stored(path.as_ref())?.page.links.clone())
     }
 
+    /// Returns iframes parsed from a page in document order.
     pub fn iframes(&self, path: impl AsRef<Path>) -> Result<Vec<Iframe>> {
         Ok(self.stored(path.as_ref())?.page.iframes.clone())
     }
 
+    /// Returns links from other pages that resolve to `path`.
     pub fn backlinks(&self, path: impl AsRef<Path>) -> Result<Vec<Backlink>> {
         let target = path_string(&self.existing_path(path.as_ref())?);
         let mut backlinks = Vec::new();
@@ -26,6 +29,7 @@ impl Project {
         Ok(backlinks)
     }
 
+    /// Returns iframes from other pages that resolve to `path`.
     pub fn iframe_backlinks(&self, path: impl AsRef<Path>) -> Result<Vec<IframeBacklink>> {
         let target = path_string(&self.existing_path(path.as_ref())?);
         let mut backlinks = Vec::new();
@@ -42,6 +46,10 @@ impl Project {
         Ok(backlinks)
     }
 
+    /// Searches page titles and extracted text for all whitespace-separated
+    /// query terms, ignoring case.
+    ///
+    /// An empty query returns no results.
     pub fn search(&self, query: &str) -> Vec<SearchResult> {
         let words: Vec<String> = query
             .split_whitespace()
@@ -71,7 +79,8 @@ impl Project {
             .collect()
     }
 
-    /// Finds unambiguous, case-insensitive exact-title matches without changing source.
+    /// Finds unambiguous, case-insensitive exact-title matches in unlinked text
+    /// without changing source.
     pub fn derived_links(&self, path: impl AsRef<Path>) -> Result<Vec<DerivedLink>> {
         let source = self.stored(path.as_ref())?;
         let mut titles: BTreeMap<String, Vec<(&str, &str)>> = BTreeMap::new();
@@ -145,6 +154,10 @@ impl Project {
         Ok(links)
     }
 
+    /// Inserts a link around the first matching unlinked text in a native page.
+    ///
+    /// The source and target must be different existing pages. The operation
+    /// fails if `text` does not occur outside an existing link.
     pub fn insert_link(
         &mut self,
         page: impl AsRef<Path>,

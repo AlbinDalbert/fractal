@@ -1,6 +1,7 @@
 //! Fractal makes operations on linked HTML documents cheap, reliable, and composable.
 
 #[cfg(feature = "cli")]
+/// Command-line argument parsing and command dispatch.
 pub mod cli;
 mod document;
 mod error;
@@ -20,6 +21,7 @@ pub use types::{
     TextOccurrence, TextPosition, ValidationIssue, ValidationReport,
 };
 
+/// The result type returned by Fractal operations.
 pub type Result<T> = std::result::Result<T, FractalError>;
 
 #[cfg(test)]
