@@ -15,7 +15,11 @@ impl Project {
             })
     }
 
-    pub fn set_folder_title(&mut self, path: impl AsRef<Path>, title: &str) -> Result<Mutation> {
+    pub fn set_folder_title(
+        &mut self,
+        path: impl AsRef<Path>,
+        title: &str,
+    ) -> Result<MutationReceipt> {
         if title.trim().is_empty() {
             return Err(FractalError::invalid_input("folder title cannot be empty"));
         }
@@ -47,35 +51,53 @@ impl Project {
                 .as_ref()
                 .and_then(|value| value.order.clone()),
         };
-        let resulting_metadata_path = if path.as_os_str().is_empty() {
-            folder_metadata_relative_path(&path)
+        let metadata_contents = serde_json::to_string_pretty(&metadata)?;
+        let was_v1 = self.manifest.version < VERSION;
+        let manifest_upgrade = self.contract_upgrade_contents()?;
+        let receipt = if path.as_os_str().is_empty() {
+            let mut plan = MutationPlan::new(MutationKind::SetFolderTitle);
+            if let Some(contents) = manifest_upgrade {
+                plan.write_project(MANIFEST, contents);
+            }
+            plan.write_page(folder_metadata_relative_path(&path), metadata_contents);
+            plan.commit(&self.root)?
         } else {
-            folder_metadata_relative_path(
-                &path
-                    .parent()
-                    .unwrap_or_else(|| Path::new(""))
-                    .join(slug(title)?),
-            )
+            let destination = path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(slug(title)?);
+            if destination == path {
+                let mut plan = MutationPlan::new(MutationKind::SetFolderTitle);
+                if let Some(contents) = manifest_upgrade {
+                    plan.write_project(MANIFEST, contents);
+                }
+                plan.write_page(folder_metadata_relative_path(&path), metadata_contents);
+                plan.commit(&self.root)?
+            } else {
+                self.rename_folder(
+                    &path,
+                    &destination,
+                    MutationKind::SetFolderTitle,
+                    Some((
+                        folder_metadata_relative_path(&destination),
+                        metadata_contents,
+                    )),
+                    manifest_upgrade,
+                )?
+            }
         };
-        self.upgrade_contract_for_folder_metadata()?;
-        let metadata_path = folder_metadata_relative_path(&path);
-        commit_file_transaction(
-            &self.root,
-            vec![(
-                metadata_path.clone(),
-                serde_json::to_string_pretty(&metadata)?,
-            )],
-            vec![],
-        )?;
+        if was_v1 {
+            self.manifest.version = VERSION;
+        }
         self.reload()?;
-        self.repair_title_paths()?;
-        Ok(Mutation {
-            changed: vec![resulting_metadata_path],
-            deleted: vec![],
-        })
+        Ok(receipt)
     }
 
-    pub fn reorder_folder<I, S>(&mut self, path: impl AsRef<Path>, order: I) -> Result<Mutation>
+    pub fn reorder_folder<I, S>(
+        &mut self,
+        path: impl AsRef<Path>,
+        order: I,
+    ) -> Result<MutationReceipt>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
@@ -118,28 +140,27 @@ impl Project {
             title: stored.folder.title.clone(),
             order: Some(order),
         };
-        self.upgrade_contract_for_folder_metadata()?;
         let metadata_path = folder_metadata_relative_path(&path);
-        commit_file_transaction(
-            &self.root,
-            vec![(
-                metadata_path.clone(),
-                serde_json::to_string_pretty(&metadata)?,
-            )],
-            vec![],
-        )?;
+        let mut plan = MutationPlan::new(MutationKind::ReorderFolder);
+        let manifest_upgrade = self.contract_upgrade_contents()?;
+        let upgraded = manifest_upgrade.is_some();
+        if let Some(contents) = manifest_upgrade {
+            plan.write_project(MANIFEST, contents);
+        }
+        plan.write_page(metadata_path, serde_json::to_string_pretty(&metadata)?);
+        let receipt = plan.commit(&self.root)?;
+        if upgraded {
+            self.manifest.version = VERSION;
+        }
         self.reload()?;
-        Ok(Mutation {
-            changed: vec![metadata_path],
-            deleted: vec![],
-        })
+        Ok(receipt)
     }
 
     pub fn move_folder(
         &mut self,
         from: impl AsRef<Path>,
         to: impl AsRef<Path>,
-    ) -> Result<Mutation> {
+    ) -> Result<MutationReceipt> {
         let from = normalize_relative_path(from.as_ref())?;
         let to = normalize_relative_path(to.as_ref())?;
         let _lock = self.lock_for_mutation()?;
@@ -154,10 +175,7 @@ impl Project {
             )));
         }
         if from == to {
-            return Ok(Mutation {
-                changed: vec![],
-                deleted: vec![],
-            });
+            return Ok(noop_receipt(MutationKind::MoveFolder));
         }
         if to.starts_with(&from) {
             return Err(FractalError::invalid_input(
@@ -171,13 +189,13 @@ impl Project {
                 display_folder_path(destination_parent)
             )));
         }
-        self.rename_folder(&from, &to)
+        self.rename_folder(&from, &to, MutationKind::MoveFolder, None, None)
     }
     /// Deletes a folder below `pages/` with a single namespace rename.
     ///
     /// The returned `deleted` list includes every file that was below the
     /// folder, including non-HTML assets.
-    pub fn delete_folder(&mut self, path: impl AsRef<Path>) -> Result<Mutation> {
+    pub fn delete_folder(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
         let folder = normalize_relative_path(path.as_ref())?;
         let _lock = self.lock_for_mutation()?;
         self.reload()?;
@@ -221,15 +239,23 @@ impl Project {
             .folder_metadata_child_change(parent, Some(name.as_ref()), None)?
             .into_iter()
             .collect();
-        let changed = writes.iter().map(|(path, _)| path.clone()).collect();
-        let deletes = exists.then_some(folder.clone()).into_iter().collect();
-        commit_file_transaction(&self.root, writes, deletes)?;
+        let mut plan = MutationPlan::new(MutationKind::DeleteFolder);
+        for (path, contents) in writes {
+            plan.write_page(path, contents);
+        }
+        if exists {
+            for path in &deleted {
+                plan.delete_page(path.clone());
+            }
+            plan.remove_page_directory(folder.clone());
+        }
+        let receipt = plan.commit(&self.root)?;
         self.reload()?;
-        Ok(Mutation { changed, deleted })
+        Ok(receipt)
     }
-    fn upgrade_contract_for_folder_metadata(&mut self) -> Result<()> {
+    fn contract_upgrade_contents(&self) -> Result<Option<String>> {
         if self.manifest.version >= 2 {
-            return Ok(());
+            return Ok(None);
         }
         let pages_root = self.root.join(PAGES);
         let mut folders = Vec::new();
@@ -245,11 +271,9 @@ impl Project {
                 conflict.display()
             )));
         }
-        self.manifest.version = VERSION;
-        atomic_write(
-            &self.root.join(MANIFEST),
-            &serde_json::to_string_pretty(&self.manifest)?,
-        )
+        let mut manifest = self.manifest.clone();
+        manifest.version = VERSION;
+        Ok(Some(serde_json::to_string_pretty(&manifest)?))
     }
 
     pub(super) fn reject_references_into(
@@ -343,7 +367,16 @@ impl Project {
         )))
     }
 
-    pub(super) fn repair_title_paths(&mut self) -> Result<()> {
+    /// Applies title-driven path repairs and pending folder-order additions.
+    pub fn repair(&mut self) -> Result<RepairReport> {
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
+        let mut report = RepairReport {
+            changes: vec![],
+            warnings: vec![],
+            failures: vec![],
+        };
+
         loop {
             let mismatch = self.folders.values().find_map(|stored| {
                 let path = Path::new(&stored.folder.path);
@@ -352,7 +385,19 @@ impl Project {
                 (desired != path).then(|| (path.to_path_buf(), desired))
             });
             let Some((from, to)) = mismatch else { break };
-            self.rename_folder(&from, &to)?;
+            let receipt =
+                match self.rename_folder(&from, &to, MutationKind::RepairProject, None, None) {
+                    Ok(receipt) => receipt,
+                    Err(error) => {
+                        report.failures.push(OperationFailure {
+                            code: error.code,
+                            message: error.message,
+                        });
+                        return Ok(report);
+                    }
+                };
+            report.changes.extend(receipt.changes);
+            report.warnings.extend(receipt.warnings);
         }
         loop {
             let mismatch = self.pages.values().find_map(|stored| {
@@ -366,12 +411,78 @@ impl Project {
                 (desired != path).then_some((path, desired))
             });
             let Some((from, to)) = mismatch else { break };
-            self.rename_native_with_title(&from, &to, None)?;
+            let receipt = match self.rename_native_with_title(
+                &from,
+                &to,
+                None,
+                MutationKind::RepairProject,
+            ) {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    report.failures.push(OperationFailure {
+                        code: error.code,
+                        message: error.message,
+                    });
+                    return Ok(report);
+                }
+            };
+            report.changes.extend(receipt.changes);
+            report.warnings.extend(receipt.warnings);
         }
-        Ok(())
+
+        let mut order_plan = MutationPlan::new(MutationKind::RepairProject);
+        for stored in self.folders.values() {
+            let Some(mut metadata) = stored.metadata.clone() else {
+                continue;
+            };
+            let Some(order) = metadata.order.as_mut() else {
+                continue;
+            };
+            let known: BTreeSet<String> = order.iter().cloned().collect();
+            let additions: Vec<String> = stored
+                .folder
+                .children
+                .iter()
+                .map(|child| child.name.clone())
+                .filter(|name| !known.contains(name))
+                .collect();
+            if !additions.is_empty() {
+                order.extend(additions);
+                order_plan.write_page(
+                    folder_metadata_relative_path(Path::new(&stored.folder.path)),
+                    serde_json::to_string_pretty(&metadata)?,
+                );
+            }
+        }
+        let receipt = match order_plan.commit(&self.root) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                report.failures.push(OperationFailure {
+                    code: error.code,
+                    message: error.message,
+                });
+                return Ok(report);
+            }
+        };
+        report.changes.extend(receipt.changes);
+        report.warnings.extend(receipt.warnings);
+        if let Err(error) = self.reload() {
+            report.failures.push(OperationFailure {
+                code: error.code,
+                message: error.message,
+            });
+        }
+        Ok(report)
     }
 
-    fn rename_folder(&mut self, from: &Path, to: &Path) -> Result<Mutation> {
+    fn rename_folder(
+        &mut self,
+        from: &Path,
+        to: &Path,
+        operation: MutationKind,
+        metadata_override: Option<(PathBuf, String)>,
+        manifest_upgrade: Option<String>,
+    ) -> Result<MutationReceipt> {
         let pages = self.root.join(PAGES);
         if path_exists(&pages.join(to)) {
             return Err(FractalError::already_exists(format!(
@@ -452,18 +563,28 @@ impl Project {
                 .into_iter()
                 .map(|(path, contents)| (path, contents.into_bytes())),
         );
-        commit_file_transaction_with_directories(
-            &self.root,
-            rewrites.into_iter().collect(),
-            old_files.clone(),
-            new_directories,
-            vec![from.to_path_buf()],
-        )?;
+        if let Some((path, contents)) = metadata_override {
+            rewrites.insert(path, contents.into_bytes());
+        }
+        let mut plan = MutationPlan::new(operation);
+        for (path, contents) in rewrites {
+            plan.write_page(path, contents);
+        }
+        for (old, new) in old_files.iter().zip(&new_files) {
+            plan.delete_page(old.clone());
+            plan.move_page(old.clone(), new.clone());
+        }
+        for directory in new_directories {
+            plan.create_page_directory(directory);
+        }
+        plan.remove_page_directory(from.to_path_buf());
+        plan.move_page_directory(from.to_path_buf(), to.to_path_buf());
+        if let Some(manifest) = manifest_upgrade {
+            plan.write_project(MANIFEST, manifest);
+        }
+        let receipt = plan.commit(&self.root)?;
         self.reload()?;
-        Ok(Mutation {
-            changed: new_files,
-            deleted: old_files,
-        })
+        Ok(receipt)
     }
 
     pub(super) fn reload_folders(&mut self) -> Result<()> {
@@ -475,7 +596,7 @@ impl Project {
         for relative in paths {
             let absolute = pages_root.join(&relative);
             let metadata_path = absolute.join(MANIFEST);
-            let mut metadata: Option<FolderMetadata> =
+            let metadata: Option<FolderMetadata> =
                 if self.manifest.version >= 2 && metadata_path.is_file() {
                     Some(
                         serde_json::from_str(&fs::read_to_string(&metadata_path)?).map_err(
@@ -500,19 +621,9 @@ impl Project {
                 )));
             }
             let present = direct_orderable_children(&absolute)?;
-            if let Some(stored) = metadata.as_mut() {
-                if let Some(order) = stored.order.as_mut() {
+            if let Some(stored) = metadata.as_ref() {
+                if let Some(order) = stored.order.as_ref() {
                     validate_stored_order(&relative, order, &present)?;
-                    let known: BTreeSet<&str> = order.iter().map(String::as_str).collect();
-                    let additions: Vec<String> = present
-                        .keys()
-                        .filter(|name| !known.contains(name.as_str()))
-                        .cloned()
-                        .collect();
-                    if !additions.is_empty() {
-                        order.extend(additions);
-                        atomic_write(&metadata_path, &serde_json::to_string_pretty(stored)?)?;
-                    }
                 }
             }
             let title = metadata
@@ -522,7 +633,7 @@ impl Project {
             let order = metadata
                 .as_ref()
                 .and_then(|metadata| metadata.order.clone());
-            let names = order.clone().unwrap_or_else(|| {
+            let mut names = order.clone().unwrap_or_else(|| {
                 present
                     .iter()
                     .filter(|(_, kind)| **kind == FolderChildKind::Folder)
@@ -534,6 +645,15 @@ impl Project {
                     .map(|(name, _)| name.clone())
                     .collect()
             });
+            if order.is_some() {
+                let known: BTreeSet<String> = names.iter().cloned().collect();
+                names.extend(
+                    present
+                        .keys()
+                        .filter(|name| !known.contains(*name))
+                        .cloned(),
+                );
+            }
             let mut issues = Vec::new();
             let children = names
                 .into_iter()

@@ -1,4 +1,4 @@
-use crate::{Project, Result};
+use crate::{NativePageDraft, Project, Result};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -21,6 +21,8 @@ enum Command {
         #[arg(long)]
         name: Option<String>,
     },
+    Inspect,
+    Recover,
     List,
     Folders,
     Folder {
@@ -84,10 +86,16 @@ enum Command {
     RepairPage {
         page: PathBuf,
     },
+    RepairProject,
     New {
         title: String,
         #[arg(long)]
         path: Option<PathBuf>,
+    },
+    Recreate {
+        page: PathBuf,
+        #[arg(long)]
+        draft: PathBuf,
     },
     Write {
         page: PathBuf,
@@ -171,6 +179,8 @@ pub fn run() -> Result<()> {
             let project = Project::init(&path, name)?;
             output(&project.manifest(), cli.json);
         }
+        Command::Inspect => output(&Project::inspect(&cli.project)?, cli.json),
+        Command::Recover => output(&Project::recover(&cli.project)?, cli.json),
         command => {
             let mut project = Project::open(&cli.project)?;
             match command {
@@ -261,6 +271,7 @@ pub fn run() -> Result<()> {
                 Command::RepairPage { page } => {
                     output(&project.repair_page_structure(page)?, cli.json)
                 }
+                Command::RepairProject => output(&project.repair()?, cli.json),
                 Command::New { title, path } => {
                     let result = if let Some(path) = path {
                         project.create_page_at(path, &title)?
@@ -268,6 +279,11 @@ pub fn run() -> Result<()> {
                         project.create_page(&title)?
                     };
                     output(&result, cli.json);
+                }
+                Command::Recreate { page, draft } => {
+                    let draft: NativePageDraft =
+                        serde_json::from_str(&std::fs::read_to_string(draft)?)?;
+                    output(&project.recreate_page_from_draft(page, &draft)?, cli.json)
                 }
                 Command::Write {
                     page,
@@ -338,7 +354,7 @@ pub fn run() -> Result<()> {
                     cli.json,
                 ),
                 Command::Check => output(&project.validate(), cli.json),
-                Command::Init { .. } => unreachable!(),
+                Command::Init { .. } | Command::Inspect | Command::Recover => unreachable!(),
             }
         }
     }

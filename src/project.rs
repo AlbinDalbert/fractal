@@ -13,6 +13,7 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 const MANIFEST: &str = "fractal.json";
+const LOCK: &str = ".fractal.lock";
 const PAGES: &str = "pages";
 const MIN_SUPPORTED_VERSION: u32 = 1;
 const VERSION: u32 = 2;
@@ -81,3 +82,6 @@ mod page;
 mod storage;
 mod support;
 mod validation;
+
+#[cfg(test)]
+pub(crate) use support::{inject_transaction_fault, TransactionFaultPoint};

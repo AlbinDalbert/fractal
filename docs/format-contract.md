@@ -4,7 +4,7 @@ A Fractal project may contain native Fractal documents and raw HTML files. Both 
 
 ## Project
 
-A project contains `fractal.json` and a `pages/` directory. The manifest has two fields:
+A project contains `fractal.json`, a `pages/` directory, and—when created or mutated by a current engine—an empty `.fractal.lock` coordination file. The lock file is not document content. Older projects remain readable without it and gain it only when an explicit mutation first needs a stable cross-process lock. The manifest has two fields:
 
 ```json
 {
@@ -38,7 +38,7 @@ Every directory below `pages/`, and `pages/` itself, is a Fractal folder. A fold
 
 Folder metadata accepts only `title` and `order`. The title must be a non-empty string. A nested folder's directory name is the kebab-case form of its title. Changing the title renames the directory and rewrites stored internal references. Without metadata, a nested folder's title is its directory name and the pages root's title is the project name. Fractal creates folder metadata when a caller sets a title or submits an explicit order. The pages root is not renamed.
 
-When a project opens, Fractal repairs native filenames and nested directory names that do not match their titles. Opening fails if a repair cannot complete, including when the derived destination already exists. Raw HTML filenames are not title-driven.
+Read-only inspection reports native filenames and nested directory names that do not match their titles. Explicit project repair renames them and reports every changed path. Repair fails if the derived destination already exists. Raw HTML filenames are not title-driven.
 
 Only direct child directories and native `.fractal.html` documents participate in folder order. Raw HTML and other files do not. The default order sorts direct child folders alphabetically first, followed by native documents alphabetically. Sorting is case-sensitive Unicode code-point order and does not use a locale.
 
@@ -46,7 +46,7 @@ An explicit `order` is a complete permutation of the folder's known children. Ea
 
 If an explicitly ordered child disappears outside Fractal, its entry remains as a missing child. Validation reports it, and folder inspection returns it with a missing status. A normal page or folder deletion operation removes this ghost entry even though no filesystem object remains.
 
-If Fractal discovers a new direct child while an explicit order exists, it appends that child to the stored order. Fractal-managed creation, movement, renaming, and deletion update affected explicit orders as part of the mutation. Folders without an explicit order remain unordered during those operations.
+If Fractal discovers a new direct child while an explicit order exists, it places that child after the stored order in the effective in-memory order. Inspection reports the pending addition. Explicit project repair appends it to stored metadata. Fractal-managed creation, movement, renaming, and deletion update affected explicit orders as part of the mutation. Folders without an explicit order remain unordered during those operations.
 
 `fractal.json` is reserved inside every folder. It is metadata, never a page or ordinary asset. Fractal does not follow symlinked directories as folders.
 
@@ -119,7 +119,13 @@ Fractal does not interpret an iframe target as part of its containing native doc
 
 Derived links are case-insensitive exact-title matches in unlinked visible text. Fractal reports only matches with one possible target and never stores them in page source. Applications may render these matches as links at runtime. Stored explicit links and derived links remain distinct.
 
-Opening a project may append newly discovered children to an existing explicit folder order. Other scanning, searching, validation, and link derivation do not write files. Native semantic mutations may serialize affected native documents. Native editing replaces only the requested content, managed style, user metadata, or head-link section. Each section has its own SHA-256 comparison hash, so concurrent changes to different sections merge under the project lock. Fractal validates and atomically writes the complete result. Whole-source replacement is available only for raw HTML.
+Opening, inspection, searching, validation, and link derivation do not write files. Native semantic mutations may serialize affected native documents. Native editing replaces only the requested content, managed style, user metadata, or head-link section. Each section has its own SHA-256 comparison hash, so concurrent changes to different sections merge under the project lock. Fractal validates and transactionally writes the complete result. Whole-source replacement is available only for raw HTML.
+
+Every project mutation returns a receipt derived from its committed change plan. Receipts distinguish created, updated, moved, and deleted entries. File changes include SHA-256 hashes when the corresponding bytes are available. Paths are relative to the project root and use `/` separators.
+
+An incomplete transaction prevents ordinary opening. `Project::inspect` reports the recovery state without changing it. `Project::recover` explicitly restores the pre-operation state. A committed transaction whose cleanup did not finish does not block opening, but inspection reports it until cleanup succeeds.
+
+Recreating a native page from recovery data is one guarded transaction. Fractal checks that the title-derived destination remains absent, validates the complete native document, updates explicit folder ordering, and never overwrites a path that has reappeared. Applications own durable storage of the recovery data.
 
 Legacy native documents without the managed title or style markers remain discoverable. An explicit structure repair marks the first direct title heading and first head style when present. It creates a missing managed heading or default style without replacing existing CSS.
 

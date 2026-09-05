@@ -32,6 +32,12 @@ impl FractalError {
     pub fn unsupported_version(message: impl Into<String>) -> Self {
         Self::new(FractalErrorCode::UnsupportedVersion, message)
     }
+    pub fn recovery_required(message: impl Into<String>) -> Self {
+        Self::new(FractalErrorCode::RecoveryRequired, message)
+    }
+    pub fn indeterminate(message: impl Into<String>) -> Self {
+        Self::new(FractalErrorCode::Indeterminate, message)
+    }
 }
 
 impl fmt::Display for FractalError {
@@ -74,10 +80,12 @@ pub enum FractalErrorCode {
     Conflict,
     InvalidInput,
     InvalidProject,
+    Indeterminate,
     Io,
     Json,
     NotFound,
     Path,
+    RecoveryRequired,
     UnsupportedVersion,
     Utf8,
 }
