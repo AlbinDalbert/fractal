@@ -3,6 +3,9 @@ use super::*;
 
 impl Project {
     /// Inspects project health without changing project files.
+    ///
+    /// Unlike [`Project::open`], inspection reports recovery state, proposed
+    /// format repairs, and validation failures as data whenever possible.
     pub fn inspect(path: impl AsRef<Path>) -> Result<ProjectInspection> {
         let root = path.as_ref().to_path_buf();
         let manifest_path = root.join(MANIFEST);
@@ -146,6 +149,8 @@ impl Project {
         })
     }
 
+    /// Validates the loaded manifest, folder metadata, native documents, links,
+    /// and iframes without changing project files.
     pub fn validate(&self) -> ValidationReport {
         let mut issues = Vec::new();
         if self.manifest.name.trim().is_empty() {

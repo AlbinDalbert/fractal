@@ -166,6 +166,7 @@ enum Command {
     Check,
 }
 
+/// Parses process arguments, runs the selected command, and writes its output.
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {

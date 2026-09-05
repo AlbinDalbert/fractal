@@ -2,6 +2,11 @@ use super::support::*;
 use super::*;
 
 impl Project {
+    /// Exports one native document as standalone HTML.
+    ///
+    /// Internal native-document references are appended to the output so the
+    /// exported file remains self-contained. Derived references are included
+    /// when requested by `options`.
     pub fn export_html(
         &self,
         path: impl AsRef<Path>,
@@ -94,6 +99,10 @@ impl Project {
         Ok(HtmlExportReport { output, references })
     }
 
+    /// Exports a folder or selected descendants as one ordered HTML document.
+    ///
+    /// Selection paths are relative to `folder`. Invalid selected pages reject
+    /// the export unless [`FolderHtmlExportOptions::force`] is set.
     pub fn export_folder_html(
         &self,
         folder: impl AsRef<Path>,

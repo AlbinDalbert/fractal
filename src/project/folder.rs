@@ -2,6 +2,9 @@ use super::support::*;
 use super::*;
 
 impl Project {
+    /// Returns folder metadata and its children in effective display order.
+    ///
+    /// An empty path addresses the pages root.
     pub fn folder(&self, path: impl AsRef<Path>) -> Result<Folder> {
         let path = normalize_folder_path(path.as_ref())?;
         self.folders
@@ -15,6 +18,12 @@ impl Project {
             })
     }
 
+    /// Changes a folder title and, outside the pages root, renames the folder to
+    /// the title-derived path.
+    ///
+    /// The rename and parent ordering update, along with reference rewrites in
+    /// [`PageKind::Native`] pages, are committed as one recoverable mutation.
+    /// References in [`PageKind::Raw`] pages are not rewritten.
     pub fn set_folder_title(
         &mut self,
         path: impl AsRef<Path>,
@@ -93,6 +102,9 @@ impl Project {
         Ok(receipt)
     }
 
+    /// Stores an explicit order for every present and missing child of a folder.
+    ///
+    /// `order` must contain each child name exactly once.
     pub fn reorder_folder<I, S>(
         &mut self,
         path: impl AsRef<Path>,
@@ -156,6 +168,12 @@ impl Project {
         Ok(receipt)
     }
 
+    /// Moves a folder and rewrites internal references to its descendants in
+    /// [`PageKind::Native`] pages. References in [`PageKind::Raw`] pages are not
+    /// rewritten.
+    ///
+    /// The destination parent must exist and the destination name must remain
+    /// consistent with the folder title.
     pub fn move_folder(
         &mut self,
         from: impl AsRef<Path>,
@@ -191,10 +209,13 @@ impl Project {
         }
         self.rename_folder(&from, &to, MutationKind::MoveFolder, None, None)
     }
-    /// Deletes a folder below `pages/` with a single namespace rename.
+    /// Deletes a folder below `pages/`. Materialized folders use a single
+    /// namespace rename.
     ///
-    /// The returned `deleted` list includes every file that was below the
-    /// folder, including non-HTML assets.
+    /// The receipt includes every materialized file below the folder, including
+    /// non-HTML assets. References from surviving pages to those files reject
+    /// the operation. Deleting an ordered but missing folder only removes its
+    /// ghost entry; references to nonexistent descendants are not checked.
     pub fn delete_folder(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
         let folder = normalize_relative_path(path.as_ref())?;
         let _lock = self.lock_for_mutation()?;
@@ -368,6 +389,9 @@ impl Project {
     }
 
     /// Applies title-driven path repairs and pending folder-order additions.
+    ///
+    /// Repair stops at the first failed operation and records the failure in the
+    /// report. Changes committed before that failure remain applied.
     pub fn repair(&mut self) -> Result<RepairReport> {
         let _lock = self.lock_for_mutation()?;
         self.reload()?;

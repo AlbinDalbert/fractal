@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// An error returned by a Fractal operation.
+///
+/// `code` is intended for programmatic handling. `message` contains the
+/// operation-specific detail intended for logs or users.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FractalError {
     pub code: FractalErrorCode,
@@ -8,33 +12,42 @@ pub struct FractalError {
 }
 
 impl FractalError {
+    /// Creates an error with an explicit code and message.
     pub fn new(code: FractalErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
         }
     }
+    /// Creates an [`FractalErrorCode::InvalidInput`] error.
     pub fn invalid_input(message: impl Into<String>) -> Self {
         Self::new(FractalErrorCode::InvalidInput, message)
     }
+    /// Creates an [`FractalErrorCode::InvalidProject`] error.
     pub fn invalid_project(message: impl Into<String>) -> Self {
         Self::new(FractalErrorCode::InvalidProject, message)
     }
+    /// Creates an [`FractalErrorCode::NotFound`] error.
     pub fn not_found(message: impl Into<String>) -> Self {
         Self::new(FractalErrorCode::NotFound, message)
     }
+    /// Creates an [`FractalErrorCode::AlreadyExists`] error.
     pub fn already_exists(message: impl Into<String>) -> Self {
         Self::new(FractalErrorCode::AlreadyExists, message)
     }
+    /// Creates an [`FractalErrorCode::Conflict`] error.
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::new(FractalErrorCode::Conflict, message)
     }
+    /// Creates an [`FractalErrorCode::UnsupportedVersion`] error.
     pub fn unsupported_version(message: impl Into<String>) -> Self {
         Self::new(FractalErrorCode::UnsupportedVersion, message)
     }
+    /// Creates an [`FractalErrorCode::RecoveryRequired`] error.
     pub fn recovery_required(message: impl Into<String>) -> Self {
         Self::new(FractalErrorCode::RecoveryRequired, message)
     }
+    /// Creates an [`FractalErrorCode::Indeterminate`] error.
     pub fn indeterminate(message: impl Into<String>) -> Self {
         Self::new(FractalErrorCode::Indeterminate, message)
     }
@@ -73,6 +86,7 @@ impl From<std::path::StripPrefixError> for FractalError {
     }
 }
 
+/// A stable category for a [`FractalError`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FractalErrorCode {

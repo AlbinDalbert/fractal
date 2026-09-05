@@ -2,6 +2,10 @@ use super::support::*;
 use super::*;
 
 impl Project {
+    /// Creates a project and opens it.
+    ///
+    /// `path` must be absent or an empty directory. The name must contain at
+    /// least one non-whitespace character.
     pub fn init(path: impl AsRef<Path>, name: impl Into<String>) -> Result<Self> {
         let root = path.as_ref();
         let name = name.into();
@@ -25,6 +29,11 @@ impl Project {
         Self::open(root)
     }
 
+    /// Opens and indexes an existing project.
+    ///
+    /// Opening fails while an interrupted transaction requires recovery. Use
+    /// [`Project::inspect`] to distinguish that state from other project errors
+    /// and [`Project::recover`] to resolve it.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let root = path.as_ref().to_path_buf();
         let manifest_path = root.join(MANIFEST);
@@ -84,14 +93,17 @@ impl Project {
         recover_all_transactions(root)
     }
 
+    /// Returns the project root directory.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
+    /// Returns the loaded project manifest.
     pub fn manifest(&self) -> &ProjectManifest {
         &self.manifest
     }
 
+    /// Returns all indexed pages in project-path order.
     pub fn pages(&self) -> Vec<Page> {
         self.pages
             .values()
@@ -99,6 +111,7 @@ impl Project {
             .collect()
     }
 
+    /// Returns all indexed folders in project-path order.
     pub fn folders(&self) -> Vec<Folder> {
         self.folders
             .values()
