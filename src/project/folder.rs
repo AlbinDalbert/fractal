@@ -67,8 +67,7 @@ impl Project {
             plan.write_page(path, contents);
         }
         let receipt = plan.commit(&self.root)?;
-        self.reload()?;
-        Ok(receipt)
+        self.finish_mutation(receipt)
     }
 
     /// Changes a folder title and, outside the pages root, renames the folder to
@@ -114,10 +113,11 @@ impl Project {
                 .and_then(|value| value.order.clone()),
         };
         let metadata_contents = serde_json::to_string_pretty(&metadata)?;
-        let receipt = if path.as_os_str().is_empty() {
+        if path.as_os_str().is_empty() {
             let mut plan = MutationPlan::new(MutationKind::SetFolderTitle);
             plan.write_page(folder_metadata_relative_path(&path), metadata_contents);
-            plan.commit(&self.root)?
+            let receipt = plan.commit(&self.root)?;
+            self.finish_mutation(receipt)
         } else {
             let destination = path
                 .parent()
@@ -126,7 +126,8 @@ impl Project {
             if destination == path {
                 let mut plan = MutationPlan::new(MutationKind::SetFolderTitle);
                 plan.write_page(folder_metadata_relative_path(&path), metadata_contents);
-                plan.commit(&self.root)?
+                let receipt = plan.commit(&self.root)?;
+                self.finish_mutation(receipt)
             } else {
                 self.rename_folder(
                     &path,
@@ -136,11 +137,9 @@ impl Project {
                         folder_metadata_relative_path(&destination),
                         metadata_contents,
                     )),
-                )?
+                )
             }
-        };
-        self.reload()?;
-        Ok(receipt)
+        }
     }
 
     /// Stores an explicit order for every present and missing child of a folder.
@@ -197,8 +196,7 @@ impl Project {
         let mut plan = MutationPlan::new(MutationKind::ReorderFolder);
         plan.write_page(metadata_path, serde_json::to_string_pretty(&metadata)?);
         let receipt = plan.commit(&self.root)?;
-        self.reload()?;
-        Ok(receipt)
+        self.finish_mutation(receipt)
     }
 
     /// Moves a folder and rewrites internal native document references to its
@@ -302,8 +300,7 @@ impl Project {
             plan.remove_page_directory(folder.clone());
         }
         let receipt = plan.commit(&self.root)?;
-        self.reload()?;
-        Ok(receipt)
+        self.finish_mutation(receipt)
     }
     pub(super) fn reject_references_into(
         &self,
@@ -485,7 +482,7 @@ impl Project {
         };
         report.changes.extend(receipt.changes);
         report.warnings.extend(receipt.warnings);
-        if let Err(error) = self.reload() {
+        if let Err(error) = self.reload_after_commit() {
             report.failures.push(OperationFailure {
                 code: error.code,
                 message: error.message,
@@ -594,8 +591,7 @@ impl Project {
         plan.remove_page_directory(from.to_path_buf());
         plan.move_page_directory(from.to_path_buf(), to.to_path_buf());
         let receipt = plan.commit(&self.root)?;
-        self.reload()?;
-        Ok(receipt)
+        self.finish_mutation(receipt)
     }
 
     pub(super) fn reload_folders(&mut self) -> Result<()> {

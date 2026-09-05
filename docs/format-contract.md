@@ -78,7 +78,8 @@ requires an existing parent, derives the directory name from the title, writes
 folder metadata, and updates an explicit parent order in one transaction.
 `Project::create_page_at` also requires its parent folder to exist. Neither
 operation creates missing ancestors. Page recreation and movement also require
-an existing destination parent folder.
+an existing destination parent folder. Page movement cannot change the
+title-derived filename. Use the title mutation to rename a page.
 
 Only direct child directories and native documents participate in folder
 order. Opaque files do not. The default order places child folders first, then
@@ -116,10 +117,16 @@ A valid native document has:
 
 - an HTML doctype;
 - `<meta name="fractal-format" content="1">`;
-- a non-empty title from `<title>` or the first `<h1>`;
+- exactly one non-empty `<title>` in the head;
 - exactly one `<main data-fractal-document>` as the only body element;
-- exactly one direct `<h1 data-fractal-title>` child of that document root;
+- exactly one non-empty direct `<h1 data-fractal-title>` child of that
+  document root, with text equal to `<title>`;
 - exactly one `<style data-fractal-style>` in the head.
+
+The head title is canonical. Its kebab-case form plus `.fractal.html` must
+equal the document filename. Invalid documents that lack a head title may use
+the managed heading as their catalog display title, but validation still
+reports the missing head title.
 
 The native marker identifies document profile version 1. It is independent of
 project format 2.
@@ -138,10 +145,27 @@ viewport, native marker, managed title heading, and managed style element.
 Other `meta` elements and unmarked styles are user-owned. Elements outside this
 profile make the native document invalid.
 
+Attributes also use an allowlist. All native elements may use `class`, `dir`,
+`id`, `lang`, `role`, `title`, and `aria-*`. The structural
+`data-fractal-document`, `data-fractal-title`, and `data-fractal-style`
+attributes are allowed only on their owned elements. Fractal also accepts the
+following semantic attributes: `href` on `a`; `cite` on `blockquote` and `q`;
+`span` on `col` and `colgroup`; `cite` and `datetime` on `del` and `ins`;
+`value` on `li`; `reversed`, `start`, and `type` on `ol`; `colspan`, `headers`,
+and `rowspan` on `td`; those three plus `abbr` and `scope` on `th`; and
+`datetime` on `time`. Metadata accepts `charset`, `name`, and `content`. Active
+attributes, inline `style`, and `http-equiv` are invalid.
+
+Anchor URLs may be relative, root-relative, fragment-only, or use `http`,
+`https`, `mailto`, or `tel`. Protocol-relative URLs and other schemes are
+invalid. Inline stylesheets cannot contain resource-loading CSS such as
+`@import`, `url()`, `image-set()`, or `src()`. CSS escapes are rejected so they
+cannot disguise those constructs.
+
 HTML parsing follows HTML5 recovery rules. Parser recovery does not make a
-document valid Fractal. `Project::repair_page_structure` can mark or create a
-missing managed title and managed style, but it does not remove unsupported
-content.
+document valid Fractal. `Project::repair_page_structure` can create a missing
+head title, mark or create a missing managed title and style, and synchronize
+the two owned title nodes. It does not remove unsupported content.
 
 ## Native sections and hashes
 
@@ -150,10 +174,11 @@ and user metadata. It supplies independent SHA-256 hashes for the editable
 sections and the exact complete source. `Project::source` returns that source.
 
 Native mutations replace only the requested title, content, managed CSS, or
-user metadata. Fractal compares the supplied section hash while holding the
-project lock, validates the complete result, and commits it as a recoverable
-transaction. This lets edits to different sections merge while a stale edit to
-the same section returns `FractalErrorCode::Conflict`.
+user metadata. The title hash covers both owned title nodes. Fractal compares
+the supplied section hash while holding the project lock, validates the
+complete result, and commits it as a recoverable transaction. This lets edits
+to different sections merge while a stale edit to the same section returns
+`FractalErrorCode::Conflict`.
 
 Live native documents have no whole-source replacement operation.
 `NativePageDraft::from_source` parses already-native recovery source, and the
@@ -169,8 +194,8 @@ only relationships between native documents:
 - query strings and fragments do not change the resolved target;
 - a link to an existing native document is resolved;
 - a link that clearly ends in `.fractal.html` but has no target is broken;
-- external URLs, fragment-only links, mail links, and local opaque targets are
-  ignored by link queries.
+- safe external URLs, fragment-only links, mail and telephone links, and local
+  opaque targets are ignored by link queries.
 
 Ignored anchors remain in source when Fractal serializes an unrelated section.
 Broken native targets fail validation. `Project::insert_link` accepts only a
@@ -206,6 +231,11 @@ reports recovery state without changing it. `Project::recover` restores the
 pre-operation state. A committed transaction whose cleanup did not finish does
 not block opening, but inspection reports it until explicit recovery removes
 the transaction directory.
+
+After a transaction commits, Fractal reloads the in-memory catalog. If that
+reload fails, the operation returns `FractalErrorCode::MutationCommitted`.
+This code means the bytes changed and the caller must reopen the project before
+another operation. Retrying the mutation is unsafe.
 
 `Project::repair` applies proposed format repairs as explicit operations. A
 repair report retains completed changes and a typed failure if a later repair

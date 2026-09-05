@@ -43,7 +43,7 @@ impl Project {
         let style_css = document.managed_style_css()?;
         let metadata_html = document.user_metadata_html()?;
         Ok(NativeDocumentParts {
-            title_hash: content_hash(&title),
+            title_hash: content_hash(&document.title_hash_source()),
             title,
             content_hash: content_hash(&content_html),
             content_html,
@@ -98,8 +98,8 @@ impl Project {
         self.reload()?;
         let from = self.existing_path(path)?;
         if let Some(expected_hash) = expected_hash {
-            let actual_title = self.stored(&from)?.page.title.as_deref().unwrap_or("");
-            let actual_hash = content_hash(actual_title);
+            let document = Document::parse(&self.stored(&from)?.html);
+            let actual_hash = content_hash(&document.title_hash_source());
             if actual_hash != expected_hash {
                 return Err(FractalError::conflict(format!(
                     "title changed since it was read (expected {expected_hash}, found {actual_hash})"
@@ -148,12 +148,10 @@ impl Project {
         }
         let title = title.trim();
         let html = format!(
-            "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <meta name=\"fractal-format\" content=\"1\">\n  <title>{}</title>\n  <style>\n    :root {{ color-scheme: dark; }}\n    * {{ box-sizing: border-box; }}\n    body {{\n      margin: 0;\n      background: #0c0c0a;\n      color: #e8e1d5;\n      font: 1.125rem/1.65 ui-sans-serif, system-ui, sans-serif;\n    }}\n    main {{\n      width: min(100% - 2rem, 45rem);\n      margin: 0 auto;\n      padding: clamp(4rem, 12vh, 8rem) 0;\n    }}\n    h1 {{\n      margin: 0 0 2.5rem;\n      font-size: clamp(2.75rem, 8vw, 4rem);\n      line-height: 1;\n      letter-spacing: -0.04em;\n    }}\n    h2, h3, h4, h5, h6 {{ line-height: 1.2; }}\n    p, ul, ol, blockquote, pre, figure, table {{ margin: 1.25rem 0; }}\n    a {{ color: #e8bb4d; text-underline-offset: 0.18em; }}\n    code, pre {{ font-family: ui-monospace, monospace; }}\n  </style>\n</head>\n<body>\n  <main data-fractal-document>\n    <h1>{}</h1>\n  </main>\n</body>\n</html>\n",
+            "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <meta name=\"fractal-format\" content=\"1\">\n  <title>{}</title>\n  <style data-fractal-style>{DEFAULT_STYLE}</style>\n</head>\n<body>\n  <main data-fractal-document>\n    <h1 data-fractal-title>{}</h1>\n  </main>\n</body>\n</html>\n",
             escape_html(title),
             escape_html(title)
-        )
-        .replace("<style>", "<style data-fractal-style>")
-        .replace("<h1>", "<h1 data-fractal-title>");
+        );
         let mut plan = MutationPlan::new(MutationKind::CreatePage);
         plan.write_page(relative.clone(), html);
         if let Some(write) = self.folder_metadata_child_change(
@@ -170,8 +168,7 @@ impl Project {
             plan.write_page(write.0, write.1);
         }
         let receipt = plan.commit(&self.root)?;
-        self.reload()?;
-        Ok(receipt)
+        self.finish_mutation(receipt)
     }
 
     /// Recreates a missing native page from editor-owned recovery data.
@@ -227,8 +224,7 @@ impl Project {
             plan.write_page(write.0, write.1);
         }
         let receipt = plan.commit(&self.root)?;
-        self.reload()?;
-        Ok(receipt)
+        self.finish_mutation(receipt)
     }
 
     /// Recreates an absent native page from a complete recovery source.
@@ -364,17 +360,22 @@ impl Project {
                 "invalid native document: {issue}"
             )));
         }
+        if let Some(issue) = native_title_path_issue(&document, &relative) {
+            return Err(FractalError::invalid_input(format!(
+                "invalid native document: {issue}"
+            )));
+        }
         let mut plan = MutationPlan::new(operation);
         plan.write_page(relative, document.serialize()?);
         let receipt = plan.commit(&self.root)?;
-        self.reload()?;
-        Ok(receipt)
+        self.finish_mutation(receipt)
     }
     /// Moves a page into an existing folder and rewrites affected internal
     /// references atomically.
     ///
-    /// Moving a native page also updates stored folder order. A move to the
-    /// current path returns a no-op receipt.
+    /// The destination keeps the title-derived filename. Moving a native page
+    /// also updates stored folder order. A move to the current path returns a
+    /// no-op receipt.
     pub fn move_page(
         &mut self,
         from: impl AsRef<Path>,
@@ -387,6 +388,10 @@ impl Project {
         if from == to {
             return Ok(noop_receipt(MutationKind::MovePage));
         }
+        let title = self.stored(&from)?.page.title.as_deref().ok_or_else(|| {
+            FractalError::invalid_input("native document needs a title before it can be moved")
+        })?;
+        validate_title_driven_page_path(&to, title)?;
         let destination_parent = to.parent().unwrap_or_else(|| Path::new(""));
         if !self.folders.contains_key(&path_string(destination_parent)) {
             return Err(FractalError::not_found(format!(
@@ -452,8 +457,7 @@ impl Project {
             }
         }
         let receipt = plan.commit(&self.root)?;
-        self.reload()?;
-        Ok(receipt)
+        self.finish_mutation(receipt)
     }
     pub(super) fn rename_native_with_title(
         &mut self,
@@ -474,6 +478,11 @@ impl Project {
         let moved_document = Document::parse(&self.stored(from)?.html);
         if let Some(title) = title {
             moved_document.set_title(title);
+            if let Some(issue) = native_document_issues(&moved_document).first() {
+                return Err(FractalError::invalid_input(format!(
+                    "invalid native document: {issue}"
+                )));
+            }
         }
         if from != to {
             moved_document.rewrite_native_source_location(
@@ -504,8 +513,7 @@ impl Project {
             }
         }
         let receipt = plan.commit(&self.root)?;
-        self.reload()?;
-        Ok(receipt)
+        self.finish_mutation(receipt)
     }
     /// Deletes one page if no surviving page links to it.
     pub fn delete_page(&mut self, path: impl AsRef<Path>) -> Result<MutationReceipt> {
@@ -586,8 +594,7 @@ impl Project {
             plan.delete_page(path);
         }
         let receipt = plan.commit(&self.root)?;
-        self.reload()?;
-        Ok(receipt)
+        self.finish_mutation(receipt)
     }
 }
 

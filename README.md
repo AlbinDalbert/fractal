@@ -7,6 +7,8 @@ directories, but Fractal does not interpret or manage them.
 Fractal is a Rust library with a thin CLI. Native documents use the
 `.fractal.html` suffix and a restricted semantic HTML profile. They remain
 ordinary HTML files that browsers and HTML tools can inspect, edit, and render.
+Validation rejects active HTML attributes, unsafe URL schemes, and CSS that can
+load external resources.
 
 ## CLI quick start
 
@@ -110,6 +112,10 @@ Native edits replace one owned section at a time: title, content, managed CSS,
 or user metadata. `NativeDocumentParts` supplies a hash for each section, so a
 stale edit returns `FractalErrorCode::Conflict`. Fractal reserves whole-source
 input for guarded recreation of a missing native document.
+
+If a mutation commits but its catalog reload fails, Fractal returns
+`FractalErrorCode::MutationCommitted`. The bytes changed. Reopen the project
+before continuing and do not retry the mutation.
 
 Normal mutations take the project lock, refresh the catalog, validate the
 candidate state, and use the common recoverable transaction code.

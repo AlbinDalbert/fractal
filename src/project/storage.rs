@@ -98,4 +98,24 @@ impl Project {
         self.pages = pages;
         Ok(())
     }
+
+    pub(super) fn finish_mutation(&mut self, receipt: MutationReceipt) -> Result<MutationReceipt> {
+        self.reload_after_commit()?;
+        Ok(receipt)
+    }
+
+    pub(super) fn reload_after_commit(&mut self) -> Result<()> {
+        #[cfg(test)]
+        if take_transaction_fault(TransactionFaultPoint::ReloadAfterCommit) {
+            return Err(FractalError::mutation_committed(
+                "the mutation committed, but the in-memory catalog could not be reloaded; reopen the project before another operation",
+            ));
+        }
+        self.reload().map_err(|error| {
+            FractalError::mutation_committed(format!(
+                "the mutation committed, but the in-memory catalog could not be reloaded: {error}; reopen the project before another operation"
+            ))
+        })?;
+        Ok(())
+    }
 }

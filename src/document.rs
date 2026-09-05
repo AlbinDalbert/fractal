@@ -22,18 +22,52 @@ impl Document {
     }
 
     pub(crate) fn title(&self) -> Option<String> {
+        self.head_title().or_else(|| self.managed_title())
+    }
+
+    pub(crate) fn head_title(&self) -> Option<String> {
         self.root
-            .select_first("title")
+            .select_first("head > title")
             .ok()
-            .or_else(|| self.root.select_first("h1").ok())
             .map(|node| normalize_space(&node.text_contents()))
             .filter(|title| !title.is_empty())
     }
 
+    pub(crate) fn managed_title(&self) -> Option<String> {
+        self.root
+            .select_first("main[data-fractal-document] > h1[data-fractal-title]")
+            .ok()
+            .map(|node| normalize_space(&node.text_contents()))
+            .filter(|title| !title.is_empty())
+    }
+
+    pub(crate) fn title_element_count(&self) -> usize {
+        self.root
+            .select("head > title")
+            .expect("static selector")
+            .count()
+    }
+
+    pub(crate) fn title_hash_source(&self) -> String {
+        let head_titles: Vec<_> = self
+            .root
+            .select("head > title")
+            .expect("static selector")
+            .map(|node| normalize_space(&node.text_contents()))
+            .collect();
+        let managed_titles: Vec<_> = self
+            .root
+            .select("main[data-fractal-document] > h1[data-fractal-title]")
+            .expect("static selector")
+            .map(|node| normalize_space(&node.text_contents()))
+            .collect();
+        format!("head:{head_titles:?}\nmanaged:{managed_titles:?}")
+    }
+
     pub(crate) fn set_title(&self, title: &str) {
         for selector in [
-            "title",
-            "main[data-fractal-document] h1[data-fractal-title]",
+            "head > title",
+            "main[data-fractal-document] > h1[data-fractal-title]",
         ] {
             if let Ok(node) = self.root.select_first(selector) {
                 let node = node.as_node();
@@ -134,8 +168,19 @@ impl Document {
 
     pub(crate) fn repair_managed_structure(&self, default_style: &str) -> Result<()> {
         let main = self.native_main()?;
+        let title = self
+            .head_title()
+            .or_else(|| self.managed_title())
+            .unwrap_or_else(|| "Untitled".into());
+        if self.title_element_count() == 0 {
+            let nodes =
+                head_fragment_nodes(&format!("<title>{}</title>", escape_html(&title)), "title")?;
+            let head = self.head()?;
+            for node in nodes {
+                head.as_node().append(node);
+            }
+        }
         if self.managed_title_count() == 0 {
-            let title = self.title().unwrap_or_else(|| "Untitled".into());
             if let Ok(h1) = self.root.select_first("main[data-fractal-document] > h1") {
                 h1.attributes
                     .borrow_mut()
@@ -152,6 +197,9 @@ impl Document {
                     main.as_node().append(h1.as_node().clone());
                 }
             }
+        }
+        if self.title_element_count() == 1 && self.managed_title_count() == 1 {
+            self.set_title(&title);
         }
         if self.managed_style_count() == 0 {
             if let Ok(style) = self.root.select_first("head > style") {
@@ -328,6 +376,48 @@ impl Document {
         unsupported.sort();
         unsupported.dedup();
         unsupported
+    }
+
+    pub(crate) fn unsupported_attributes(&self) -> Vec<String> {
+        let mut unsupported = Vec::new();
+        for node in self.root.descendants() {
+            let Some(element) = node.as_element() else {
+                continue;
+            };
+            let element_name = element.name.local.as_ref();
+            for name in element.attributes.borrow().map.keys() {
+                let attribute_name = name.local.as_ref();
+                if !is_allowed_attribute(element_name, attribute_name) {
+                    unsupported.push(format!("<{element_name}> `{attribute_name}`"));
+                }
+            }
+        }
+        unsupported.sort();
+        unsupported.dedup();
+        unsupported
+    }
+
+    pub(crate) fn unsafe_link_hrefs(&self) -> Vec<String> {
+        let mut unsafe_hrefs: Vec<_> = self
+            .root
+            .select("a[href]")
+            .expect("static selector")
+            .filter_map(|node| {
+                let href = node.attributes.borrow().get("href")?.to_owned();
+                (!is_safe_href(&href)).then_some(href)
+            })
+            .collect();
+        unsafe_hrefs.sort();
+        unsafe_hrefs.dedup();
+        unsafe_hrefs
+    }
+
+    pub(crate) fn unsafe_style_count(&self) -> usize {
+        self.root
+            .select("style")
+            .expect("static selector")
+            .filter(|style| has_resource_loading_css(&style.text_contents()))
+            .count()
     }
 
     pub(crate) fn text(&self) -> String {
@@ -687,6 +777,80 @@ fn is_managed_title(node: &NodeRef) -> bool {
         element.name.local.as_ref() == "h1"
             && element.attributes.borrow().contains("data-fractal-title")
     })
+}
+
+fn is_allowed_attribute(element: &str, attribute: &str) -> bool {
+    if matches!(
+        attribute,
+        "class" | "dir" | "id" | "lang" | "role" | "title"
+    ) || attribute.starts_with("aria-")
+    {
+        return true;
+    }
+    matches!(
+        (element, attribute),
+        ("html", "lang")
+            | ("meta", "charset" | "content" | "name")
+            | ("main", "data-fractal-document")
+            | ("h1", "data-fractal-title")
+            | ("style", "data-fractal-style")
+            | ("a", "href")
+            | ("blockquote" | "q", "cite")
+            | ("col" | "colgroup", "span")
+            | ("del" | "ins", "cite" | "datetime")
+            | ("li", "value")
+            | ("ol", "reversed" | "start" | "type")
+            | ("td", "colspan" | "headers" | "rowspan")
+            | ("th", "abbr" | "colspan" | "headers" | "rowspan" | "scope")
+            | ("time", "datetime")
+    )
+}
+
+fn is_safe_href(href: &str) -> bool {
+    let normalized: String = href
+        .trim()
+        .chars()
+        .filter(|character| !character.is_ascii_control() && !character.is_ascii_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect();
+    if normalized.starts_with("//") {
+        return false;
+    }
+    let Some(colon) = normalized.find(':') else {
+        return true;
+    };
+    if normalized[..colon].contains(['/', '?', '#']) {
+        return true;
+    }
+    matches!(&normalized[..colon], "http" | "https" | "mailto" | "tel")
+}
+
+fn has_resource_loading_css(css: &str) -> bool {
+    let lowercase = css.to_ascii_lowercase();
+    if lowercase.contains('\\') {
+        return true;
+    }
+    let mut without_comments = String::with_capacity(lowercase.len());
+    let mut remaining = lowercase.as_str();
+    while let Some(start) = remaining.find("/*") {
+        without_comments.push_str(&remaining[..start]);
+        let Some(end) = remaining[start + 2..].find("*/") else {
+            return true;
+        };
+        remaining = &remaining[start + 2 + end + 2..];
+    }
+    without_comments.push_str(remaining);
+    let compact: String = without_comments
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect();
+    compact.contains("@import")
+        || compact.contains("url(")
+        || compact.contains("image-set(")
+        || compact.contains("src(")
+        || compact.contains("http:")
+        || compact.contains("https:")
+        || compact.contains("//")
 }
 
 fn is_user_meta(node: &NodeRef) -> bool {

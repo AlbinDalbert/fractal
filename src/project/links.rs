@@ -55,7 +55,6 @@ impl Project {
         let mut plan = MutationPlan::new(MutationKind::InsertLink);
         plan.write_page(page, document.serialize()?);
         let receipt = plan.commit(&self.root)?;
-        self.reload()?;
-        Ok(receipt)
+        self.finish_mutation(receipt)
     }
 }

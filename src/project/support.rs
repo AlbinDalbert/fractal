@@ -10,6 +10,7 @@ pub(crate) enum TransactionFaultPoint {
     DirectoryRemoved,
     CommitMarkerCreated,
     CommittedBeforeCleanup,
+    ReloadAfterCommit,
 }
 
 #[cfg(test)]
@@ -25,7 +26,7 @@ pub(crate) fn inject_transaction_fault(point: TransactionFaultPoint) {
 }
 
 #[cfg(test)]
-fn take_transaction_fault(point: TransactionFaultPoint) -> bool {
+pub(super) fn take_transaction_fault(point: TransactionFaultPoint) -> bool {
     if TRANSACTION_FAULT.get() == Some(point) {
         TRANSACTION_FAULT.set(None);
         true
@@ -255,17 +256,22 @@ pub(super) fn native_document_issues(document: &Document) -> Vec<String> {
     if !document.has_native_marker() {
         issues.push("native document needs `<meta name=\"fractal-format\" content=\"1\">`".into());
     }
-    if document.title().is_none() {
-        issues.push("native document needs a non-empty `<title>` or `<h1>`".into());
+    if document.title_element_count() != 1 || document.head_title().is_none() {
+        issues.push("native document needs exactly one non-empty `<title>` in its head".into());
     }
     if document.native_root_count() != 1 {
         issues.push("native document needs exactly one `<main data-fractal-document>`".into());
     }
-    if document.managed_title_count() != 1 {
+    if document.managed_title_count() != 1 || document.managed_title().is_none() {
         issues.push(
-            "native document needs exactly one `<h1 data-fractal-title>` directly inside its document root"
+            "native document needs exactly one non-empty `<h1 data-fractal-title>` directly inside its document root"
                 .into(),
         );
+    }
+    if let (Some(head), Some(managed)) = (document.head_title(), document.managed_title()) {
+        if head != managed {
+            issues.push("native document `<title>` and managed heading must match".into());
+        }
     }
     if document.managed_style_count() != 1 {
         issues.push(
@@ -293,7 +299,42 @@ pub(super) fn native_document_issues(document: &Document) -> Vec<String> {
             unsupported.join(", ")
         ));
     }
+    let unsupported = document.unsupported_attributes();
+    if !unsupported.is_empty() {
+        issues.push(format!(
+            "native document contains unsupported attributes: {}",
+            unsupported.join(", ")
+        ));
+    }
+    let unsafe_hrefs = document.unsafe_link_hrefs();
+    if !unsafe_hrefs.is_empty() {
+        issues.push(format!(
+            "native document contains unsafe link URLs: {}",
+            unsafe_hrefs.join(", ")
+        ));
+    }
+    let unsafe_styles = document.unsafe_style_count();
+    if unsafe_styles > 0 {
+        issues.push(format!(
+            "native document contains {unsafe_styles} style element(s) with resource-loading CSS"
+        ));
+    }
     issues
+}
+
+pub(super) fn native_title_path_issue(document: &Document, path: &Path) -> Option<String> {
+    let title = document.head_title()?;
+    let stem = match slug(&title) {
+        Ok(stem) => stem,
+        Err(error) => {
+            return Some(format!(
+                "native document title cannot form a filename: {error}"
+            ))
+        }
+    };
+    let expected = format!("{stem}{NATIVE_SUFFIX}");
+    (path.file_name().and_then(|name| name.to_str()) != Some(expected.as_str()))
+        .then(|| format!("native document filename must be `{expected}` to match its title"))
 }
 
 pub(super) fn collect_native_documents(

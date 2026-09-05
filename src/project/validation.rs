@@ -179,6 +179,13 @@ impl Project {
                     message,
                 });
             }
+            if let Some(message) = native_title_path_issue(&document, Path::new(&stored.page.path))
+            {
+                issues.push(ValidationIssue {
+                    path: Some(stored.page.path.clone()),
+                    message,
+                });
+            }
             for link in &stored.page.links {
                 if let LinkTarget::Broken(target) = &link.target {
                     issues.push(ValidationIssue {

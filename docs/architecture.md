@@ -75,7 +75,8 @@ operation fail before Fractal builds or commits a change plan.
 - Preserve missing ordered children as ghosts until an explicit deletion.
 - Refuse a folder title change, move, path repair, or deletion if its subtree
   contains opaque content.
-- Reload the catalog after a successful mutation.
+- Reload the catalog after a successful mutation. Report a reload failure as
+  `MutationCommitted` so callers know the bytes changed and must reopen.
 - Build `MutationReceipt` from the committed change plan.
 - Use UTF-8 paths relative to the project root with `/` separators in reports.
 
@@ -84,6 +85,10 @@ point. A cleanup failure after that point becomes a `CleanupPending` warning in
 the receipt. An error before commit rolls the operation back. If rollback also
 fails, Fractal returns `FractalErrorCode::Indeterminate` and leaves the
 transaction directory available for inspection and explicit recovery.
+
+If the catalog reload fails after the durable commit point, Fractal returns
+`FractalErrorCode::MutationCommitted`. The operation landed, but the caller
+must reopen the project before continuing and must not retry the mutation.
 
 Filesystem observers that ignore `.fractal.lock` can see intermediate renames
 during a multi-file operation. Fractal callers cannot. A pending interrupted

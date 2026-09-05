@@ -436,6 +436,25 @@ fn new_pages_are_native_documents() {
 }
 
 #[test]
+fn new_page_style_matches_the_restored_default() {
+    let (_temp, mut project) = project();
+    project.create_page("Styled").unwrap();
+    let initial = project.native_document_parts("styled").unwrap();
+    project
+        .set_page_style("styled", "body { color: blue; }", &initial.style_hash)
+        .unwrap();
+    let changed = project.native_document_parts("styled").unwrap();
+    project
+        .restore_default_page_style("styled", &changed.style_hash)
+        .unwrap();
+
+    assert_eq!(
+        project.native_document_parts("styled").unwrap().style_css,
+        initial.style_css
+    );
+}
+
+#[test]
 fn ordinary_html_files_are_opaque() {
     let (temp, mut project) = project();
     project.create_page("Notes").unwrap();
@@ -693,6 +712,79 @@ fn native_documents_reject_head_links_images_and_iframes() {
         .message
         .contains("cannot export invalid native document"));
     assert!(!output.exists());
+}
+
+#[test]
+fn native_documents_reject_active_attributes_urls_and_resource_loading_css() {
+    let (temp, mut project) = project();
+    project.create_page("Unsafe").unwrap();
+    let path = temp.path().join("pages/unsafe.fractal.html");
+    fs::write(
+        &path,
+        "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><meta http-equiv=\"refresh\" content=\"0;url=https://example.com\"><title>Unsafe</title><style data-fractal-style>body { background: url(https://example.com/pixel) }</style></head><body><main data-fractal-document><h1 data-fractal-title>Unsafe</h1><p onclick=\"alert(1)\"><a href=\"javascript:alert(1)\">Open</a></p></main></body></html>",
+    )
+    .unwrap();
+
+    let project = Project::open(temp.path()).unwrap();
+    let report = project.validate();
+    assert!(!report.valid);
+    assert!(report.issues.iter().any(|issue| issue
+        .message
+        .contains("unsupported attributes: <meta> `http-equiv`, <p> `onclick`")));
+    assert!(report.issues.iter().any(|issue| issue
+        .message
+        .contains("unsafe link URLs: javascript:alert(1)")));
+    assert!(report.issues.iter().any(|issue| issue
+        .message
+        .contains("style element(s) with resource-loading CSS")));
+
+    let mut project = Project::init(temp.path().join("mutations"), "Mutations").unwrap();
+    project.create_page("Page").unwrap();
+    let parts = project.native_document_parts("page").unwrap();
+    let error = project
+        .set_page_content(
+            "page",
+            "<p onclick=\"alert(1)\">Text</p>",
+            &parts.content_hash,
+        )
+        .unwrap_err();
+    assert!(error.message.contains("unsupported attributes"));
+    let error = project
+        .set_page_style(
+            "page",
+            "body { background: url(https://example.com/pixel) }",
+            &parts.style_hash,
+        )
+        .unwrap_err();
+    assert!(error.message.contains("resource-loading CSS"));
+    let error = project
+        .set_page_metadata(
+            "page",
+            "<meta http-equiv=\"refresh\" content=\"0;url=https://example.com\">",
+            &parts.metadata_hash,
+        )
+        .unwrap_err();
+    assert!(error.message.contains("unsupported attributes"));
+}
+
+#[test]
+fn native_documents_allow_inert_semantic_attributes_and_safe_link_schemes() {
+    let (_temp, mut project) = project();
+    project.create_page("Safe").unwrap();
+    let parts = project.native_document_parts("safe").unwrap();
+    project
+        .set_page_content(
+            "safe",
+            concat!(
+                "<p id=\"intro\" class=\"lead\" aria-label=\"Introduction\">",
+                "<a href=\"https://example.com\">Web</a> ",
+                "<a href=\"mailto:hello@example.com\">Mail</a></p>",
+                "<table><tr><th scope=\"col\">Name</th><td colspan=\"2\">Fractal</td></tr></table>"
+            ),
+            &parts.content_hash,
+        )
+        .unwrap();
+    assert!(project.validate().valid);
 }
 
 #[test]
@@ -1484,7 +1576,7 @@ fn deleting_a_missing_ordered_folder_removes_its_ghost() {
 }
 
 #[test]
-fn moving_a_native_page_preserves_its_order_position() {
+fn setting_a_page_title_preserves_its_order_position() {
     let (_temp, mut project) = project();
     project.create_page("One").unwrap();
     project.create_page("Two").unwrap();
@@ -1492,12 +1584,23 @@ fn moving_a_native_page_preserves_its_order_position() {
         .reorder_folder(".", ["two.fractal.html", "one.fractal.html"])
         .unwrap();
 
-    project.move_page("two", "renamed").unwrap();
+    project.set_page_title("two", "Renamed").unwrap();
 
     assert_eq!(
         project.folder(".").unwrap().order.unwrap(),
         vec!["renamed.fractal.html", "one.fractal.html"]
     );
+}
+
+#[test]
+fn moving_a_page_cannot_change_its_title_driven_filename() {
+    let (_temp, mut project) = project();
+    project.create_page("Original").unwrap();
+
+    let error = project.move_page("original", "renamed").unwrap_err();
+
+    assert_eq!(error.code, FractalErrorCode::InvalidInput);
+    assert!(project.page("original").is_ok());
 }
 
 #[test]
@@ -1604,6 +1707,45 @@ fn setting_a_page_title_renames_it_and_rewrites_explicit_links() {
 }
 
 #[test]
+fn title_validation_requires_owned_titles_and_filename_to_agree() {
+    let (temp, mut project) = project();
+    project.create_page("Draft").unwrap();
+    let parts = project.native_document_parts("draft").unwrap();
+    let path = temp.path().join("pages/draft.fractal.html");
+    let source = fs::read_to_string(&path)
+        .unwrap()
+        .replace(">Draft</h1>", ">Changed elsewhere</h1>");
+    fs::write(&path, source).unwrap();
+
+    let error = project
+        .set_page_title_if_unchanged("draft", "Renamed", &parts.title_hash)
+        .unwrap_err();
+    assert_eq!(error.code, FractalErrorCode::Conflict);
+
+    let project = Project::open(temp.path()).unwrap();
+    let report = project.validate();
+    assert!(report.issues.iter().any(|issue| issue
+        .message
+        .contains("`<title>` and managed heading must match")));
+
+    fs::write(
+        &path,
+        "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><style data-fractal-style></style></head><body><main data-fractal-document><h1>Wrong</h1><h1 data-fractal-title>Draft</h1></main></body></html>",
+    )
+    .unwrap();
+    let project = Project::open(temp.path()).unwrap();
+    assert_eq!(
+        project.page("draft").unwrap().title.as_deref(),
+        Some("Draft")
+    );
+    assert!(project
+        .validate()
+        .issues
+        .iter()
+        .any(|issue| issue.message.contains("exactly one non-empty `<title>`")));
+}
+
+#[test]
 fn native_sections_merge_disjoint_concurrent_changes() {
     let (temp, mut content_editor) = project();
     content_editor.create_page("Draft").unwrap();
@@ -1627,6 +1769,26 @@ fn native_sections_merge_disjoint_concurrent_changes() {
     assert_eq!(parts.style_css, "body { color: hotpink; }");
     assert!(parts.content_html.contains("Written concurrently."));
     assert!(!parts.content_html.contains("data-fractal-title"));
+}
+
+#[test]
+fn post_commit_reload_failure_has_a_distinct_error_and_does_not_invite_a_retry() {
+    let (temp, mut project) = project();
+    project.create_page("Draft").unwrap();
+    let parts = project.native_document_parts("draft").unwrap();
+    crate::inject_transaction_fault(crate::TransactionFaultPoint::ReloadAfterCommit);
+
+    let error = project
+        .set_page_content("draft", "<p>Committed.</p>", &parts.content_hash)
+        .unwrap_err();
+
+    assert_eq!(error.code, FractalErrorCode::MutationCommitted);
+    assert!(error.message.contains("mutation committed"));
+    assert!(Project::open(temp.path())
+        .unwrap()
+        .source("draft")
+        .unwrap()
+        .contains("Committed."));
 }
 
 #[test]
@@ -1701,6 +1863,7 @@ fn inspection_reports_and_repair_fixes_title_path_mismatches() {
     assert!(temp.path().join("pages/wrong.fractal.html").exists());
     let mut project = Project::open(temp.path()).unwrap();
     assert!(project.page("wrong").is_ok());
+    assert!(!project.validate().valid);
     let report = project.repair().unwrap();
     assert!(!report.changes.is_empty());
     assert_eq!(

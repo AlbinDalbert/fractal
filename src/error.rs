@@ -51,6 +51,10 @@ impl FractalError {
     pub fn indeterminate(message: impl Into<String>) -> Self {
         Self::new(FractalErrorCode::Indeterminate, message)
     }
+    /// Creates a [`FractalErrorCode::MutationCommitted`] error.
+    pub fn mutation_committed(message: impl Into<String>) -> Self {
+        Self::new(FractalErrorCode::MutationCommitted, message)
+    }
 }
 
 impl fmt::Display for FractalError {
@@ -95,6 +99,8 @@ pub enum FractalErrorCode {
     InvalidInput,
     InvalidProject,
     Indeterminate,
+    /// The mutation reached durable commit, but the in-memory catalog reload failed.
+    MutationCommitted,
     Io,
     Json,
     NotFound,

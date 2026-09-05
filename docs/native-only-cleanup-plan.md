@@ -1,6 +1,6 @@
 # Native-only v2 cleanup plan
 
-Status: approved for implementation
+Status: complete
 
 This plan narrows Fractal to one job: operating on projects made of native
 Fractal documents. It removes compatibility and file-handling features that
