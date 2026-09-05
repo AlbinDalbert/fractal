@@ -361,6 +361,7 @@ fn moving_a_page_updates_explicit_backlinks() {
     let (_temp, mut project) = project();
     project.create_page("Stockholm").unwrap();
     project.create_folder(".", "trips").unwrap();
+    project.create_folder(".", "places").unwrap();
     project.create_page_at("trips/sweden", "Sweden").unwrap();
     project
         .write_page(
@@ -553,6 +554,8 @@ fn moving_a_page_rewrites_only_resolved_native_relationships() {
     let (_temp, mut project) = project();
     project.create_page("Target").unwrap();
     project.create_folder(".", "section").unwrap();
+    project.create_folder(".", "archive").unwrap();
+    project.create_folder("archive", "deep").unwrap();
     project.create_page_at("section/notes", "Notes").unwrap();
     project
         .write_page(
@@ -681,7 +684,8 @@ fn native_documents_reject_head_links_images_and_iframes() {
     assert_eq!(project.source("removed-elements").unwrap(), source);
     assert_eq!(fs::read_to_string(path).unwrap(), source);
 
-    let output = temp.path().join("invalid-export.html");
+    let export_directory = TempDir::new().unwrap();
+    let output = export_directory.path().join("invalid-export.html");
     let error = project
         .export_html("removed-elements", &output, HtmlExportOptions::default())
         .unwrap_err();
@@ -845,6 +849,7 @@ fn folder_mutations_treat_disguised_symlinks_as_unsupported_content() {
 fn move_refreshes_the_native_document_catalog_before_rewriting_backlinks() {
     let (temp, mut first_process) = project();
     first_process.create_page("Target").unwrap();
+    first_process.create_folder(".", "moved").unwrap();
     let mut second_process = Project::open(temp.path()).unwrap();
     second_process.create_page("Late backlink").unwrap();
     second_process
@@ -1031,6 +1036,7 @@ fn derived_links_prefer_the_longest_exact_title() {
 #[test]
 fn html_export_rewrites_native_links_and_preserves_opaque_links() {
     let (temp, mut project) = project();
+    let export_directory = TempDir::new().unwrap();
     project.create_page("Source").unwrap();
     project.create_page("Reference").unwrap();
     project.create_page("Nested").unwrap();
@@ -1055,7 +1061,7 @@ fn html_export_rewrites_native_links_and_preserves_opaque_links() {
         )
         .unwrap();
 
-    let output = temp.path().join("export.html");
+    let output = export_directory.path().join("export.html");
     let report = project
         .export_html("source", &output, HtmlExportOptions::default())
         .unwrap();
@@ -1084,7 +1090,8 @@ fn html_export_rewrites_native_links_and_preserves_opaque_links() {
 
 #[test]
 fn derived_links_match_in_page_and_folder_exports() {
-    let (temp, mut project) = project();
+    let (_temp, mut project) = project();
+    let export_directory = TempDir::new().unwrap();
     project.create_page("Target").unwrap();
     project.create_page("Source").unwrap();
     project
@@ -1094,13 +1101,13 @@ fn derived_links_match_in_page_and_folder_exports() {
         )
         .unwrap();
 
-    let output_without = temp.path().join("without.html");
+    let output_without = export_directory.path().join("without.html");
     let without = project
         .export_html("source", &output_without, HtmlExportOptions::default())
         .unwrap();
     assert!(without.references.is_empty());
 
-    let output_with = temp.path().join("with.html");
+    let output_with = export_directory.path().join("with.html");
     let with = project
         .export_html(
             "source",
@@ -1113,7 +1120,7 @@ fn derived_links_match_in_page_and_folder_exports() {
     assert_eq!(with.references, vec!["target.fractal.html"]);
     let page_html = fs::read_to_string(output_with).unwrap();
 
-    let folder_output = temp.path().join("folder.html");
+    let folder_output = export_directory.path().join("folder.html");
     let folder = project
         .export_folder_html(
             ".",
@@ -1136,7 +1143,8 @@ fn derived_links_match_in_page_and_folder_exports() {
 
 #[test]
 fn folder_html_export_follows_recursive_order_and_numbers_pages() {
-    let (temp, mut project) = project();
+    let (_temp, mut project) = project();
+    let export_directory = TempDir::new().unwrap();
     project.create_folder(".", "part").unwrap();
     project
         .create_page_at("intro.fractal.html", "Intro")
@@ -1154,7 +1162,7 @@ fn folder_html_export_follows_recursive_order_and_numbers_pages() {
         .reorder_folder(".", ["intro.fractal.html", "part"])
         .unwrap();
 
-    let output = temp.path().join("folder.html");
+    let output = export_directory.path().join("folder.html");
     let report = project
         .export_folder_html(
             ".",
@@ -1184,7 +1192,8 @@ fn folder_html_export_follows_recursive_order_and_numbers_pages() {
 
 #[test]
 fn folder_export_selections_expand_only_unqualified_folders() {
-    let (temp, mut project) = project();
+    let (_temp, mut project) = project();
+    let export_directory = TempDir::new().unwrap();
     project.create_folder(".", "part").unwrap();
     project
         .create_page_at("part/one.fractal.html", "One")
@@ -1196,7 +1205,7 @@ fn folder_export_selections_expand_only_unqualified_folders() {
     let whole_folder = project
         .export_folder_html(
             ".",
-            temp.path().join("whole.html"),
+            export_directory.path().join("whole.html"),
             FolderHtmlExportOptions {
                 selections: vec!["part".into()],
                 ..Default::default()
@@ -1208,7 +1217,7 @@ fn folder_export_selections_expand_only_unqualified_folders() {
     let selected_child = project
         .export_folder_html(
             ".",
-            temp.path().join("selected.html"),
+            export_directory.path().join("selected.html"),
             FolderHtmlExportOptions {
                 selections: vec!["part".into(), "part/two.fractal.html".into()],
                 ..Default::default()
@@ -1221,6 +1230,7 @@ fn folder_export_selections_expand_only_unqualified_folders() {
 #[test]
 fn folder_export_force_skips_invalid_and_ghost_pages() {
     let (temp, mut project) = project();
+    let export_directory = TempDir::new().unwrap();
     project.create_page("Good").unwrap();
     project.create_page("Ghost").unwrap();
     project.create_page("Bad").unwrap();
@@ -1245,7 +1255,7 @@ fn folder_export_force_skips_invalid_and_ghost_pages() {
     assert!(project
         .export_folder_html(
             ".",
-            temp.path().join("refused.html"),
+            export_directory.path().join("refused.html"),
             FolderHtmlExportOptions::default(),
         )
         .unwrap_err()
@@ -1254,7 +1264,7 @@ fn folder_export_force_skips_invalid_and_ghost_pages() {
     let report = project
         .export_folder_html(
             ".",
-            temp.path().join("forced.html"),
+            export_directory.path().join("forced.html"),
             FolderHtmlExportOptions {
                 force: true,
                 ..Default::default()
@@ -1268,7 +1278,8 @@ fn folder_export_force_skips_invalid_and_ghost_pages() {
 
 #[test]
 fn folder_export_links_included_pages_and_places_derived_references_last() {
-    let (temp, mut project) = project();
+    let (_temp, mut project) = project();
+    let export_directory = TempDir::new().unwrap();
     project.create_page("First").unwrap();
     project.create_page("Second").unwrap();
     project.create_page("Reference").unwrap();
@@ -1282,7 +1293,7 @@ fn folder_export_links_included_pages_and_places_derived_references_last() {
         )
         .unwrap();
 
-    let output = temp.path().join("links.html");
+    let output = export_directory.path().join("links.html");
     let report = project
         .export_folder_html(
             ".",

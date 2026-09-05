@@ -77,7 +77,8 @@ Callers create folders explicitly. `Project::create_folder(parent, title)`
 requires an existing parent, derives the directory name from the title, writes
 folder metadata, and updates an explicit parent order in one transaction.
 `Project::create_page_at` also requires its parent folder to exist. Neither
-operation creates missing ancestors.
+operation creates missing ancestors. Page recreation and movement also require
+an existing destination parent folder.
 
 Only direct child directories and native documents participate in folder
 order. Opaque files do not. The default order places child folders first, then
@@ -213,8 +214,9 @@ cannot finish.
 ## Single-document HTML export
 
 `Project::export_html` validates one native document and writes one standalone
-HTML file. It removes Fractal's native marker and document-root attribute while
-keeping native content, inline styles, and ordinary anchors.
+HTML file outside the project root. It removes Fractal's native marker and
+document-root attribute while keeping native content, inline styles, and
+ordinary anchors.
 
 Direct links to native documents become one-level references in a collapsed
 section at the end. A referenced document contributes visible text only, and
@@ -236,10 +238,10 @@ change document order. Unknown selections are errors, while selected ghosts
 produce no output.
 
 The exporter creates a neutral document shell titled with the effective folder
-title. It does not merge source styles. Each included document becomes a
-section with a generated `<h1>`, and `<hr>` separates adjacent sections.
-Optional numbering prefixes headings after selection, validation, and ghost
-filtering.
+title and writes it outside the project root. It does not merge source styles.
+Each included document becomes a section with a generated `<h1>`, and `<hr>`
+separates adjacent sections. Optional numbering prefixes headings after
+selection, validation, and ghost filtering.
 
 Links between included native documents become fragment links. Links to
 excluded native documents become one-level text references at the end. Derived

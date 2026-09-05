@@ -80,10 +80,10 @@ version:
 ```
 
 Folders must be created explicitly with `Project::create_folder` or
-`new-folder`. Page creation never creates a missing parent folder. Folder titles
-and native document titles determine their paths. Optional folder metadata
-stores a display title and an explicit order for direct child folders and native
-documents.
+`new-folder`. Page creation, recreation, and movement never create a missing
+parent folder. Folder titles and native document titles determine their paths.
+Optional folder metadata stores a display title and an explicit order for
+direct child folders and native documents.
 
 See [the format contract](docs/format-contract.md) for the native document
 profile, folder ordering, links, and exports.
@@ -133,7 +133,8 @@ fragment links. Links to excluded native documents become one-level text
 references. Invalid selected documents stop the export unless force mode skips
 and reports them.
 
-Exports write only the requested output file. They do not alter project files.
+Export destinations must be outside the project root. Exports write only the
+requested output file and do not alter project files.
 
 ## Complete CLI command list
 

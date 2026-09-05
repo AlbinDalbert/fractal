@@ -109,24 +109,26 @@ pub(super) fn direct_orderable_children(
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
         let file_type = entry.file_type()?;
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| FractalError::invalid_project("folder child name is not valid UTF-8"))?;
-        let kind = if file_type.is_dir() {
+        if file_type.is_dir() {
+            let name = entry.file_name().into_string().map_err(|_| {
+                FractalError::invalid_project("folder child name is not valid UTF-8")
+            })?;
             if name.ends_with(NATIVE_SUFFIX) {
                 return Err(FractalError::invalid_project(format!(
                     "folder name uses the reserved native document suffix: {name}"
                 )));
             }
-            Some(FolderChildKind::Folder)
-        } else if file_type.is_file() && name.ends_with(NATIVE_SUFFIX) {
-            Some(FolderChildKind::Native)
-        } else {
-            None
-        };
-        if let Some(kind) = kind {
-            children.insert(name, kind);
+            children.insert(name, FolderChildKind::Folder);
+        } else if file_type.is_file() {
+            let Some(name) = entry
+                .file_name()
+                .to_str()
+                .filter(|name| name.ends_with(NATIVE_SUFFIX))
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            children.insert(name, FolderChildKind::Native);
         }
     }
     Ok(children)
@@ -302,9 +304,15 @@ pub(super) fn collect_native_documents(
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
         let path = entry.path();
-        if entry.file_type()?.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
             collect_native_documents(root, &path, output)?;
-        } else if path_string(&path).ends_with(NATIVE_SUFFIX) {
+        } else if file_type.is_file()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.ends_with(NATIVE_SUFFIX))
+        {
             output.push(path.strip_prefix(root)?.to_path_buf());
         }
     }
@@ -366,6 +374,80 @@ pub(super) fn atomic_write_bytes(path: &Path, contents: &[u8]) -> Result<()> {
     temp.persist(path).map_err(|error| error.error)?;
     sync_directory(parent)?;
     Ok(())
+}
+
+pub(super) fn ensure_export_destination_is_outside_project(
+    root: &Path,
+    destination: &Path,
+) -> Result<()> {
+    let project_path = lexical_absolute_path(root)?;
+    let destination_path = lexical_absolute_path(destination)?;
+    let canonical_project = fs::canonicalize(root)?;
+    let resolved_destination = resolve_destination_parent(&destination_path)?;
+    if destination_path.starts_with(&project_path)
+        || resolved_destination.starts_with(&canonical_project)
+    {
+        return Err(FractalError::invalid_input(format!(
+            "HTML export destination must be outside the project: {}",
+            destination.display()
+        )));
+    }
+    Ok(())
+}
+
+fn lexical_absolute_path(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(FractalError::invalid_input(
+                        "export destination escapes the filesystem root",
+                    ));
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    Ok(normalized)
+}
+
+fn resolve_destination_parent(destination: &Path) -> Result<PathBuf> {
+    let file_name = destination
+        .file_name()
+        .ok_or_else(|| FractalError::invalid_input("HTML export destination must name a file"))?;
+    let mut ancestor = destination.parent().ok_or_else(|| {
+        FractalError::invalid_input("HTML export destination must have a parent directory")
+    })?;
+    let mut missing = Vec::new();
+    let mut resolved = loop {
+        match fs::canonicalize(ancestor) {
+            Ok(path) => break path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = ancestor.file_name().ok_or_else(|| {
+                    FractalError::invalid_input("HTML export destination has no existing ancestor")
+                })?;
+                missing.push(name.to_os_string());
+                ancestor = ancestor.parent().ok_or_else(|| {
+                    FractalError::invalid_input("HTML export destination has no existing ancestor")
+                })?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    for component in missing.iter().rev() {
+        resolved.push(component);
+    }
+    resolved.push(file_name);
+    Ok(resolved)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -444,23 +526,6 @@ impl MutationPlan {
     pub(super) fn remove_page_directory(&mut self, path: impl Into<PathBuf>) {
         self.remove_directories
             .insert(Path::new(PAGES).join(path.into()));
-    }
-
-    pub(super) fn ensure_page_parent_directories(&mut self, root: &Path, page: &Path) {
-        let mut missing = Vec::new();
-        let mut parent = page.parent();
-        while let Some(path) = parent {
-            if path.as_os_str().is_empty() {
-                break;
-            }
-            if !path_exists(&root.join(PAGES).join(path)) {
-                missing.push(path.to_path_buf());
-            }
-            parent = path.parent();
-        }
-        for path in missing.into_iter().rev() {
-            self.create_page_directory(path);
-        }
     }
 
     pub(super) fn commit(mut self, root: &Path) -> Result<MutationReceipt> {

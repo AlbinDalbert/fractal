@@ -177,7 +177,8 @@ impl Project {
     /// Recreates a missing native page from editor-owned recovery data.
     ///
     /// The operation checks absence while holding the project lock and never
-    /// overwrites a path that has reappeared.
+    /// overwrites a path that has reappeared. The destination parent folder
+    /// must already exist.
     pub fn recreate_page_from_draft(
         &mut self,
         path: impl AsRef<Path>,
@@ -187,6 +188,13 @@ impl Project {
         self.reload()?;
         let relative = normalize_native_page_path(path.as_ref())?;
         validate_title_driven_page_path(&relative, &draft.title)?;
+        let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+        if !self.folders.contains_key(&path_string(parent)) {
+            return Err(FractalError::not_found(format!(
+                "parent folder does not exist: {}",
+                display_folder_path(parent)
+            )));
+        }
         if path_exists(&self.root.join(PAGES).join(&relative)) {
             return Err(FractalError::conflict(format!(
                 "cannot recreate a page that now exists: {}",
@@ -210,10 +218,9 @@ impl Project {
         }
 
         let mut plan = MutationPlan::new(MutationKind::RecreatePage);
-        plan.ensure_page_parent_directories(&self.root, &relative);
         plan.write_page(relative.clone(), document.serialize()?);
         if let Some(write) = self.folder_metadata_child_change(
-            relative.parent().unwrap_or_else(|| Path::new("")),
+            parent,
             None,
             relative.file_name().and_then(|name| name.to_str()),
         )? {
@@ -363,7 +370,8 @@ impl Project {
         self.reload()?;
         Ok(receipt)
     }
-    /// Moves a page and rewrites affected internal references atomically.
+    /// Moves a page into an existing folder and rewrites affected internal
+    /// references atomically.
     ///
     /// Moving a native page also updates stored folder order. A move to the
     /// current path returns a no-op receipt.
@@ -378,6 +386,13 @@ impl Project {
         let to = normalize_native_page_path(to.as_ref())?;
         if from == to {
             return Ok(noop_receipt(MutationKind::MovePage));
+        }
+        let destination_parent = to.parent().unwrap_or_else(|| Path::new(""));
+        if !self.folders.contains_key(&path_string(destination_parent)) {
+            return Err(FractalError::not_found(format!(
+                "destination folder does not exist: {}",
+                display_folder_path(destination_parent)
+            )));
         }
         let destination = self.root.join(PAGES).join(&to);
         if path_exists(&destination) {
@@ -406,7 +421,6 @@ impl Project {
         }
 
         let mut plan = MutationPlan::new(MutationKind::MovePage);
-        plan.ensure_page_parent_directories(&self.root, &to);
         plan.write_page(to.clone(), moved_html);
         plan.delete_page(from.clone());
         plan.move_page(from.clone(), to.clone());

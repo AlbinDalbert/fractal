@@ -6,13 +6,15 @@ impl Project {
     ///
     /// Internal native-document references are appended to the output so the
     /// exported file remains self-contained. Derived references are included
-    /// when requested by `options`.
+    /// when requested by `options`. The output must be outside the project.
     pub fn export_html(
         &self,
         path: impl AsRef<Path>,
         output: impl AsRef<Path>,
         options: HtmlExportOptions,
     ) -> Result<HtmlExportReport> {
+        let output = output.as_ref().to_path_buf();
+        ensure_export_destination_is_outside_project(&self.root, &output)?;
         let page_path = self.existing_path(path.as_ref())?;
         let page_path_string = path_string(&page_path);
         let stored = self.stored(&page_path)?;
@@ -76,7 +78,6 @@ impl Project {
             export.append_to_main(&section)?;
         }
 
-        let output = output.as_ref().to_path_buf();
         atomic_write(&output, &export.serialize()?)?;
         Ok(HtmlExportReport { output, references })
     }
@@ -84,13 +85,16 @@ impl Project {
     /// Exports a folder or selected descendants as one ordered HTML document.
     ///
     /// Selection paths are relative to `folder`. Invalid selected pages reject
-    /// the export unless [`FolderHtmlExportOptions::force`] is set.
+    /// the export unless [`FolderHtmlExportOptions::force`] is set. The output
+    /// must be outside the project.
     pub fn export_folder_html(
         &self,
         folder: impl AsRef<Path>,
         output: impl AsRef<Path>,
         options: FolderHtmlExportOptions,
     ) -> Result<FolderHtmlExportReport> {
+        let output = output.as_ref().to_path_buf();
+        ensure_export_destination_is_outside_project(&self.root, &output)?;
         let folder = normalize_folder_path(folder.as_ref())?;
         let stored_folder = self.folders.get(&path_string(&folder)).ok_or_else(|| {
             FractalError::not_found(format!(
@@ -210,7 +214,6 @@ impl Project {
         }
 
         let html = folder_export_shell(&stored_folder.folder.title, &main);
-        let output = output.as_ref().to_path_buf();
         atomic_write(&output, &html)?;
         Ok(FolderHtmlExportReport {
             output,

@@ -1,9 +1,16 @@
 use fractal::{
-    FractalErrorCode, HealthIssueCode, LinkTarget, MutationKind, NativeDocumentParts, Page,
-    Project, ProjectEntryKind,
+    FolderHtmlExportOptions, FractalErrorCode, HealthIssueCode, HtmlExportOptions, LinkTarget,
+    MutationKind, NativeDocumentParts, Page, Project, ProjectEntryKind,
 };
 use std::fs;
 use tempfile::TempDir;
+
+#[cfg(unix)]
+use std::ffi::OsString;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 
 fn project(name: &str) -> (TempDir, Project) {
     let directory = TempDir::new().unwrap();
@@ -154,6 +161,19 @@ fn version_one_is_inspectable_but_cannot_be_opened() {
 fn folder_creation_is_explicit_and_page_parents_must_exist() {
     let (directory, mut project) = project("Folders");
 
+    project.create_page("Movable").unwrap();
+    let source = project.source("movable").unwrap();
+    let error = project
+        .move_page("movable", "missing-parent/movable")
+        .unwrap_err();
+    assert_eq!(error.code, FractalErrorCode::NotFound);
+    project.delete_page("movable").unwrap();
+    let error = project
+        .recreate_page_from_source("missing-parent/movable", &source)
+        .unwrap_err();
+    assert_eq!(error.code, FractalErrorCode::NotFound);
+    assert!(!directory.path().join("pages/missing-parent").exists());
+
     let error = project
         .create_page_at("field-notes/entry", "Entry")
         .unwrap_err();
@@ -176,6 +196,77 @@ fn folder_creation_is_explicit_and_page_parents_must_exist() {
         project.page("field-notes/entry").unwrap().path,
         "field-notes/entry.fractal.html"
     );
+}
+
+#[test]
+fn exports_refuse_destinations_inside_the_project() {
+    let (directory, mut project) = project("Exports");
+    project.create_page("Source").unwrap();
+    let source_path = directory.path().join("pages/source.fractal.html");
+    let source_before = fs::read(&source_path).unwrap();
+
+    let error = project
+        .export_html("source", &source_path, HtmlExportOptions::default())
+        .unwrap_err();
+    assert_eq!(error.code, FractalErrorCode::InvalidInput);
+    assert_eq!(fs::read(&source_path).unwrap(), source_before);
+
+    let manifest_path = directory.path().join("fractal.json");
+    let manifest_before = fs::read(&manifest_path).unwrap();
+    let error = project
+        .export_folder_html(".", &manifest_path, FolderHtmlExportOptions::default())
+        .unwrap_err();
+    assert_eq!(error.code, FractalErrorCode::InvalidInput);
+    assert_eq!(fs::read(&manifest_path).unwrap(), manifest_before);
+
+    #[cfg(unix)]
+    {
+        let alias_directory = TempDir::new().unwrap();
+        let project_alias = alias_directory.path().join("project-alias");
+        symlink(directory.path(), &project_alias).unwrap();
+        let error = project
+            .export_html(
+                "source",
+                project_alias.join("pages/alias.html"),
+                HtmlExportOptions::default(),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, FractalErrorCode::InvalidInput);
+    }
+
+    assert!(Project::open(directory.path()).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn opaque_filesystem_entries_stay_outside_the_catalog() {
+    let (directory, mut project) = project("Opaque entries");
+    project.create_page("Outside").unwrap();
+    let outside = directory.path().join("outside.fractal.html");
+    fs::rename(
+        directory.path().join("pages/outside.fractal.html"),
+        &outside,
+    )
+    .unwrap();
+    symlink(
+        &outside,
+        directory.path().join("pages/outside.fractal.html"),
+    )
+    .unwrap();
+    fs::write(
+        directory
+            .path()
+            .join("pages")
+            .join(OsString::from_vec(vec![0xff])),
+        b"opaque",
+    )
+    .unwrap();
+    drop(project);
+
+    let project = Project::open(directory.path()).unwrap();
+    assert!(project.pages().is_empty());
+    assert!(project.search("Outside").is_empty());
+    assert!(project.folder(".").unwrap().children.is_empty());
 }
 
 #[test]

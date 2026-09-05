@@ -60,7 +60,8 @@ operation fail before Fractal builds or commits a change plan.
 ## Mutation rules
 
 - Resolve and contain paths before filesystem access.
-- Require callers to create a folder before creating pages beneath it.
+- Require callers to create a folder before creating, recreating, or moving a
+  page beneath it.
 - Take the stable `.fractal.lock` across a mutation and reload the catalog after
   acquiring it.
 - Compare section hashes while holding the lock.
@@ -97,8 +98,9 @@ does not repair anything. `Project::repair` is an explicit mutation and records
 completed changes and typed failures in its report.
 
 Page and folder HTML exports are concrete output operations. They validate and
-transform temporary DOMs, then write only the requested destination. They do
-not mutate the project or imply a general conversion system.
+transform temporary DOMs, then write only the requested destination outside
+the project root. They do not mutate the project or imply a general conversion
+system.
 
 ## Application boundary
 
