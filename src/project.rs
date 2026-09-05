@@ -75,9 +75,10 @@ struct FolderMetadata {
 
 mod export;
 mod folder;
-mod graph;
 mod lifecycle;
+mod links;
 mod page;
+mod search;
 mod storage;
 mod support;
 mod validation;

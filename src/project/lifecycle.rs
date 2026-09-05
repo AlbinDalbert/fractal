@@ -29,7 +29,7 @@ impl Project {
         Self::open(root)
     }
 
-    /// Opens and indexes an existing project.
+    /// Opens an existing project and loads its native document catalog.
     ///
     /// Opening fails while an interrupted transaction requires recovery. Use
     /// [`Project::inspect`] to distinguish that state from other project errors
@@ -103,7 +103,7 @@ impl Project {
         &self.manifest
     }
 
-    /// Returns all indexed native documents in project-path order.
+    /// Returns all native documents in the in-memory catalog, in project-path order.
     pub fn pages(&self) -> Vec<Page> {
         self.pages
             .values()
@@ -111,7 +111,7 @@ impl Project {
             .collect()
     }
 
-    /// Returns all indexed folders in project-path order.
+    /// Returns all folders in the in-memory catalog, in project-path order.
     pub fn folders(&self) -> Vec<Folder> {
         self.folders
             .values()

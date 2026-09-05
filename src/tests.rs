@@ -230,7 +230,7 @@ fn copy_directory(from: &Path, to: &Path) {
 }
 
 #[test]
-fn project_has_no_generated_indexes_or_graph_state() {
+fn project_has_no_persistent_generated_state() {
     let (temp, project) = project();
     assert!(project.pages().is_empty());
     assert!(temp.path().join(".fractal.lock").is_file());
@@ -407,7 +407,7 @@ fn validation_reports_missing_titles_and_broken_links() {
 }
 
 #[test]
-fn search_scans_the_in_memory_catalog() {
+fn native_text_search_scans_the_in_memory_document_catalog() {
     let (_temp, mut project) = project();
     project.create_page("One").unwrap();
     project
@@ -440,14 +440,14 @@ fn ordinary_html_files_are_opaque() {
     let path = temp.path().join("pages/opaque.html");
     let same_stem_path = temp.path().join("pages/notes.html");
     let source =
-        "<title>Opaque</title><p>unindexed phrase <a href=\"missing.fractal.html\">Missing</a></p>";
+        "<title>Opaque</title><p>opaque phrase <a href=\"missing.fractal.html\">Missing</a></p>";
     fs::write(&path, source).unwrap();
     fs::write(&same_stem_path, source).unwrap();
     let project = Project::open(temp.path()).unwrap();
 
     assert_eq!(project.pages().len(), 1);
     assert_eq!(project.page("notes").unwrap().path, "notes.fractal.html");
-    assert!(project.search("unindexed phrase").is_empty());
+    assert!(project.search("opaque phrase").is_empty());
     assert_eq!(
         project.page("opaque").unwrap_err().code,
         FractalErrorCode::NotFound
@@ -470,7 +470,7 @@ fn ordinary_html_files_are_opaque() {
 }
 
 #[test]
-fn local_non_native_links_are_not_indexed_or_validated() {
+fn local_non_native_links_are_absent_from_the_native_link_index() {
     let (temp, mut project) = project();
     project.create_page("Notes").unwrap();
     fs::write(temp.path().join("pages/attachment.pdf"), "opaque").unwrap();
@@ -490,7 +490,7 @@ fn local_non_native_links_are_not_indexed_or_validated() {
 }
 
 #[test]
-fn missing_native_links_are_indexed_and_fail_validation() {
+fn missing_native_links_are_in_the_native_link_index_and_fail_validation() {
     let (_temp, mut project) = project();
     project.create_page("Notes").unwrap();
     project
@@ -778,7 +778,7 @@ fn folder_mutations_refuse_to_relocate_or_delete_opaque_files() {
 }
 
 #[test]
-fn move_refreshes_the_catalog_before_rewriting_backlinks() {
+fn move_refreshes_the_native_document_catalog_before_rewriting_backlinks() {
     let (temp, mut first_process) = project();
     first_process.create_page("Target").unwrap();
     let mut second_process = Project::open(temp.path()).unwrap();

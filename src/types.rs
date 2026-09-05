@@ -95,6 +95,7 @@ pub struct Backlink {
     pub text: String,
 }
 
+/// A match from native text search.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SearchResult {
     pub path: String,

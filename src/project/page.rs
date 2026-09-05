@@ -23,7 +23,7 @@ impl NativePageDraft {
 }
 
 impl Project {
-    /// Returns the indexed metadata for a native document.
+    /// Returns cataloged metadata for a native document.
     pub fn page(&self, path: impl AsRef<Path>) -> Result<Page> {
         Ok(self.stored(path.as_ref())?.page.clone())
     }

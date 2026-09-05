@@ -7,10 +7,10 @@ Native documents use the `.fractal.html` suffix and a small semantic HTML profil
 ## Principles
 
 - **Native meaning, raw source.** Fractal may normalize native documents during semantic edits. It does not automatically rewrite raw HTML.
-- **Files are the source of truth.** Fractal scans pages into memory when a project is opened. There are no persistent index or graph files to synchronize.
+- **Files are the source of truth.** Fractal loads native documents into an in-memory catalog when a project is opened. It writes no generated catalog or link state.
 - **Links are explicit.** Fractal reads, validates, inserts, and preserves links. It never rewrites unlinked prose automatically.
 - **Iframes are embeds.** Native documents may embed project files, inline `srcdoc`, or remote pages with ordinary `<iframe>` elements.
-- **Derived data stays derived.** Search, links, backlinks, and derived links are views over the current files.
+- **Derived data stays derived.** Native text search, the native link index, backlinks, and exact-title derived links are in-memory views over the current files.
 - **Hashes guard writes.** Every page exposes a SHA-256 source hash. Native content, managed CSS, user metadata, and head links also have independent hashes, so disjoint edits can merge without accepting stale changes to the same section.
 - **The library is the product.** The CLI is a thin adapter over the Rust API.
 
@@ -60,12 +60,12 @@ The `Project` API provides:
 - delete page batches or complete folders;
 - inspect explicit links and derived backlinks;
 - inspect iframes and find pages that embed a project file;
-- search page titles and visible text;
+- search native document titles and visible native content;
 - derive unambiguous exact-title links for runtime rendering;
 - explicitly insert a selected link;
 - validate titles and internal link targets.
 
-Every mutation takes an exclusive lock on `.fractal.lock` and refreshes the in-memory catalog before checking paths or hashes. Raw source writes and native section writes compare the caller's hash while holding that lock. A mismatch returns `FractalErrorCode::Conflict`.
+Every mutation takes an exclusive lock on `.fractal.lock` and refreshes the in-memory native document catalog before checking paths or hashes. Raw source writes and native section writes compare the caller's hash while holding that lock. A mismatch returns `FractalErrorCode::Conflict`.
 
 All project mutations use one recoverable transaction implementation. `MutationReceipt` reports created, updated, moved, and deleted project entries with direct path mappings and file hashes. Receipt paths are UTF-8, slash-separated, and relative to the project root.
 
@@ -123,7 +123,7 @@ Every command supports `--json`. The default output is also deliberately simple 
 
 The engine does not yet have:
 
-- generated index or graph files;
+- persistent generated catalog or link state;
 - internal note primitive;
 - automatic prose rewriting or sync command;
 - embeddings, semantic search, entity extraction, or ontology;
@@ -132,7 +132,7 @@ The engine does not yet have:
 - generalized transaction, command bus, or extension framework;
 - persistent mutation history.
 
-Import/export, richer queries, metadata, repair, and semantic tooling can be added as direct engine operations. UI policy and rich editing belong in applications that use the library.
+UI policy and rich editing belong in applications that use the library.
 
 ## Development
 
