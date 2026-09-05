@@ -93,6 +93,7 @@ impl Project {
                 display_folder_path(&path)
             ))
         })?;
+        ensure_folder_subtree_is_managed(&self.root.join(PAGES).join(&path))?;
         if !path.as_os_str().is_empty() {
             let destination = path
                 .parent()
@@ -275,12 +276,8 @@ impl Project {
         }
         let mut deleted = Vec::new();
         if exists {
+            ensure_folder_subtree_is_managed(&absolute)?;
             collect_files(&self.root.join(PAGES), &absolute, &mut deleted)?;
-            if deleted.iter().any(|path| !is_managed_folder_file(path)) {
-                return Err(FractalError::invalid_input(
-                    "folder contains unsupported content that Fractal does not manage",
-                ));
-            }
         }
         let targets: BTreeSet<String> = deleted.iter().map(|path| path_string(path)).collect();
         let deleted_pages: BTreeSet<String> = self
@@ -511,13 +508,9 @@ impl Project {
                 to.display()
             )));
         }
+        ensure_folder_subtree_is_managed(&pages.join(from))?;
         let mut old_files = Vec::new();
         collect_files(&pages, &pages.join(from), &mut old_files)?;
-        if old_files.iter().any(|path| !is_managed_folder_file(path)) {
-            return Err(FractalError::invalid_input(
-                "folder contains unsupported content that Fractal does not manage",
-            ));
-        }
         let mut old_directories = Vec::new();
         collect_directories(&pages, &pages.join(from), &mut old_directories)?;
         let new_files: Vec<PathBuf> = old_files

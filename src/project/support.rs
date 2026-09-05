@@ -317,6 +317,22 @@ pub(super) fn is_managed_folder_file(path: &Path) -> bool {
         || path_string(path).ends_with(NATIVE_SUFFIX)
 }
 
+pub(super) fn ensure_folder_subtree_is_managed(directory: &Path) -> Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let path = entry.path();
+        if file_type.is_dir() {
+            ensure_folder_subtree_is_managed(&path)?;
+        } else if !file_type.is_file() || !is_managed_folder_file(&path) {
+            return Err(FractalError::invalid_input(
+                "folder contains unsupported content that must be handled outside Fractal",
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn collect_files(
     root: &Path,
     directory: &Path,

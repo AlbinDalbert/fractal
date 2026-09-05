@@ -766,22 +766,79 @@ fn folder_delete_rejects_references_from_surviving_pages() {
 
 #[test]
 fn folder_mutations_refuse_to_relocate_or_delete_opaque_files() {
-    let (temp, _) = project();
-    fs::create_dir_all(temp.path().join("pages/archive")).unwrap();
-    fs::create_dir_all(temp.path().join("pages/section")).unwrap();
-    let opaque = temp.path().join("pages/section/image.png");
+    let (temp, mut project) = project();
+    project.create_folder(".", "archive").unwrap();
+    project.create_folder(".", "section").unwrap();
+    project.create_folder("section", "nested").unwrap();
+    project
+        .create_page_at("section/nested/topic", "Topic")
+        .unwrap();
+    let opaque = temp.path().join("pages/section/nested/image.png");
     fs::write(&opaque, "keep me here").unwrap();
-    let mut project = Project::open(temp.path()).unwrap();
+    let before = project_file_snapshot(temp.path());
 
     let move_error = project
         .move_folder("section", "archive/section")
         .unwrap_err();
     assert_eq!(move_error.code, FractalErrorCode::InvalidInput);
-    assert_eq!(fs::read_to_string(&opaque).unwrap(), "keep me here");
+    assert!(move_error.message.contains("handled outside Fractal"));
+    assert_eq!(project_file_snapshot(temp.path()), before);
+
+    let title_error = project
+        .set_folder_title("section", "Renamed section")
+        .unwrap_err();
+    assert_eq!(title_error.code, FractalErrorCode::InvalidInput);
+    assert!(title_error.message.contains("handled outside Fractal"));
+    assert_eq!(project_file_snapshot(temp.path()), before);
 
     let delete_error = project.delete_folder("section").unwrap_err();
     assert_eq!(delete_error.code, FractalErrorCode::InvalidInput);
-    assert_eq!(fs::read_to_string(opaque).unwrap(), "keep me here");
+    assert!(delete_error.message.contains("handled outside Fractal"));
+    assert_eq!(project_file_snapshot(temp.path()), before);
+}
+
+#[test]
+fn opaque_files_do_not_block_page_mutations_in_the_same_folder() {
+    let (temp, mut project) = project();
+    project.create_folder(".", "section").unwrap();
+    let opaque = temp.path().join("pages/section/notes.txt");
+    fs::write(&opaque, "leave this alone").unwrap();
+
+    let receipt = project.create_page_at("section/topic", "Topic").unwrap();
+
+    assert_eq!(fs::read_to_string(opaque).unwrap(), "leave this alone");
+    assert!(project.page("section/topic").is_ok());
+    assert!(receipt.changes.iter().all(|change| match change {
+        ProjectChange::Created { path, .. } | ProjectChange::Updated { path, .. } => {
+            path.as_str() != "pages/section/notes.txt"
+        }
+        ProjectChange::Moved { from, to, .. } => {
+            from.as_str() != "pages/section/notes.txt" && to.as_str() != "pages/section/notes.txt"
+        }
+        ProjectChange::Deleted { path, .. } => path.as_str() != "pages/section/notes.txt",
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+fn folder_mutations_treat_disguised_symlinks_as_unsupported_content() {
+    use std::os::unix::fs::symlink;
+
+    let (temp, mut project) = project();
+    project.create_folder(".", "section").unwrap();
+    let outside = TempDir::new().unwrap();
+    let target = outside.path().join("outside.fractal.html");
+    let source = native("Outside", "<p>Outside the project.</p>");
+    fs::write(&target, &source).unwrap();
+    let link = temp.path().join("pages/section/inside.fractal.html");
+    symlink(&target, &link).unwrap();
+
+    let error = project.delete_folder("section").unwrap_err();
+
+    assert_eq!(error.code, FractalErrorCode::InvalidInput);
+    assert!(error.message.contains("handled outside Fractal"));
+    assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+    assert_eq!(fs::read_to_string(target).unwrap(), source);
 }
 
 #[test]
@@ -1621,6 +1678,37 @@ fn inspection_reports_and_repair_fixes_title_path_mismatches() {
         Some("Correct title")
     );
     assert!(!temp.path().join("pages/wrong.fractal.html").exists());
+}
+
+#[test]
+fn repair_reports_unsupported_folder_content_without_moving_it() {
+    let (temp, mut project) = project();
+    project.create_folder(".", "section").unwrap();
+    drop(project);
+    fs::rename(
+        temp.path().join("pages/section"),
+        temp.path().join("pages/wrong-name"),
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("pages/wrong-name/notes.txt"),
+        "leave this alone",
+    )
+    .unwrap();
+    let before = project_file_snapshot(temp.path());
+    let mut project = Project::open(temp.path()).unwrap();
+
+    let report = project.repair().unwrap();
+
+    assert!(report.changes.is_empty());
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].code, FractalErrorCode::InvalidInput);
+    assert!(report.failures[0]
+        .message
+        .contains("handled outside Fractal"));
+    assert_eq!(project_file_snapshot(temp.path()), before);
+    assert!(temp.path().join("pages/wrong-name").is_dir());
+    assert!(!temp.path().join("pages/section").exists());
 }
 
 #[test]
