@@ -206,7 +206,12 @@ impl<'de> Deserialize<'de> for ProjectPath {
         D: serde::Deserializer<'de>,
     {
         let path = String::deserialize(deserializer)?;
-        if path.is_empty()
+        let has_windows_drive_prefix = matches!(
+            path.as_bytes(),
+            [drive, b':', ..] if drive.is_ascii_alphabetic()
+        );
+        if has_windows_drive_prefix
+            || path.is_empty()
             || path.starts_with('/')
             || path.contains('\\')
             || path

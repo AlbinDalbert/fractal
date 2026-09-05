@@ -78,6 +78,16 @@ fn project() -> (TempDir, Project) {
     (temp, project)
 }
 
+#[test]
+fn project_path_deserialization_rejects_windows_drive_prefixes() {
+    for path in [r#""C:/outside""#, r#""C:outside""#] {
+        let error = serde_json::from_str::<ProjectPath>(path).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("project path must be a slash-separated relative path"));
+    }
+}
+
 fn native(title: &str, body: &str) -> String {
     format!(
         "<!doctype html><html><head><meta name=\"fractal-format\" content=\"1\"><title>{title}</title><style data-fractal-style></style></head><body><main data-fractal-document><h1 data-fractal-title>{title}</h1>{body}</main></body></html>"
