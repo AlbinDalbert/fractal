@@ -18,6 +18,59 @@ impl Project {
             })
     }
 
+    /// Creates a folder below an existing parent.
+    ///
+    /// Fractal derives the directory name from `title`. It creates the
+    /// directory and its metadata, then updates explicit parent order in the
+    /// same recoverable transaction.
+    pub fn create_folder(
+        &mut self,
+        parent: impl AsRef<Path>,
+        title: &str,
+    ) -> Result<MutationReceipt> {
+        let parent = normalize_folder_path(parent.as_ref())?;
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(FractalError::invalid_input("folder title cannot be empty"));
+        }
+        let name = slug(title)?;
+        let folder = parent.join(&name);
+
+        let _lock = self.lock_for_mutation()?;
+        self.reload()?;
+        if !self.folders.contains_key(&path_string(&parent)) {
+            return Err(FractalError::not_found(format!(
+                "parent folder does not exist: {}",
+                display_folder_path(&parent)
+            )));
+        }
+        if path_exists(&self.root.join(PAGES).join(&folder)) {
+            return Err(FractalError::already_exists(format!(
+                "folder already exists: {}",
+                folder.display()
+            )));
+        }
+
+        let metadata = FolderMetadata {
+            title: title.to_owned(),
+            order: None,
+        };
+        let mut plan = MutationPlan::new(MutationKind::CreateFolder);
+        plan.create_page_directory(folder.clone());
+        plan.write_page(
+            folder_metadata_relative_path(&folder),
+            serde_json::to_string_pretty(&metadata)?,
+        );
+        if let Some((path, contents)) =
+            self.folder_metadata_child_change(&parent, None, Some(&name))?
+        {
+            plan.write_page(path, contents);
+        }
+        let receipt = plan.commit(&self.root)?;
+        self.reload()?;
+        Ok(receipt)
+    }
+
     /// Changes a folder title and, outside the pages root, renames the folder to
     /// the title-derived path.
     ///

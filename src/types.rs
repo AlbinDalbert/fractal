@@ -232,6 +232,7 @@ pub enum ProjectChange {
 #[serde(rename_all = "snake_case")]
 pub enum MutationKind {
     CreatePage,
+    CreateFolder,
     RecreatePage,
     SetPageContent,
     SetPageStyle,

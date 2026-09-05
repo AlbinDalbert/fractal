@@ -28,6 +28,11 @@ enum Command {
     Folder {
         folder: PathBuf,
     },
+    NewFolder {
+        title: String,
+        #[arg(long, default_value = ".")]
+        parent: PathBuf,
+    },
     SetFolderTitle {
         folder: PathBuf,
         title: String,
@@ -168,6 +173,9 @@ pub fn run() -> Result<()> {
                 Command::List => output(&project.pages(), cli.json),
                 Command::Folders => output(&project.folders(), cli.json),
                 Command::Folder { folder } => output(&project.folder(folder)?, cli.json),
+                Command::NewFolder { title, parent } => {
+                    output(&project.create_folder(parent, &title)?, cli.json)
+                }
                 Command::SetFolderTitle { folder, title } => {
                     output(&project.set_folder_title(folder, &title)?, cli.json)
                 }

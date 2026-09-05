@@ -120,7 +120,7 @@ impl Project {
     /// Creates a native page at an explicit title-derived project path.
     ///
     /// The filename must match the slug Fractal derives from `title`. Parent
-    /// folders are created as needed and stored folder order is updated.
+    /// folders must already exist. Stored folder order is updated.
     pub fn create_page_at(
         &mut self,
         path: impl AsRef<Path>,
@@ -133,6 +133,13 @@ impl Project {
         }
         let relative = normalize_native_page_path(path.as_ref())?;
         validate_title_driven_page_path(&relative, title)?;
+        let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+        if !self.folders.contains_key(&path_string(parent)) {
+            return Err(FractalError::not_found(format!(
+                "parent folder does not exist: {}",
+                display_folder_path(parent)
+            )));
+        }
         if path_exists(&self.root.join(PAGES).join(&relative)) {
             return Err(FractalError::already_exists(format!(
                 "page already exists: {}",
@@ -148,10 +155,9 @@ impl Project {
         .replace("<style>", "<style data-fractal-style>")
         .replace("<h1>", "<h1 data-fractal-title>");
         let mut plan = MutationPlan::new(MutationKind::CreatePage);
-        plan.ensure_page_parent_directories(&self.root, &relative);
         plan.write_page(relative.clone(), html);
         if let Some(write) = self.folder_metadata_child_change(
-            relative.parent().unwrap_or_else(|| Path::new("")),
+            parent,
             None,
             Some(
                 relative

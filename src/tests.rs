@@ -360,6 +360,7 @@ fn inserting_a_link_is_explicit() {
 fn moving_a_page_updates_explicit_backlinks() {
     let (_temp, mut project) = project();
     project.create_page("Stockholm").unwrap();
+    project.create_folder(".", "trips").unwrap();
     project.create_page_at("trips/sweden", "Sweden").unwrap();
     project
         .write_page(
@@ -551,6 +552,7 @@ fn editing_an_unrelated_section_preserves_ignored_anchors() {
 fn moving_a_page_rewrites_only_resolved_native_relationships() {
     let (_temp, mut project) = project();
     project.create_page("Target").unwrap();
+    project.create_folder(".", "section").unwrap();
     project.create_page_at("section/notes", "Notes").unwrap();
     project
         .write_page(
@@ -721,6 +723,8 @@ fn batch_delete_checks_every_path_before_deleting_any_page() {
 #[test]
 fn folder_delete_removes_nested_pages() {
     let (temp, mut project) = project();
+    project.create_folder(".", "section").unwrap();
+    project.create_folder("section", "nested").unwrap();
     project.create_page_at("section/one", "One").unwrap();
     project.create_page_at("section/nested/two", "Two").unwrap();
     project.create_page("Keep").unwrap();
@@ -731,6 +735,8 @@ fn folder_delete_removes_nested_pages() {
     assert_eq!(
         deleted_file_paths(&mutation),
         vec![
+            "pages/section/fractal.json",
+            "pages/section/nested/fractal.json",
             "pages/section/nested/two.fractal.html",
             "pages/section/one.fractal.html",
         ]
@@ -742,6 +748,7 @@ fn folder_delete_removes_nested_pages() {
 #[test]
 fn folder_delete_rejects_references_from_surviving_pages() {
     let (_temp, mut project) = project();
+    project.create_folder(".", "section").unwrap();
     project.create_page_at("section/one", "One").unwrap();
     project.create_page("Keep").unwrap();
     project
@@ -838,6 +845,7 @@ fn recovery_rolls_back_an_interrupted_file_transaction() {
 #[test]
 fn recovery_rolls_back_an_interrupted_folder_rename() {
     let (temp, mut project) = project();
+    project.create_folder(".", "section").unwrap();
     project.create_page_at("section/target", "Target").unwrap();
     project.create_page("Backlink").unwrap();
     project
@@ -925,6 +933,8 @@ fn derived_links_report_exact_title_occurrences_without_writing() {
 #[test]
 fn derived_links_skip_ambiguous_titles() {
     let (_temp, mut project) = project();
+    project.create_folder(".", "people").unwrap();
+    project.create_folder(".", "scientists").unwrap();
     project
         .create_page_at("people/ada-lovelace", "Ada Lovelace")
         .unwrap();
@@ -1052,6 +1062,7 @@ fn html_export_can_include_derived_native_references() {
 #[test]
 fn folder_html_export_follows_recursive_order_and_numbers_pages() {
     let (temp, mut project) = project();
+    project.create_folder(".", "part").unwrap();
     project
         .create_page_at("intro.fractal.html", "Intro")
         .unwrap();
@@ -1099,6 +1110,7 @@ fn folder_html_export_follows_recursive_order_and_numbers_pages() {
 #[test]
 fn folder_export_selections_expand_only_unqualified_folders() {
     let (temp, mut project) = project();
+    project.create_folder(".", "part").unwrap();
     project
         .create_page_at("part/one.fractal.html", "One")
         .unwrap();
@@ -1214,6 +1226,59 @@ fn folder_export_links_included_pages_and_places_derived_references_last() {
     assert!(
         html.find("id=\"fractal-references\"").unwrap() > html.find("<h1>Second</h1>").unwrap()
     );
+}
+
+#[test]
+fn create_folder_commits_metadata_and_explicit_parent_order_together() {
+    let (temp, mut project) = project();
+    project.create_page("One").unwrap();
+    project.reorder_folder(".", ["one.fractal.html"]).unwrap();
+    let before = project_file_snapshot(temp.path());
+
+    let receipt = project.create_folder(".", "Field Notes").unwrap();
+    let after = project_file_snapshot(temp.path());
+
+    assert_eq!(receipt.operation, MutationKind::CreateFolder);
+    assert_receipt_matches_files(&before, &after, &receipt);
+    assert_eq!(receipt.changes.len(), 3);
+    assert!(receipt.changes.iter().any(|change| matches!(
+        change,
+        ProjectChange::Created { path, entry, after_hash: None }
+            if path.as_str() == "pages/field-notes"
+                && *entry == crate::ProjectEntryKind::Directory
+    )));
+    assert!(receipt.changes.iter().any(|change| matches!(
+        change,
+        ProjectChange::Created { path, entry, after_hash: Some(_) }
+            if path.as_str() == "pages/field-notes/fractal.json"
+                && *entry == crate::ProjectEntryKind::File
+    )));
+    assert_eq!(
+        project.folder(".").unwrap().order.unwrap(),
+        vec!["one.fractal.html", "field-notes"]
+    );
+    assert_eq!(project.folder("field-notes").unwrap().title, "Field Notes");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(temp.path().join("pages/field-notes/fractal.json")).unwrap()
+        )
+        .unwrap(),
+        serde_json::json!({ "title": "Field Notes" })
+    );
+}
+
+#[test]
+fn page_and_folder_creation_require_an_existing_parent_folder() {
+    let (temp, mut project) = project();
+
+    let page_error = project.create_page_at("missing/page", "Page").unwrap_err();
+    assert_eq!(page_error.code, FractalErrorCode::NotFound);
+
+    let folder_error = project
+        .create_folder("missing/ancestor", "Child")
+        .unwrap_err();
+    assert_eq!(folder_error.code, FractalErrorCode::NotFound);
+    assert!(!temp.path().join("pages/missing").exists());
 }
 
 #[test]
@@ -1593,6 +1658,8 @@ fn inspection_proposes_post_rename_name_for_folder_order() {
 #[test]
 fn inspection_resolves_nested_repairs_through_ancestor_renames() {
     let (temp, mut project) = project();
+    project.create_folder(".", "new-parent").unwrap();
+    project.create_folder("new-parent", "new-child").unwrap();
     project
         .create_page_at("new-parent/new-child/one", "One")
         .unwrap();
@@ -1693,6 +1760,7 @@ fn opening_and_inspection_never_rewrite_project_files() {
 #[test]
 fn folder_title_receipt_matches_changed_files() {
     let (temp, mut project) = project();
+    project.create_folder(".", "section").unwrap();
     project.create_page_at("section/topic", "Topic").unwrap();
     project.create_page("Index").unwrap();
     project
@@ -1784,7 +1852,7 @@ fn mutations_never_follow_a_symlinked_project_directory() {
         .create_page_at("escape/outside", "Outside")
         .unwrap_err();
 
-    assert_eq!(error.code, FractalErrorCode::InvalidProject);
+    assert_eq!(error.code, FractalErrorCode::NotFound);
     assert!(!outside.path().join("outside.fractal.html").exists());
 }
 
@@ -1842,16 +1910,14 @@ fn actual_transaction_interruptions_recover_the_complete_old_state() {
     let (temp, mut project) = self::project();
     crate::inject_transaction_fault(TransactionFaultPoint::DirectoryCreated);
     assert_eq!(
-        project
-            .create_page_at("new-folder/draft", "Draft")
-            .unwrap_err()
-            .code,
+        project.create_folder(".", "new folder").unwrap_err().code,
         FractalErrorCode::Indeterminate
     );
     Project::recover(temp.path()).unwrap();
     assert!(!temp.path().join("pages/new-folder").exists());
 
     let (temp, mut project) = self::project();
+    project.create_folder(".", "section").unwrap();
     project.create_page_at("section/draft", "Draft").unwrap();
     fs::create_dir_all(temp.path().join("pages/section/empty/nested")).unwrap();
     project = Project::open(temp.path()).unwrap();
