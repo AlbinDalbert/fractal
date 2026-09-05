@@ -1991,6 +1991,7 @@ fn malformed_recovery_state_is_reported_without_being_deleted() {
     let recovery = Project::recover(temp.path()).unwrap();
     assert_eq!(recovery.failures.len(), 1);
     assert_eq!(recovery.failures[0].code, FractalErrorCode::InvalidProject);
+    assert!(recovery.cleaned_transactions.is_empty());
     assert!(transaction.exists());
 }
 

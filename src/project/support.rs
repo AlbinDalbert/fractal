@@ -914,19 +914,6 @@ pub(super) fn recover_all_transactions(root: &Path) -> Result<RecoveryReport> {
         };
         match inspected.status {
             RecoveryTransactionStatus::Malformed => {
-                if !transaction_root.join("plan.json").is_file() {
-                    match fs::remove_dir_all(&transaction_root) {
-                        Ok(()) => cleaned_transactions.push(inspected.path),
-                        Err(error) => warnings.push(OperationWarning {
-                            code: OperationWarningCode::CleanupPending,
-                            message: format!(
-                                "could not remove malformed transaction {}: {error}",
-                                inspected.path
-                            ),
-                        }),
-                    }
-                    continue;
-                }
                 failures.push(OperationFailure {
                     code: crate::FractalErrorCode::InvalidProject,
                     message: inspected
