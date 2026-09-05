@@ -63,6 +63,9 @@ A native document must have:
 - exactly one direct `<h1 data-fractal-title>` child owned by Fractal;
 - exactly one `<style data-fractal-style>` in the head.
 
+The `content="1"` marker identifies native document profile version 1. It is
+independent of the project format version in the root manifest.
+
 The native document root accepts the following standard HTML elements:
 
 ```text

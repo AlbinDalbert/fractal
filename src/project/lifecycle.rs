@@ -59,7 +59,7 @@ impl Project {
         let manifest: ProjectManifest = serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
         validate_project_name(&manifest.name)
             .map_err(|_| FractalError::invalid_project("project name cannot be empty"))?;
-        if !(MIN_SUPPORTED_VERSION..=VERSION).contains(&manifest.version) {
+        if manifest.version != VERSION {
             return Err(FractalError::unsupported_version(format!(
                 "unsupported project version {}",
                 manifest.version

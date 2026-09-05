@@ -15,7 +15,6 @@ use std::path::{Component, Path, PathBuf};
 const MANIFEST: &str = "fractal.json";
 const LOCK: &str = ".fractal.lock";
 const PAGES: &str = "pages";
-const MIN_SUPPORTED_VERSION: u32 = 1;
 const VERSION: u32 = 2;
 const NATIVE_SUFFIX: &str = ".fractal.html";
 const TRANSACTION_PREFIX: &str = ".fractal-transaction-";

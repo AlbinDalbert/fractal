@@ -61,13 +61,8 @@ impl Project {
                 .and_then(|value| value.order.clone()),
         };
         let metadata_contents = serde_json::to_string_pretty(&metadata)?;
-        let was_v1 = self.manifest.version < VERSION;
-        let manifest_upgrade = self.contract_upgrade_contents()?;
         let receipt = if path.as_os_str().is_empty() {
             let mut plan = MutationPlan::new(MutationKind::SetFolderTitle);
-            if let Some(contents) = manifest_upgrade {
-                plan.write_project(MANIFEST, contents);
-            }
             plan.write_page(folder_metadata_relative_path(&path), metadata_contents);
             plan.commit(&self.root)?
         } else {
@@ -77,9 +72,6 @@ impl Project {
                 .join(slug(title)?);
             if destination == path {
                 let mut plan = MutationPlan::new(MutationKind::SetFolderTitle);
-                if let Some(contents) = manifest_upgrade {
-                    plan.write_project(MANIFEST, contents);
-                }
                 plan.write_page(folder_metadata_relative_path(&path), metadata_contents);
                 plan.commit(&self.root)?
             } else {
@@ -91,13 +83,9 @@ impl Project {
                         folder_metadata_relative_path(&destination),
                         metadata_contents,
                     )),
-                    manifest_upgrade,
                 )?
             }
         };
-        if was_v1 {
-            self.manifest.version = VERSION;
-        }
         self.reload()?;
         Ok(receipt)
     }
@@ -154,16 +142,8 @@ impl Project {
         };
         let metadata_path = folder_metadata_relative_path(&path);
         let mut plan = MutationPlan::new(MutationKind::ReorderFolder);
-        let manifest_upgrade = self.contract_upgrade_contents()?;
-        let upgraded = manifest_upgrade.is_some();
-        if let Some(contents) = manifest_upgrade {
-            plan.write_project(MANIFEST, contents);
-        }
         plan.write_page(metadata_path, serde_json::to_string_pretty(&metadata)?);
         let receipt = plan.commit(&self.root)?;
-        if upgraded {
-            self.manifest.version = VERSION;
-        }
         self.reload()?;
         Ok(receipt)
     }
@@ -207,7 +187,7 @@ impl Project {
                 display_folder_path(destination_parent)
             )));
         }
-        self.rename_folder(&from, &to, MutationKind::MoveFolder, None, None)
+        self.rename_folder(&from, &to, MutationKind::MoveFolder, None)
     }
     /// Deletes a folder below `pages/`. Materialized folders use a single
     /// namespace rename.
@@ -274,29 +254,6 @@ impl Project {
         self.reload()?;
         Ok(receipt)
     }
-    fn contract_upgrade_contents(&self) -> Result<Option<String>> {
-        if self.manifest.version >= 2 {
-            return Ok(None);
-        }
-        let pages_root = self.root.join(PAGES);
-        let mut folders = Vec::new();
-        collect_directories(&pages_root, &pages_root, &mut folders)?;
-        folders.insert(0, PathBuf::new());
-        if let Some(conflict) = folders
-            .into_iter()
-            .map(|folder| pages_root.join(folder).join(MANIFEST))
-            .find(|path| path_exists(path))
-        {
-            return Err(FractalError::conflict(format!(
-                "cannot upgrade to project format version 2 because the reserved folder metadata path already exists: {}",
-                conflict.display()
-            )));
-        }
-        let mut manifest = self.manifest.clone();
-        manifest.version = VERSION;
-        Ok(Some(serde_json::to_string_pretty(&manifest)?))
-    }
-
     pub(super) fn reject_references_into(
         &self,
         targets: &BTreeSet<String>,
@@ -409,17 +366,16 @@ impl Project {
                 (desired != path).then(|| (path.to_path_buf(), desired))
             });
             let Some((from, to)) = mismatch else { break };
-            let receipt =
-                match self.rename_folder(&from, &to, MutationKind::RepairProject, None, None) {
-                    Ok(receipt) => receipt,
-                    Err(error) => {
-                        report.failures.push(OperationFailure {
-                            code: error.code,
-                            message: error.message,
-                        });
-                        return Ok(report);
-                    }
-                };
+            let receipt = match self.rename_folder(&from, &to, MutationKind::RepairProject, None) {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    report.failures.push(OperationFailure {
+                        code: error.code,
+                        message: error.message,
+                    });
+                    return Ok(report);
+                }
+            };
             report.changes.extend(receipt.changes);
             report.warnings.extend(receipt.warnings);
         }
@@ -505,7 +461,6 @@ impl Project {
         to: &Path,
         operation: MutationKind,
         metadata_override: Option<(PathBuf, String)>,
-        manifest_upgrade: Option<String>,
     ) -> Result<MutationReceipt> {
         let pages = self.root.join(PAGES);
         if path_exists(&pages.join(to)) {
@@ -603,9 +558,6 @@ impl Project {
         }
         plan.remove_page_directory(from.to_path_buf());
         plan.move_page_directory(from.to_path_buf(), to.to_path_buf());
-        if let Some(manifest) = manifest_upgrade {
-            plan.write_project(MANIFEST, manifest);
-        }
         let receipt = plan.commit(&self.root)?;
         self.reload()?;
         Ok(receipt)
@@ -620,21 +572,20 @@ impl Project {
         for relative in paths {
             let absolute = pages_root.join(&relative);
             let metadata_path = absolute.join(MANIFEST);
-            let metadata: Option<FolderMetadata> =
-                if self.manifest.version >= 2 && metadata_path.is_file() {
-                    Some(
-                        serde_json::from_str(&fs::read_to_string(&metadata_path)?).map_err(
-                            |error| {
-                                FractalError::invalid_project(format!(
-                                    "invalid folder metadata at {}: {error}",
-                                    metadata_path.display()
-                                ))
-                            },
-                        )?,
-                    )
-                } else {
-                    None
-                };
+            let metadata: Option<FolderMetadata> = if metadata_path.is_file() {
+                Some(
+                    serde_json::from_str(&fs::read_to_string(&metadata_path)?).map_err(
+                        |error| {
+                            FractalError::invalid_project(format!(
+                                "invalid folder metadata at {}: {error}",
+                                metadata_path.display()
+                            ))
+                        },
+                    )?,
+                )
+            } else {
+                None
+            };
             if metadata
                 .as_ref()
                 .is_some_and(|metadata| metadata.title.trim().is_empty())

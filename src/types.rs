@@ -6,7 +6,6 @@ use crate::error::FractalErrorCode;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectManifest {
-    #[serde(alias = "project_name")]
     pub name: String,
     pub version: u32,
 }

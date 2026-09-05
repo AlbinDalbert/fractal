@@ -268,97 +268,43 @@ fn project_open_rejects_an_empty_name() {
 }
 
 #[test]
-fn inspection_types_an_unsupported_project_version() {
+fn unsupported_project_versions_cannot_be_opened_or_mutated() {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir(temp.path().join("pages")).unwrap();
+    let manifest_path = temp.path().join("fractal.json");
+
+    for version in [1, 999] {
+        let manifest = format!(r#"{{"name":"Unsupported","version":{version}}}"#);
+        fs::write(&manifest_path, &manifest).unwrap();
+
+        let error = Project::open(temp.path()).unwrap_err();
+        assert_eq!(error.code, FractalErrorCode::UnsupportedVersion);
+
+        let inspection = Project::inspect(temp.path()).unwrap();
+        assert!(!inspection.openable);
+        assert_eq!(
+            inspection.issues[0].code,
+            crate::HealthIssueCode::UnsupportedVersion
+        );
+        assert_eq!(fs::read_to_string(&manifest_path).unwrap(), manifest);
+        assert!(!temp.path().join(".fractal.lock").exists());
+    }
+}
+
+#[test]
+fn project_name_is_not_a_manifest_name_alias() {
     let temp = TempDir::new().unwrap();
     fs::create_dir(temp.path().join("pages")).unwrap();
     fs::write(
         temp.path().join("fractal.json"),
-        r#"{"name":"Future","version":999}"#,
+        r#"{"project_name":"Old field","version":2}"#,
     )
     .unwrap();
 
-    let inspection = Project::inspect(temp.path()).unwrap();
-
-    assert!(!inspection.openable);
     assert_eq!(
-        inspection.issues[0].code,
-        crate::HealthIssueCode::UnsupportedVersion
+        Project::open(temp.path()).unwrap_err().code,
+        FractalErrorCode::Json
     );
-}
-
-#[test]
-fn legacy_manifest_opens_without_rewriting_project_files() {
-    let temp = TempDir::new().unwrap();
-    fs::create_dir(temp.path().join("pages")).unwrap();
-    let manifest = r#"{
-  "project_name": "Legacy project",
-  "version": 1,
-  "default_page": "pages/index.html",
-  "theme": "dark"
-}"#;
-    let page = "<!doctype html><title>Legacy page</title><main><h1>Legacy page</h1></main>";
-    fs::write(temp.path().join("fractal.json"), manifest).unwrap();
-    fs::write(temp.path().join("pages/index.html"), page).unwrap();
-
-    let project = Project::open(temp.path()).unwrap();
-
-    assert_eq!(project.manifest().name, "Legacy project");
-    assert_eq!(project.page("index").unwrap().kind, PageKind::Raw);
-    assert_eq!(project.source("index").unwrap(), page);
-    assert_eq!(
-        fs::read_to_string(temp.path().join("fractal.json")).unwrap(),
-        manifest
-    );
-    assert!(!temp.path().join(".fractal.lock").exists());
-}
-
-#[test]
-fn first_folder_metadata_mutation_upgrades_v1_to_v2() {
-    let temp = TempDir::new().unwrap();
-    fs::create_dir(temp.path().join("pages")).unwrap();
-    fs::write(
-        temp.path().join("fractal.json"),
-        r#"{"name":"Version one","version":1}"#,
-    )
-    .unwrap();
-    let mut project = Project::open(temp.path()).unwrap();
-
-    project.set_folder_title(".", "Renamed").unwrap();
-
-    assert_eq!(project.manifest().version, 2);
-    let manifest: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(temp.path().join("fractal.json")).unwrap())
-            .unwrap();
-    assert_eq!(manifest["version"], 2);
-    assert!(temp.path().join(".fractal.lock").is_file());
-    assert!(temp.path().join("pages/fractal.json").is_file());
-}
-
-#[test]
-fn v1_projects_preserve_nested_fractal_json_as_an_ordinary_asset() {
-    let temp = TempDir::new().unwrap();
-    fs::create_dir(temp.path().join("pages")).unwrap();
-    fs::write(
-        temp.path().join("fractal.json"),
-        r#"{"name":"Version one","version":1}"#,
-    )
-    .unwrap();
-    fs::write(
-        temp.path().join("pages/fractal.json"),
-        r#"{"title":"Pages"}"#,
-    )
-    .unwrap();
-
-    let original = fs::read_to_string(temp.path().join("pages/fractal.json")).unwrap();
-    let mut project = Project::open(temp.path()).unwrap();
-    assert_eq!(project.folder(".").unwrap().title, "Version one");
-    let error = project.set_folder_title(".", "Pages").unwrap_err();
-    assert_eq!(error.code, FractalErrorCode::Conflict);
-    assert_eq!(
-        fs::read_to_string(temp.path().join("pages/fractal.json")).unwrap(),
-        original
-    );
-    assert_eq!(project.manifest().version, 1);
 }
 
 #[test]
@@ -1744,7 +1690,7 @@ fn opening_and_inspection_never_rewrite_project_files() {
 }
 
 #[test]
-fn folder_title_receipt_matches_every_changed_file() {
+fn folder_title_receipt_matches_changed_files() {
     let (temp, mut project) = project();
     project.create_page_at("section/topic", "Topic").unwrap();
     project.create_page("Index").unwrap();
@@ -1754,12 +1700,6 @@ fn folder_title_receipt_matches_every_changed_file() {
             &native("Index", "<a href=\"section/topic.fractal.html\">Topic</a>"),
         )
         .unwrap();
-    fs::write(
-        temp.path().join("fractal.json"),
-        r#"{"name":"Test","version":1}"#,
-    )
-    .unwrap();
-    project = Project::open(temp.path()).unwrap();
     let before = project_file_snapshot(temp.path());
 
     let receipt = project
@@ -1768,10 +1708,6 @@ fn folder_title_receipt_matches_every_changed_file() {
     let after = project_file_snapshot(temp.path());
 
     assert_receipt_matches_files(&before, &after, &receipt);
-    assert!(receipt.changes.iter().any(|change| matches!(
-        change,
-        ProjectChange::Updated { path, .. } if path.as_str() == "fractal.json"
-    )));
     assert!(receipt.changes.iter().any(|change| matches!(
         change,
         ProjectChange::Moved { from, to, entry, .. }
@@ -1904,23 +1840,6 @@ fn actual_transaction_interruptions_recover_the_complete_old_state() {
         );
     }
 
-    let temp = TempDir::new().unwrap();
-    copy_directory(&fixture("v1-basic"), temp.path());
-    let mut project = Project::open(temp.path()).unwrap();
-    crate::inject_transaction_fault(TransactionFaultPoint::OriginalBackedUp);
-    assert_eq!(
-        project
-            .set_folder_title("", "Upgraded fixture")
-            .unwrap_err()
-            .code,
-        FractalErrorCode::Indeterminate
-    );
-    assert!(!temp.path().join("fractal.json").exists());
-    assert!(!Project::inspect(temp.path()).unwrap().openable);
-    let recovery = Project::recover(temp.path()).unwrap();
-    assert!(recovery.failures.is_empty());
-    assert_eq!(Project::open(temp.path()).unwrap().manifest().version, 1);
-
     let (temp, mut project) = self::project();
     crate::inject_transaction_fault(TransactionFaultPoint::DirectoryCreated);
     assert_eq!(
@@ -2023,12 +1942,10 @@ fn repair_reports_partial_progress_before_a_later_collision() {
 
 #[test]
 fn permanent_format_fixtures_define_open_validation_and_repair_behavior() {
-    for name in ["v1-basic", "v2-basic"] {
-        let inspection = Project::inspect(fixture(name)).unwrap();
-        assert!(inspection.openable, "{name} should open");
-        assert!(inspection.healthy, "{name} should be healthy");
-        assert!(Project::open(fixture(name)).unwrap().validate().valid);
-    }
+    let inspection = Project::inspect(fixture("v2-basic")).unwrap();
+    assert!(inspection.openable);
+    assert!(inspection.healthy);
+    assert!(Project::open(fixture("v2-basic")).unwrap().validate().valid);
 
     let invalid = Project::inspect(fixture("invalid")).unwrap();
     assert!(invalid.openable);
