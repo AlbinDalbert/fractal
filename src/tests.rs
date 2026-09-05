@@ -1644,6 +1644,79 @@ fn inspection_proposes_post_rename_name_for_folder_order() {
 }
 
 #[test]
+fn inspection_resolves_nested_repairs_through_ancestor_renames() {
+    let (temp, mut project) = project();
+    project
+        .create_page_at("new-parent/new-child/one", "One")
+        .unwrap();
+    project
+        .reorder_folder("new-parent/new-child", ["one.fractal.html"])
+        .unwrap();
+    project
+        .set_folder_title("new-parent", "New Parent")
+        .unwrap();
+    fs::write(
+        temp.path()
+            .join("pages/new-parent/new-child/wrong.fractal.html"),
+        native("Correct title", ""),
+    )
+    .unwrap();
+    fs::rename(
+        temp.path().join("pages/new-parent/new-child"),
+        temp.path().join("pages/new-parent/old-child"),
+    )
+    .unwrap();
+    fs::rename(
+        temp.path().join("pages/new-parent"),
+        temp.path().join("pages/old-parent"),
+    )
+    .unwrap();
+    drop(project);
+
+    let inspection = Project::inspect(temp.path()).unwrap();
+    let expected_moves = [
+        ("pages/old-parent", "pages/new-parent"),
+        ("pages/new-parent/old-child", "pages/new-parent/new-child"),
+        (
+            "pages/new-parent/new-child/wrong.fractal.html",
+            "pages/new-parent/new-child/correct-title.fractal.html",
+        ),
+    ];
+    for (from, to) in expected_moves {
+        assert!(inspection.proposed_repairs.iter().any(|repair| matches!(
+            repair,
+            crate::ProposedRepair::MovePath { from: actual_from, to: actual_to, .. }
+                if actual_from.as_str() == from && actual_to.as_str() == to
+        )));
+    }
+    assert!(inspection.proposed_repairs.iter().any(|repair| matches!(
+        repair,
+        crate::ProposedRepair::AppendFolderOrder { metadata, additions }
+            if metadata.as_str() == "pages/new-parent/new-child/fractal.json"
+                && additions == &["correct-title.fractal.html"]
+    )));
+
+    let mut project = Project::open(temp.path()).unwrap();
+    let report = project.repair().unwrap();
+    assert!(report.failures.is_empty());
+    for (from, to) in expected_moves {
+        assert!(report.changes.iter().any(|change| matches!(
+            change,
+            ProjectChange::Moved { from: actual_from, to: actual_to, .. }
+                if actual_from.as_str() == from && actual_to.as_str() == to
+        )));
+    }
+    assert_eq!(
+        project
+            .folder("new-parent/new-child")
+            .unwrap()
+            .order
+            .unwrap(),
+        vec!["one.fractal.html", "correct-title.fractal.html"]
+    );
+}
+
+#[test]
 fn opening_and_inspection_never_rewrite_project_files() {
     let (temp, mut project) = project();
     project.create_page("One").unwrap();

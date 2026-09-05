@@ -213,13 +213,18 @@ impl Project {
 
     fn proposed_repairs(&self) -> Result<Vec<ProposedRepair>> {
         let mut repairs = Vec::new();
-        let mut moved_paths = BTreeMap::new();
+        let mut moved_paths = Vec::new();
         for stored in self.folders.values() {
-            let path = Path::new(&stored.folder.path);
+            let path = apply_path_moves(PathBuf::from(&stored.folder.path), &moved_paths);
             if let Some(parent) = path.parent() {
                 let desired = parent.join(slug(&stored.folder.title)?);
                 if desired != path {
-                    moved_paths.insert(path.to_path_buf(), desired);
+                    repairs.push(ProposedRepair::MovePath {
+                        from: public_project_path(&Path::new(PAGES).join(&path))?,
+                        to: public_project_path(&Path::new(PAGES).join(&desired))?,
+                        entry: ProjectEntryKind::Directory,
+                    });
+                    moved_paths.push((path, desired));
                 }
             }
         }
@@ -230,24 +235,19 @@ impl Project {
             let Some(title) = stored.page.title.as_deref() else {
                 continue;
             };
-            let path = PathBuf::from(&stored.page.path);
+            let path = apply_path_moves(PathBuf::from(&stored.page.path), &moved_paths);
             let desired = path.with_file_name(format!("{}{}", slug(title)?, NATIVE_SUFFIX));
             if desired != path {
-                moved_paths.insert(path, desired);
+                repairs.push(ProposedRepair::MovePath {
+                    from: public_project_path(&Path::new(PAGES).join(&path))?,
+                    to: public_project_path(&Path::new(PAGES).join(&desired))?,
+                    entry: ProjectEntryKind::File,
+                });
+                moved_paths.push((path, desired));
             }
         }
         for stored in self.folders.values() {
-            let path = Path::new(&stored.folder.path);
-            if let Some(parent) = path.parent() {
-                let desired = parent.join(slug(&stored.folder.title)?);
-                if desired != path {
-                    repairs.push(ProposedRepair::MovePath {
-                        from: public_project_path(&Path::new(PAGES).join(path))?,
-                        to: public_project_path(&Path::new(PAGES).join(desired))?,
-                        entry: ProjectEntryKind::Directory,
-                    });
-                }
-            }
+            let path = apply_path_moves(PathBuf::from(&stored.folder.path), &moved_paths);
             if let Some(order) = &stored.folder.order {
                 let known: BTreeSet<String> = order.iter().cloned().collect();
                 let additions: Vec<String> = stored
@@ -255,42 +255,35 @@ impl Project {
                     .children
                     .iter()
                     .map(|child| {
-                        let child_path = path.join(&child.name);
-                        moved_paths
-                            .get(&child_path)
-                            .and_then(|moved| moved.file_name())
-                            .map(|name| name.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| child.name.clone())
+                        apply_path_moves(
+                            Path::new(&stored.folder.path).join(&child.name),
+                            &moved_paths,
+                        )
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| child.name.clone())
                     })
                     .filter(|name| !known.contains(name))
                     .collect();
                 if !additions.is_empty() {
                     repairs.push(ProposedRepair::AppendFolderOrder {
                         metadata: public_project_path(
-                            &Path::new(PAGES).join(folder_metadata_relative_path(path)),
+                            &Path::new(PAGES).join(folder_metadata_relative_path(&path)),
                         )?,
                         additions,
                     });
                 }
             }
         }
-        for stored in self.pages.values() {
-            if stored.page.kind != PageKind::Native {
-                continue;
-            }
-            let Some(title) = stored.page.title.as_deref() else {
-                continue;
-            };
-            let path = PathBuf::from(&stored.page.path);
-            let desired = path.with_file_name(format!("{}{}", slug(title)?, NATIVE_SUFFIX));
-            if desired != path {
-                repairs.push(ProposedRepair::MovePath {
-                    from: public_project_path(&Path::new(PAGES).join(path))?,
-                    to: public_project_path(&Path::new(PAGES).join(desired))?,
-                    entry: ProjectEntryKind::File,
-                });
-            }
-        }
         Ok(repairs)
     }
+}
+
+fn apply_path_moves(mut path: PathBuf, moves: &[(PathBuf, PathBuf)]) -> PathBuf {
+    for (from, to) in moves {
+        if let Ok(suffix) = path.strip_prefix(from) {
+            path = to.join(suffix);
+        }
+    }
+    path
 }
