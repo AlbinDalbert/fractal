@@ -184,7 +184,7 @@ impl Project {
                     issues.push(ValidationIssue {
                         path: Some(stored.page.path.clone()),
                         message: format!(
-                            "broken internal link `{}` resolves to `{target}`",
+                            "broken native link `{}` resolves to `{target}`",
                             link.href
                         ),
                     });

@@ -480,6 +480,7 @@ impl Project {
         }));
         let old_prefix = path_string(from);
         let new_prefix = path_string(to);
+        let native_targets: BTreeSet<String> = self.pages.keys().cloned().collect();
         let mut rewrites = BTreeMap::new();
         for stored in self.pages.values() {
             let old_source = &stored.page.path;
@@ -489,15 +490,12 @@ impl Project {
                 old_source.clone()
             };
             let document = Document::parse(&stored.html);
-            let mut changes = 0;
-            if old_source != &new_source {
-                changes += document.rewrite_source_location(old_source, &new_source);
-            }
-            changes += document.rewrite_internal_prefix(
-                &new_source,
+            let changes = document.rewrite_native_paths(
+                old_source,
                 &new_source,
                 &old_prefix,
                 &new_prefix,
+                &native_targets,
             );
             if changes > 0 {
                 rewrites.insert(

@@ -1294,7 +1294,7 @@ pub(super) fn path_starts_with(path: &Path, parent: &Path) -> bool {
 
 pub(super) fn link_target_path(target: &LinkTarget) -> Option<&str> {
     match target {
-        LinkTarget::Internal(path) => Some(path),
+        LinkTarget::Resolved(path) => Some(path),
         _ => None,
     }
 }

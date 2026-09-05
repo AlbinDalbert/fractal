@@ -409,7 +409,12 @@ impl Document {
         count
     }
 
-    pub(crate) fn rewrite_source_location(&self, old_source: &str, new_source: &str) -> usize {
+    pub(crate) fn rewrite_native_source_location(
+        &self,
+        old_source: &str,
+        new_source: &str,
+        native_targets: &BTreeSet<String>,
+    ) -> usize {
         let mut count = 0;
         for link in self.root.select("a[href]").expect("static selector") {
             let mut attributes = link.attributes.borrow_mut();
@@ -419,6 +424,9 @@ impl Document {
             let Some(mut target) = resolve_internal_href(old_source, &href) else {
                 continue;
             };
+            if !native_targets.contains(&target) {
+                continue;
+            }
             if target == old_source {
                 target = new_source.to_string();
             }
@@ -435,12 +443,13 @@ impl Document {
         count
     }
 
-    pub(crate) fn rewrite_internal_prefix(
+    pub(crate) fn rewrite_native_paths(
         &self,
-        source: &str,
+        old_source: &str,
         new_source: &str,
         old_prefix: &str,
         new_prefix: &str,
+        native_targets: &BTreeSet<String>,
     ) -> usize {
         let mut count = 0;
         for node in self.root.select("a[href]").expect("static selector") {
@@ -448,24 +457,32 @@ impl Document {
             let Some(value) = attributes.get("href").map(str::to_string) else {
                 continue;
             };
-            let Some(target) = resolve_internal_href(source, &value) else {
+            let Some(target) = resolve_internal_href(old_source, &value) else {
                 continue;
             };
+            if !native_targets.contains(&target) {
+                continue;
+            }
             let old = Path::new(old_prefix);
-            if !Path::new(&target).starts_with(old) {
+            let target_moves = Path::new(&target).starts_with(old);
+            if old_source == new_source && !target_moves {
                 continue;
             }
             let suffix = value
                 .find(['?', '#'])
                 .map(|index| &value[index..])
                 .unwrap_or("");
-            let remainder = Path::new(&target)
-                .strip_prefix(old)
-                .expect("prefix checked");
-            let target = Path::new(new_prefix)
-                .join(remainder)
-                .to_string_lossy()
-                .replace('\\', "/");
+            let target = if target_moves {
+                let remainder = Path::new(&target)
+                    .strip_prefix(old)
+                    .expect("prefix checked");
+                Path::new(new_prefix)
+                    .join(remainder)
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            } else {
+                target
+            };
             attributes.insert(
                 "href",
                 format!("{}{suffix}", relative_href(new_source, &target)),
@@ -919,6 +936,15 @@ pub(crate) fn is_external_href(href: &str) -> bool {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
         })
+}
+
+pub(crate) fn is_native_document_href(href: &str) -> bool {
+    if href.is_empty() || href.starts_with('#') || is_external_href(href) {
+        return false;
+    }
+    href.split(['?', '#'])
+        .next()
+        .is_some_and(|path| path.ends_with(".fractal.html"))
 }
 
 pub(crate) fn resolve_internal_href(source: &str, href: &str) -> Option<String> {

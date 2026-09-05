@@ -1,6 +1,6 @@
 use crate::document::{
-    escape_attribute, export_reference_id, is_external_href, relative_href, resolve_internal_href,
-    Document,
+    escape_attribute, export_reference_id, is_native_document_href, relative_href,
+    resolve_internal_href, Document,
 };
 use crate::types::*;
 use crate::{FractalError, Result};

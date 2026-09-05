@@ -308,7 +308,7 @@ fn project_name_is_not_a_manifest_name_alias() {
 }
 
 #[test]
-fn ordinary_html_and_explicit_links_work() {
+fn link_queries_include_only_native_relationships() {
     let (_temp, mut project) = project();
     project.create_page("Stockholm").unwrap();
     project.create_page("Travel").unwrap();
@@ -317,21 +317,26 @@ fn ordinary_html_and_explicit_links_work() {
             "travel",
             &native(
                 "Travel",
-                "<p>Visit <strong><a href=\"stockholm.fractal.html\">Stockholm</a></strong> or <a href=\"https://example.com\">the web</a>.</p>",
+                "<p>Visit <strong><a href=\"stockholm.fractal.html\">Stockholm</a></strong>, <a href=\"https://example.com/page.fractal.html\">the web</a>, <a href=\"mailto:hello@example.com\">email</a>, <a href=\"#packing\">packing</a>, or <a href=\"map.html\">the map</a>.</p>",
             ),
         )
         .unwrap();
 
     let links = project.links("travel").unwrap();
+    assert_eq!(links.len(), 1);
     assert!(
-        matches!(&links[0].target, LinkTarget::Internal(path) if path == "stockholm.fractal.html")
+        matches!(&links[0].target, LinkTarget::Resolved(path) if path == "stockholm.fractal.html")
     );
-    assert!(matches!(&links[1].target, LinkTarget::External(url) if url == "https://example.com"));
     assert_eq!(
         project.backlinks("stockholm").unwrap()[0].page,
         "travel.fractal.html"
     );
     assert!(project.validate().valid);
+    let source = project.source("travel").unwrap();
+    assert!(source.contains("href=\"https://example.com/page.fractal.html\""));
+    assert!(source.contains("href=\"mailto:hello@example.com\""));
+    assert!(source.contains("href=\"#packing\""));
+    assert!(source.contains("href=\"map.html\""));
 }
 
 #[test]
@@ -391,7 +396,7 @@ fn validation_reports_missing_titles_and_broken_links() {
     let (temp, _project) = project();
     fs::write(
         temp.path().join("pages/broken.fractal.html"),
-        "<!doctype html><meta name=\"fractal-format\" content=\"1\"><main data-fractal-document><p><a href=\"missing.html\">Missing</a></p></main>",
+        "<!doctype html><meta name=\"fractal-format\" content=\"1\"><main data-fractal-document><p><a href=\"missing.fractal.html\">Missing</a></p></main>",
     )
     .unwrap();
     let project = Project::open(temp.path()).unwrap();
@@ -465,7 +470,7 @@ fn ordinary_html_files_are_opaque() {
 }
 
 #[test]
-fn local_links_do_not_resolve_to_opaque_files() {
+fn local_non_native_links_are_not_indexed_or_validated() {
     let (temp, mut project) = project();
     project.create_page("Notes").unwrap();
     fs::write(temp.path().join("pages/attachment.pdf"), "opaque").unwrap();
@@ -476,12 +481,95 @@ fn local_links_do_not_resolve_to_opaque_files() {
         )
         .unwrap();
 
-    let link = &project.links("notes").unwrap()[0];
+    assert!(project.links("notes").unwrap().is_empty());
+    assert!(project.validate().valid);
+    assert!(project
+        .source("notes")
+        .unwrap()
+        .contains("href=\"attachment.pdf\""));
+}
 
+#[test]
+fn missing_native_links_are_indexed_and_fail_validation() {
+    let (_temp, mut project) = project();
+    project.create_page("Notes").unwrap();
+    project
+        .write_page(
+            "notes",
+            &native(
+                "Notes",
+                "<a href=\"missing.fractal.html?view=full#top\">Missing</a>",
+            ),
+        )
+        .unwrap();
+
+    let links = project.links("notes").unwrap();
+    assert_eq!(links.len(), 1);
     assert!(matches!(
-        &link.target,
-        LinkTarget::Broken(path) if path == "attachment.pdf"
+        &links[0].target,
+        LinkTarget::Broken(path) if path == "missing.fractal.html"
     ));
+    let report = project.validate();
+    assert!(!report.valid);
+    assert!(report.issues.iter().any(|issue| issue
+        .message
+        .contains("broken native link `missing.fractal.html?view=full#top`")));
+}
+
+#[test]
+fn editing_an_unrelated_section_preserves_ignored_anchors() {
+    let (_temp, mut project) = project();
+    project.create_page("Notes").unwrap();
+    project
+        .write_page(
+            "notes",
+            &native(
+                "Notes",
+                "<p><a href=\"https://example.com\">Web</a> <a href=\"mailto:hello@example.com\">Mail</a> <a href=\"#details\">Details</a> <a href=\"attachment.pdf\">Attachment</a></p>",
+            ),
+        )
+        .unwrap();
+    let parts = project.native_document_parts("notes").unwrap();
+
+    project
+        .set_page_style("notes", "body { color: blue; }", &parts.style_hash)
+        .unwrap();
+
+    let source = project.source("notes").unwrap();
+    for href in [
+        "https://example.com",
+        "mailto:hello@example.com",
+        "#details",
+        "attachment.pdf",
+    ] {
+        assert!(source.contains(&format!("href=\"{href}\"")));
+    }
+    assert!(project.links("notes").unwrap().is_empty());
+}
+
+#[test]
+fn moving_a_page_rewrites_only_resolved_native_relationships() {
+    let (_temp, mut project) = project();
+    project.create_page("Target").unwrap();
+    project.create_page_at("section/notes", "Notes").unwrap();
+    project
+        .write_page(
+            "section/notes",
+            &native(
+                "Notes",
+                "<p><a href=\"../target.fractal.html?view=full#top\">Target</a> <a href=\"attachment.pdf\">Attachment</a> <a href=\"missing.fractal.html\">Missing</a></p>",
+            ),
+        )
+        .unwrap();
+
+    project
+        .move_page("section/notes", "archive/deep/notes")
+        .unwrap();
+
+    let source = project.source("archive/deep/notes").unwrap();
+    assert!(source.contains("href=\"../../target.fractal.html?view=full#top\""));
+    assert!(source.contains("href=\"attachment.pdf\""));
+    assert!(source.contains("href=\"missing.fractal.html\""));
 }
 
 #[test]
@@ -1284,10 +1372,14 @@ fn moving_a_folder_preserves_its_title_and_rewrites_references() {
     fs::create_dir_all(temp.path().join("pages/section")).unwrap();
     fs::write(
         temp.path().join("pages/section/topic.fractal.html"),
-        native("Topic", "<p>Body</p>"),
+        native(
+            "Topic",
+            "<p><a href=\"../target.fractal.html\">Target</a> <a href=\"notes.txt\">Notes</a></p>",
+        ),
     )
     .unwrap();
     let mut project = Project::open(temp.path()).unwrap();
+    project.create_page("Target").unwrap();
     project.create_page("Index").unwrap();
     project
         .write_page(
@@ -1303,6 +1395,9 @@ fn moving_a_folder_preserves_its_title_and_rewrites_references() {
         .source("index")
         .unwrap()
         .contains("archive/section/topic.fractal.html"));
+    let moved_source = project.source("archive/section/topic").unwrap();
+    assert!(moved_source.contains("href=\"../../target.fractal.html\""));
+    assert!(moved_source.contains("href=\"notes.txt\""));
     assert!(mutation.changes.iter().any(|change| matches!(
         change,
         ProjectChange::Moved { from, to, .. }

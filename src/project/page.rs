@@ -383,8 +383,9 @@ impl Project {
 
         let from_string = path_string(&from);
         let to_string = path_string(&to);
+        let native_targets = self.pages.keys().cloned().collect();
         let moved_document = Document::parse(&self.stored(&from)?.html);
-        moved_document.rewrite_source_location(&from_string, &to_string);
+        moved_document.rewrite_native_source_location(&from_string, &to_string, &native_targets);
         let moved_html = moved_document.serialize()?;
 
         let mut rewrites = Vec::new();
@@ -449,12 +450,17 @@ impl Project {
         }
         let from_string = path_string(from);
         let to_string = path_string(to);
+        let native_targets = self.pages.keys().cloned().collect();
         let moved_document = Document::parse(&self.stored(from)?.html);
         if let Some(title) = title {
             moved_document.set_title(title);
         }
         if from != to {
-            moved_document.rewrite_source_location(&from_string, &to_string);
+            moved_document.rewrite_native_source_location(
+                &from_string,
+                &to_string,
+                &native_targets,
+            );
         }
         let mut plan = MutationPlan::new(operation);
         plan.write_page(to.to_path_buf(), moved_document.serialize()?);

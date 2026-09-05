@@ -2,7 +2,10 @@ use super::support::*;
 use super::*;
 
 impl Project {
-    /// Returns links parsed from a page in document order.
+    /// Returns resolved and broken native-document links in document order.
+    ///
+    /// External URLs, fragments, mail links, and local non-native targets are
+    /// not part of the native link index.
     pub fn links(&self, path: impl AsRef<Path>) -> Result<Vec<Link>> {
         Ok(self.stored(path.as_ref())?.page.links.clone())
     }
@@ -13,7 +16,7 @@ impl Project {
         let mut backlinks = Vec::new();
         for page in self.pages.values() {
             for link in &page.page.links {
-                if matches!(&link.target, LinkTarget::Internal(value) if value == &target) {
+                if matches!(&link.target, LinkTarget::Resolved(value) if value == &target) {
                     backlinks.push(Backlink {
                         page: page.page.path.clone(),
                         text: link.text.clone(),

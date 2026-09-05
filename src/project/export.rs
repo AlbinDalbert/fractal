@@ -151,7 +151,7 @@ impl Project {
         for path in &pages {
             let stored = self.pages.get(path).expect("included page exists");
             for link in &stored.page.links {
-                if let LinkTarget::Internal(target) = &link.target {
+                if let LinkTarget::Resolved(target) = &link.target {
                     if !included.contains(target)
                         && self.pages.contains_key(target)
                         && seen_references.insert(target.clone())

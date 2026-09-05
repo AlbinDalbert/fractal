@@ -69,21 +69,21 @@ impl Project {
             let links = document
                 .raw_links()
                 .into_iter()
-                .map(|(href, text)| {
-                    let target = if href.starts_with('#') {
-                        LinkTarget::Fragment(href.clone())
-                    } else if is_external_href(&href) {
-                        LinkTarget::External(href.clone())
-                    } else if let Some(resolved) = resolve_internal_href(&path, &href) {
+                .filter_map(|(href, text)| {
+                    if !is_native_document_href(&href) {
+                        return None;
+                    }
+                    let target = if let Some(resolved) = resolve_internal_href(&path, &href) {
                         if known.contains(&resolved) {
-                            LinkTarget::Internal(resolved)
+                            LinkTarget::Resolved(resolved)
                         } else {
                             LinkTarget::Broken(resolved)
                         }
                     } else {
-                        LinkTarget::Broken(href.clone())
+                        let path = href.split(['?', '#']).next().unwrap_or(&href).to_owned();
+                        LinkTarget::Broken(path)
                     };
-                    Link { href, text, target }
+                    Some(Link { href, text, target })
                 })
                 .collect();
             let page = Page {

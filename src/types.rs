@@ -83,9 +83,9 @@ pub struct Link {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum LinkTarget {
-    Internal(String),
-    External(String),
-    Fragment(String),
+    /// The project-relative path of an existing native document.
+    Resolved(String),
+    /// The project-relative path, or unresolved href path, of a missing native document.
     Broken(String),
 }
 
