@@ -594,7 +594,7 @@ impl Project {
         self.finish_mutation(receipt)
     }
 
-    pub(super) fn reload_folders(&mut self) -> Result<()> {
+    pub(super) fn reload_folders(&self) -> Result<BTreeMap<String, StoredFolder>> {
         let pages_root = self.root.join(PAGES);
         let mut paths = Vec::new();
         collect_directories(&pages_root, &pages_root, &mut paths)?;
@@ -692,7 +692,6 @@ impl Project {
                 },
             );
         }
-        self.folders = folders;
-        Ok(())
+        Ok(folders)
     }
 }

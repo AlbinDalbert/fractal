@@ -73,9 +73,23 @@ impl Project {
             manifest,
             pages: BTreeMap::new(),
             folders: BTreeMap::new(),
+            backlinks: BTreeMap::new(),
+            title_index: BTreeMap::new(),
         };
         project.reload()?;
         Ok(project)
+    }
+
+    /// Refreshes the in-memory catalog from the project files without writing
+    /// project state.
+    ///
+    /// The shared project lock prevents a refresh from observing a cooperating
+    /// Fractal mutation halfway through its transaction. External tools should
+    /// use the same lock when they need a consistent handoff.
+    pub fn refresh(&mut self) -> Result<()> {
+        let _lock = ProjectLock::shared(&self.root)?;
+        ensure_no_pending_transactions(&self.root)?;
+        self.reload()
     }
 
     /// Rolls back interrupted mutations and removes committed transaction

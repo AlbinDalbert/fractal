@@ -669,7 +669,14 @@ impl MutationPlan {
             }
             #[cfg(test)]
             injected_crash(TransactionFaultPoint::DirectoryCreated)?;
-            sync_directory_tree(&root.join(PAGES))?;
+            sync_directory_paths(root, &transaction_plan.create_directories)?;
+            if !transaction_plan.affected.is_empty() {
+                for path in &transaction_plan.affected {
+                    create_parent(&old_root.join(path))?;
+                }
+                sync_directory_tree(&old_root)?;
+                sync_directory(&transaction_root)?;
+            }
             for path in &transaction_plan.affected {
                 let source = root.join(path);
                 if path_exists(&source) {
@@ -690,8 +697,12 @@ impl MutationPlan {
                 #[cfg(test)]
                 injected_crash(TransactionFaultPoint::NewFileInstalled)?;
             }
-            for path in &transaction_plan.remove_directories {
-                remove_path_if_present(&root.join(path))?;
+            let mut directories_to_remove = transaction_plan.original_directories.clone();
+            directories_to_remove.extend(transaction_plan.remove_directories.iter().cloned());
+            directories_to_remove.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+            directories_to_remove.dedup();
+            for path in directories_to_remove {
+                remove_empty_directory_if_present(&root.join(&path))?;
                 if let Some(parent) = root.join(path).parent() {
                     sync_directory(parent)?;
                 }
@@ -903,7 +914,7 @@ pub(super) fn recover_transaction(transaction_root: &Path) -> Result<Vec<Project
                 .ok()
                 .map(|bytes| content_hash_bytes(&bytes));
             let after_hash = content_hash_bytes(&fs::read(&backup)?);
-            remove_path_if_present(&current)?;
+            remove_file_if_present(&current)?;
             create_parent(&current)?;
             fs::rename(&backup, &current)?;
             changes.push(match before_hash {
@@ -927,7 +938,7 @@ pub(super) fn recover_transaction(transaction_root: &Path) -> Result<Vec<Project
             let before_hash = fs::read(&current)
                 .ok()
                 .map(|bytes| content_hash_bytes(&bytes));
-            remove_path_if_present(&current)?;
+            remove_file_if_present(&current)?;
             if before_hash.is_some() {
                 changes.push(ProjectChange::Deleted {
                     path: public_project_path(&path)?,
@@ -937,10 +948,12 @@ pub(super) fn recover_transaction(transaction_root: &Path) -> Result<Vec<Project
             }
         }
     }
-    for stored_path in plan.create_directories.iter().rev() {
-        let path = transaction_project_path(&plan, stored_path);
+    let mut created_directories = plan.create_directories.clone();
+    created_directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    for stored_path in created_directories {
+        let path = transaction_project_path(&plan, &stored_path);
         if path_exists(&root.join(&path)) {
-            remove_path_if_present(&root.join(&path))?;
+            remove_empty_directory_if_present(&root.join(&path))?;
             changes.push(ProjectChange::Deleted {
                 path: public_project_path(&path)?,
                 entry: ProjectEntryKind::Directory,
@@ -1389,6 +1402,29 @@ fn sync_directory_tree(root: &Path) -> Result<()> {
     sync_directory(root)
 }
 
+fn sync_directory_paths(root: &Path, paths: &[PathBuf]) -> Result<()> {
+    let mut directories = BTreeSet::new();
+    for path in paths {
+        let mut directory = root.join(path);
+        loop {
+            if !directory.starts_with(root) {
+                break;
+            }
+            directories.insert(directory.clone());
+            if directory == root {
+                break;
+            }
+            directory.pop();
+        }
+    }
+    let mut directories: Vec<_> = directories.into_iter().collect();
+    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    for directory in directories {
+        sync_directory(&directory)?;
+    }
+    Ok(())
+}
+
 fn sync_directory(path: &Path) -> Result<()> {
     File::open(path)?.sync_all()?;
     Ok(())
@@ -1398,16 +1434,32 @@ pub(super) fn path_exists(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
-pub(super) fn remove_path_if_present(path: &Path) -> Result<()> {
+fn remove_file_if_present(path: &Path) -> Result<()> {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return Ok(());
     };
-    if metadata.file_type().is_dir() {
-        fs::remove_dir_all(path)?;
-    } else {
+    if metadata.file_type().is_file() || metadata.file_type().is_symlink() {
         fs::remove_file(path)?;
+        return Ok(());
     }
-    Ok(())
+    Err(FractalError::invalid_project(format!(
+        "transaction expected a file at {}, but found a directory",
+        path.display()
+    )))
+}
+
+fn remove_empty_directory_if_present(path: &Path) -> Result<()> {
+    match fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+            Err(FractalError::invalid_project(format!(
+                "transaction found unexpected content in {}, leaving it in place",
+                path.display()
+            )))
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 pub(super) fn path_starts_with(path: &Path, parent: &Path) -> bool {

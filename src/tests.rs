@@ -2240,6 +2240,56 @@ fn actual_transaction_interruptions_recover_the_complete_old_state() {
 }
 
 #[test]
+fn recovery_preserves_opaque_files_added_to_a_transaction_directory() {
+    use crate::TransactionFaultPoint;
+
+    let (temp, mut project) = self::project();
+    crate::inject_transaction_fault(TransactionFaultPoint::DirectoryCreated);
+    assert_eq!(
+        project.create_folder(".", "New folder").unwrap_err().code,
+        FractalErrorCode::Indeterminate
+    );
+
+    let folder = temp.path().join("pages/new-folder");
+    let opaque = folder.join("keep.txt");
+    fs::write(&opaque, "created while Fractal was interrupted").unwrap();
+
+    let report = Project::recover(temp.path()).unwrap();
+    assert_eq!(report.failures.len(), 1);
+    assert!(report.failures[0].message.contains("unexpected content"));
+    assert_eq!(
+        fs::read(&opaque).unwrap(),
+        b"created while Fractal was interrupted"
+    );
+    assert!(folder.is_dir());
+
+    fs::remove_file(&opaque).unwrap();
+    let report = Project::recover(temp.path()).unwrap();
+    assert!(report.failures.is_empty());
+    assert!(!folder.exists());
+}
+
+#[test]
+fn failed_refresh_keeps_the_previous_catalog_generation() {
+    let (temp, mut project) = self::project();
+    project.create_folder(".", "Section").unwrap();
+    project.create_page("Draft").unwrap();
+    let previous_folder = project.folder("section").unwrap();
+    let previous_page = project.page("draft").unwrap();
+
+    fs::write(
+        temp.path().join("pages/section/fractal.json"),
+        r#"{"title":"Changed on disk"}"#,
+    )
+    .unwrap();
+    fs::write(temp.path().join("pages/draft.fractal.html"), [0xff, 0xfe]).unwrap();
+
+    assert_eq!(project.refresh().unwrap_err().code, FractalErrorCode::Io);
+    assert_eq!(project.folder("section").unwrap(), previous_folder);
+    assert_eq!(project.page("draft").unwrap(), previous_page);
+}
+
+#[test]
 fn malformed_recovery_state_is_reported_without_being_deleted() {
     let (temp, project) = project();
     drop(project);

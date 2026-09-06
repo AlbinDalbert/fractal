@@ -51,12 +51,15 @@ pub struct Project {
     manifest: ProjectManifest,
     pages: BTreeMap<String, StoredPage>,
     folders: BTreeMap<String, StoredFolder>,
+    backlinks: BTreeMap<String, Vec<Backlink>>,
+    title_index: BTreeMap<String, Vec<(String, String)>>,
 }
 
 #[derive(Debug, Clone)]
 struct StoredPage {
     page: Page,
     html: String,
+    search_text: String,
 }
 
 #[derive(Debug, Clone)]

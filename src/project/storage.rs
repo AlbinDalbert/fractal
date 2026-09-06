@@ -57,7 +57,7 @@ impl Project {
         Ok(lock)
     }
     pub(super) fn reload(&mut self) -> Result<()> {
-        self.reload_folders()?;
+        let folders = self.reload_folders()?;
         let mut files = Vec::new();
         collect_native_documents(&self.root.join(PAGES), &self.root.join(PAGES), &mut files)?;
         let known: BTreeSet<String> = files.iter().map(|path| path_string(path)).collect();
@@ -86,16 +86,49 @@ impl Project {
                     Some(Link { href, text, target })
                 })
                 .collect();
+            let title = document.title();
+            let text = document.text();
+            let search_text = format!("{} {}", title.as_deref().unwrap_or(""), text).to_lowercase();
             let page = Page {
                 path: path.clone(),
                 content_hash: content_hash(&html),
-                title: document.title(),
-                text: document.text(),
+                title,
+                text,
                 links,
             };
-            pages.insert(path, StoredPage { page, html });
+            pages.insert(
+                path,
+                StoredPage {
+                    page,
+                    html,
+                    search_text,
+                },
+            );
         }
+
+        let mut backlinks: BTreeMap<String, Vec<Backlink>> = BTreeMap::new();
+        let mut title_index: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+        for stored in pages.values() {
+            if let Some(title) = stored.page.title.as_deref() {
+                title_index
+                    .entry(title.to_lowercase())
+                    .or_default()
+                    .push((stored.page.path.clone(), title.to_owned()));
+            }
+            for link in &stored.page.links {
+                if let LinkTarget::Resolved(target) = &link.target {
+                    backlinks.entry(target.clone()).or_default().push(Backlink {
+                        page: stored.page.path.clone(),
+                        text: link.text.clone(),
+                    });
+                }
+            }
+        }
+
         self.pages = pages;
+        self.folders = folders;
+        self.backlinks = backlinks;
+        self.title_index = title_index;
         Ok(())
     }
 

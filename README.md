@@ -95,6 +95,9 @@ profile, folder ordering, links, and exports.
 Opening a project loads native documents and folders into memory. The catalog
 stores each native document's title, visible text, source hash, and native links.
 Fractal writes no generated catalog or link-index files.
+An opened `Project` is a snapshot; call `Project::refresh` to reload it from
+disk under the shared project lock. Refresh refuses pending transaction
+recovery and leaves the previous snapshot intact if reloading fails.
 
 Text search matches all whitespace-separated query terms against native titles
 and visible native content, without case sensitivity. Link queries include only

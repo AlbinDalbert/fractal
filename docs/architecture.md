@@ -21,10 +21,12 @@ entries Fractal recognizes. Other files are opaque. They may coexist with
 project entries, but Fractal does not list, read, validate, search, hash,
 rewrite, export, or report them.
 
-Project format 2 is the only supported format. `Project::open` rebuilds the
-native document catalog and native link index from disk. It does not write
-project files or persistent generated state. `Project::inspect`, validation,
-search, and link derivation are also read-only.
+Project format 2 is the only supported format. `Project::open` and
+`Project::refresh` rebuild the native document catalog and native link index
+from disk. They do not write project files or persistent generated state.
+Refresh takes the shared lock and swaps the catalog only after a complete
+reload succeeds. `Project::inspect`, validation, search, and link derivation
+are also read-only.
 
 The catalog contains every file with a `.fractal.html` suffix, including an
 invalid native document. Validation then reports structural problems or broken

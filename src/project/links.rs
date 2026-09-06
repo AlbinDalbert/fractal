@@ -13,18 +13,7 @@ impl Project {
     /// Returns native links that resolve to `path`.
     pub fn backlinks(&self, path: impl AsRef<Path>) -> Result<Vec<Backlink>> {
         let target = path_string(&self.existing_path(path.as_ref())?);
-        let mut backlinks = Vec::new();
-        for page in self.pages.values() {
-            for link in &page.page.links {
-                if matches!(&link.target, LinkTarget::Resolved(value) if value == &target) {
-                    backlinks.push(Backlink {
-                        page: page.page.path.clone(),
-                        text: link.text.clone(),
-                    });
-                }
-            }
-        }
-        Ok(backlinks)
+        Ok(self.backlinks.get(&target).cloned().unwrap_or_default())
     }
 
     /// Inserts a link around the first matching unlinked text in a native page.

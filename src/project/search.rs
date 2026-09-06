@@ -17,21 +17,11 @@ impl Project {
         }
         self.pages
             .values()
-            .filter_map(|stored| {
-                let haystack = format!(
-                    "{} {}",
-                    stored.page.title.as_deref().unwrap_or(""),
-                    stored.page.text
-                )
-                .to_lowercase();
-                words
-                    .iter()
-                    .all(|word| haystack.contains(word))
-                    .then(|| SearchResult {
-                        path: stored.page.path.clone(),
-                        title: stored.page.title.clone(),
-                        snippet: snippet(&stored.page.text, &words[0]),
-                    })
+            .filter(|stored| words.iter().all(|word| stored.search_text.contains(word)))
+            .map(|stored| SearchResult {
+                path: stored.page.path.clone(),
+                title: stored.page.title.clone(),
+                snippet: snippet(&stored.page.text, &words[0]),
             })
             .collect()
     }
@@ -40,24 +30,18 @@ impl Project {
     /// native document text without changing source.
     pub fn derived_links(&self, path: impl AsRef<Path>) -> Result<Vec<DerivedLink>> {
         let source = self.stored(path.as_ref())?;
-        let mut titles: BTreeMap<String, Vec<(&str, &str)>> = BTreeMap::new();
-        for target in self.pages.values() {
-            if target.page.path == source.page.path {
-                continue;
-            }
-            let Some(title) = target.page.title.as_deref() else {
-                continue;
-            };
-            titles
-                .entry(title.to_lowercase())
-                .or_default()
-                .push((&target.page.path, title));
-        }
-        let mut titles: Vec<_> = titles
-            .into_values()
-            .filter_map(|targets| match targets.as_slice() {
-                [(path, title)] => Some((*path, *title)),
-                _ => None,
+        let mut titles: Vec<_> = self
+            .title_index
+            .values()
+            .filter_map(|targets| {
+                let targets: Vec<_> = targets
+                    .iter()
+                    .filter(|(path, _)| path != &source.page.path)
+                    .collect();
+                match targets.as_slice() {
+                    [(path, title)] => Some((path.as_str(), title.as_str())),
+                    _ => None,
+                }
             })
             .collect();
         titles.sort_by(|(left_path, left_title), (right_path, right_title)| {
